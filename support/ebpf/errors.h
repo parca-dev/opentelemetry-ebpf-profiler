@@ -161,7 +161,19 @@ typedef enum ErrorCode {
   ERR_DOTNET_CODE_HEADER = 6002,
 
   // Dotnet: Code object was too large to unwind in eBPF
-  ERR_DOTNET_CODE_TOO_LARGE = 6003
+  ERR_DOTNET_CODE_TOO_LARGE = 6003,
+
+  // LuaJIT: No entry for this process exists in the LuaJIT process info array
+  ERR_LUAJIT_NO_PROC_INFO = 7000,
+
+  // LuaJIT: Unable to read the Lua context
+  ERR_LUAJIT_READ_LUA_CONTEXT = 7001,
+
+  // LuaJIT: Unable to read the Lua frame
+  ERR_LUAJIT_FRAME_READ = 7002,
+
+  // LuaJIT: context pointer validity check failed
+  ERR_LUAJIT_L_MISMATCH = 7003
 } ErrorCode;
 
 #endif // OPTI_ERRORS_H
