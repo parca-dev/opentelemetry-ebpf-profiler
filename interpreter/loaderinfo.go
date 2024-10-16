@@ -12,6 +12,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-ebpf-profiler/host"
 	"github.com/open-telemetry/opentelemetry-ebpf-profiler/libpf"
 	"github.com/open-telemetry/opentelemetry-ebpf-profiler/libpf/pfelf"
+	"github.com/open-telemetry/opentelemetry-ebpf-profiler/nativeunwind/stackdeltatypes"
 	"github.com/open-telemetry/opentelemetry-ebpf-profiler/util"
 )
 
@@ -24,14 +25,18 @@ type LoaderInfo struct {
 	elfRef *pfelf.Reference
 	// gaps represents holes in the stack deltas of the executable.
 	gaps []util.Range
+	// deltas contains the stack deltas for the executable.
+	deltas stackdeltatypes.StackDeltaArray
 }
 
 // NewLoaderInfo returns a populated LoaderInfo struct.
-func NewLoaderInfo(fileID host.FileID, elfRef *pfelf.Reference, gaps []util.Range) *LoaderInfo {
+func NewLoaderInfo(fileID host.FileID, elfRef *pfelf.Reference, gaps []util.Range,
+	deltas stackdeltatypes.StackDeltaArray) *LoaderInfo {
 	return &LoaderInfo{
 		fileID: fileID,
 		elfRef: elfRef,
 		gaps:   gaps,
+		deltas: deltas,
 	}
 }
 
@@ -70,4 +75,9 @@ func (i *LoaderInfo) FileName() string {
 // Gaps returns the gaps for the executable of this LoaderInfo.
 func (i *LoaderInfo) Gaps() []util.Range {
 	return i.gaps
+}
+
+// Deltas returns and caches a *pfelf.File for this LoaderInfo.
+func (i *LoaderInfo) Deltas() stackdeltatypes.StackDeltaArray {
+	return i.deltas
 }
