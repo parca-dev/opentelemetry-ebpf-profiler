@@ -194,7 +194,7 @@ func (p *proto) getName() string {
 
 // https://github.com/openresty/luajit2/blob/7952882d/src/lj_debug.c#L123
 func (p *proto) getLine(pc uint32) uint32 {
-	if p == nil || p.lineinfo == 0 || pc > p.sizebc {
+	if p == nil || p.lineinfo == 0 || pc > p.sizebc || pc == 0 {
 		return 0
 	}
 	first := p.firstline

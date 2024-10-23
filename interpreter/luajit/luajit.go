@@ -78,8 +78,7 @@ type luajitInstance struct {
 	// In order to symbolize frame n we need to know the caller or frame n+1 so we don't
 	// symbolize frame n until symbolize is called fo frame n+1.
 	previousFrame *host.Frame
-
-	g2Traces uint16
+	g2Traces      uint16
 }
 
 var (
@@ -125,7 +124,7 @@ func (l *luajitInstance) Detach(ebpf interpreter.EbpfHandler, pid libpf.PID) err
 
 func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpreter.Data, error) {
 	base := path.Base(info.FileName())
-	if !strings.HasPrefix(base, "libluajit-5.1.so") {
+	if !strings.HasPrefix(base, "libluajit-5.1.so") && base != "luajit" {
 		return nil, nil
 	}
 
@@ -309,6 +308,9 @@ func (l *luajitInstance) SynchronizeMappings(ebpf interpreter.EbpfHandler,
 			newPrefixes = append(newPrefixes, p...)
 		}
 
+		logf("lj: new traces detected for pid(%v) added %d new traces with %d prefixes and removed %d prefixes",
+			pr.PID(), len(traces), len(newPrefixes), len(prefixes))
+
 		l.prefixesByG[g] = newPrefixes
 		l.traceHashes[g] = hash
 	}
@@ -330,19 +332,25 @@ func (l *luajitInstance) getGCproto(pt libpf.Address) (*proto, error) {
 	return gc, nil
 }
 
+// symbolizeFrame symbolizes the previous (up the stack)
 func (l *luajitInstance) symbolizeFrame(symbolReporter reporter.SymbolReporter,
 	funcName string, trace *libpf.Trace) error {
 	if l.previousFrame == nil || l.previousFrame.File == 0 {
 		return errors.New("previous frame not set")
 	}
-	pt, err := l.getGCproto(libpf.Address(l.previousFrame.File))
-	if err != nil {
-		return err
-	}
+	ptAddr := libpf.Address(l.previousFrame.File)
 	pc := uint32(l.previousFrame.Lineno)
-	line := pt.getLine(pc)
-	fileName := pt.getName()
-	logf("lj: [%x] %v+%v at %v:%v", pt.ptAddr, funcName, pc, fileName, line)
+	var line uint32
+	var fileName string
+	if ptAddr != C.LUAJIT_FFI_FUNC {
+		pt, err := l.getGCproto(ptAddr)
+		if err != nil {
+			return err
+		}
+		line = pt.getLine(pc)
+		fileName = pt.getName()
+	}
+	logf("lj: [%x] %v+%v at %v:%v", ptAddr, funcName, pc, fileName, line)
 	// The fnv hash Write() method calls cannot fail, so it's safe to ignore the errors.
 	h := fnv.New128a()
 	_, _ = h.Write([]byte(fileName)) //FIXME: needless allocation
@@ -357,6 +365,10 @@ func (l *luajitInstance) symbolizeFrame(symbolReporter reporter.SymbolReporter,
 	return nil
 }
 
+// Symbolize is a little weird in lua since we need the caller frame to get the name of the
+// function being called. So we stash the info for the current frame and each symbolize call
+// actually symolizes the previous frame.  The unwinder emits a special frame with file 0 to
+// indicate the end of the lua stack.
 func (l *luajitInstance) Symbolize(symbolReporter reporter.SymbolReporter, frame *host.Frame,
 	trace *libpf.Trace) error {
 	if !frame.Type.IsInterpType(libpf.LuaJIT) {
@@ -372,18 +384,40 @@ func (l *luajitInstance) Symbolize(symbolReporter reporter.SymbolReporter, frame
 		return nil
 	}
 
-	ptaddr := libpf.Address(frame.File)
-	pc := uint32(frame.Lineno)
-	pt, err := l.getGCproto(ptaddr)
-	if err != nil {
-		return err
-	}
-
 	// The function being invoked at this frame (caller) is the name for the previous
 	// frame (callee). For the last frame frame.File will be 0 and pt will be nil and funcName
-	// will be "main".
-	funcName := pt.getFunctionName(pc)
-	err = l.symbolizeFrame(symbolReporter, funcName, trace)
+	// will be "main".  Lua is a real deal dynamic functional language, functions don't have
+	// inherent names they are just values.
+	var funcName string
+	if frame.File == C.LUAJIT_FFI_FUNC {
+		switch frame.Lineno & 7 {
+		case 1:
+			funcName = "c-frame"
+		case 2:
+			funcName = "cont-frame"
+		case 3:
+			panic("unexpected frame type 3")
+		case 4:
+			// FIXME: Not yet understood why an FFI frame would have a lua func attached, probably a bug.
+			funcName = "lua-frame"
+		case 5:
+			funcName = "cpcall"
+		case 6:
+			funcName = "ff-pcall"
+		case 7:
+			funcName = "ff-pcall-hook"
+		}
+	} else {
+		ptaddr := libpf.Address(frame.File)
+		pc := uint32(frame.Lineno)
+		pt, err := l.getGCproto(ptaddr)
+		if err != nil {
+			return err
+		}
+		funcName = pt.getFunctionName(pc)
+	}
+
+	err := l.symbolizeFrame(symbolReporter, funcName, trace)
 
 	if frame.File == 0 {
 		logf("lj: end LuaJIT frame")

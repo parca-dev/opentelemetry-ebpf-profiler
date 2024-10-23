@@ -691,7 +691,7 @@ typedef struct LJState {
 
 // These two are always adjacent, cur_L offset comes from HA.
 typedef struct LJGlobalPart {
-  u64 cur_L;
+  void *cur_L;
   TValue* jit_base;
 } LJGlobalPart;
 
@@ -712,12 +712,13 @@ typedef struct LJScratchSpace {
   LJState L;
   LJGlobalPart G;
   LJFuncPart f;
-  u64 G_to_report;
+  void *G_to_report;
 } LJScratchSpace;
 
 typedef struct LJUnwindState {
   TValue* frame;
-  u64 L_ptr;
+  TValue* prevframe;
+  void* L_ptr;
   bool is_jit;
 } LJUnwindState;
 

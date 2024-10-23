@@ -212,6 +212,9 @@ static inline PerCPURecord *get_pristine_per_cpu_record()
   record->phpUnwindState.zend_execute_data = 0;
   record->rubyUnwindState.stack_ptr = 0;
   record->rubyUnwindState.last_stack_frame = 0;
+  record->luajitUnwindState.frame = 0;
+  record->luajitUnwindState.prevframe = 0;
+  record->luajitUnwindState.L_ptr = 0;
   record->unwindersDone = 0;
   record->tailCalls = 0;
   record->ratelimitAction = RATELIMIT_ACTION_DEFAULT;
