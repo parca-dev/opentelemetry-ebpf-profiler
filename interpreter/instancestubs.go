@@ -21,7 +21,7 @@ type InstanceStubs struct {
 }
 
 func (is *InstanceStubs) SynchronizeMappings(EbpfHandler, reporter.SymbolReporter, process.Process,
-	[]process.Mapping) error {
+	[]process.Mapping, process.FileIDMapper) error {
 	return nil
 }
 

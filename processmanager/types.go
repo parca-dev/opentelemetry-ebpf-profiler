@@ -17,6 +17,7 @@ import (
 	"github.com/open-telemetry/opentelemetry-ebpf-profiler/libpf"
 	"github.com/open-telemetry/opentelemetry-ebpf-profiler/libpf/pfelf"
 	"github.com/open-telemetry/opentelemetry-ebpf-profiler/metrics"
+	"github.com/open-telemetry/opentelemetry-ebpf-profiler/process"
 	pmebpf "github.com/open-telemetry/opentelemetry-ebpf-profiler/processmanager/ebpf"
 	eim "github.com/open-telemetry/opentelemetry-ebpf-profiler/processmanager/execinfomanager"
 	"github.com/open-telemetry/opentelemetry-ebpf-profiler/reporter"
@@ -67,7 +68,7 @@ type ProcessManager struct {
 	// created. The attached interpreters read from the cache when converting traces prior to
 	// sending to the collection agent. The cache resides in this package instead of the ebpf
 	// package to prevent circular imports.
-	FileIDMapper FileIDMapper
+	FileIDMapper process.FileIDMapper
 
 	// elfInfoCacheHit
 	elfInfoCacheHit  atomic.Uint64

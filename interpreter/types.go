@@ -135,7 +135,7 @@ type Instance interface {
 	// mappings. Interpreters not needing to process these events can simply ignore them
 	// by just returning a nil.
 	SynchronizeMappings(ebpf EbpfHandler, symbolReporter reporter.SymbolReporter,
-		pr process.Process, mappings []process.Mapping) error
+		pr process.Process, mappings []process.Mapping, fm process.FileIDMapper) error
 
 	// UpdateTSDInfo is called when the process C-library Thread Specific Data related
 	// introspection data has been updated.

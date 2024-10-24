@@ -195,7 +195,8 @@ func (i *opcacheInstance) Detach(ebpf interpreter.EbpfHandler, pid libpf.PID) er
 }
 
 func (i *opcacheInstance) SynchronizeMappings(ebpf interpreter.EbpfHandler,
-	_ reporter.SymbolReporter, pr process.Process, _ []process.Mapping) error {
+	_ reporter.SymbolReporter, pr process.Process, _ []process.Mapping,
+	_ process.FileIDMapper) error {
 	if i.prefixes != nil {
 		// Already attached
 		return nil

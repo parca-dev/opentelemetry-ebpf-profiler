@@ -189,7 +189,7 @@ func (l *luajitInstance) getVMList() []libpf.Address {
 	return gs
 }
 
-func (l *luajitInstance) addJITRegion(ebpf interpreter.EbpfHandler, pr process.Process,
+func (l *luajitInstance) addJITRegion(ebpf interpreter.EbpfHandler, fim process.FileIDMapper, pr process.Process,
 	start, end uint64) error {
 	prefixes, err := lpm.CalculatePrefixList(start, end)
 	if err != nil {
@@ -200,6 +200,7 @@ func (l *luajitInstance) addJITRegion(ebpf interpreter.EbpfHandler, pr process.P
 	for _, prefix := range prefixes {
 		// TODO: fix these: WARN[0267] Failed to lookup file ID 0x2a00000000
 		fileID := uint64(C.LUAJIT_JIT_FILE_ID) << 32
+		fim.Set(host.FileID(fileID), libpf.NewFileID(fileID, 0))
 		if err := ebpf.UpdatePidInterpreterMapping(pr.PID(), prefix, support.ProgUnwindLuaJIT,
 			host.FileID(fileID), 0); err != nil {
 			return err
@@ -209,7 +210,7 @@ func (l *luajitInstance) addJITRegion(ebpf interpreter.EbpfHandler, pr process.P
 	return nil
 }
 
-func (l *luajitInstance) addTrace(ebpf interpreter.EbpfHandler, pr process.Process, t trace, g,
+func (l *luajitInstance) addTrace(ebpf interpreter.EbpfHandler, fim process.FileIDMapper, pr process.Process, t trace, g,
 	spadjust uint64) ([]lpm.Prefix, error) {
 	start, end := t.mcode, t.mcode+uint64(t.szmcode)
 	prefixes, err := lpm.CalculatePrefixList(start, end)
@@ -220,6 +221,7 @@ func (l *luajitInstance) addTrace(ebpf interpreter.EbpfHandler, pr process.Proce
 	logf("lj: add trace mapping for pid(%v) %x:%x", pr.PID(), start, end)
 	for _, prefix := range prefixes {
 		fileID := uint64(C.LUAJIT_JIT_FILE_ID)<<32 | spadjust
+		fim.Set(host.FileID(fileID), libpf.NewFileID(fileID, 0))
 		if err := ebpf.UpdatePidInterpreterMapping(pr.PID(), prefix, support.ProgUnwindLuaJIT,
 			host.FileID(fileID), g); err != nil {
 			return nil, err
@@ -229,7 +231,8 @@ func (l *luajitInstance) addTrace(ebpf interpreter.EbpfHandler, pr process.Proce
 }
 
 func (l *luajitInstance) SynchronizeMappings(ebpf interpreter.EbpfHandler,
-	_ reporter.SymbolReporter, pr process.Process, mappings []process.Mapping) error {
+	_ reporter.SymbolReporter, pr process.Process, mappings []process.Mapping,
+	fim process.FileIDMapper) error {
 	cycle := l.cycle
 	l.cycle++
 	for i := range mappings {
@@ -250,7 +253,7 @@ func (l *luajitInstance) SynchronizeMappings(ebpf interpreter.EbpfHandler,
 			delete(l.prefixes, m.Vaddr)
 		} else {
 			if _, ok := l.prefixes[m.Vaddr]; !ok {
-				if err := l.addJITRegion(ebpf, pr, m.Vaddr, m.Vaddr+m.Length); err != nil {
+				if err := l.addJITRegion(ebpf, fim, pr, m.Vaddr, m.Vaddr+m.Length); err != nil {
 					return err
 				}
 			}
@@ -301,7 +304,7 @@ func (l *luajitInstance) SynchronizeMappings(ebpf interpreter.EbpfHandler,
 			if t.root != 0 && traces[t.root].spadjust != t.spadjust {
 				spadjust += uint64(traces[t.root].spadjust)
 			}
-			p, err := l.addTrace(ebpf, pr, t, uint64(g), spadjust)
+			p, err := l.addTrace(ebpf, fim, pr, t, uint64(g), spadjust)
 			if err != nil {
 				return err
 			}

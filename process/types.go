@@ -13,6 +13,7 @@ import (
 	"io"
 	"strings"
 
+	"github.com/open-telemetry/opentelemetry-ebpf-profiler/host"
 	"github.com/open-telemetry/opentelemetry-ebpf-profiler/libpf"
 	"github.com/open-telemetry/opentelemetry-ebpf-profiler/libpf/pfelf"
 	"github.com/open-telemetry/opentelemetry-ebpf-profiler/remotememory"
@@ -125,4 +126,15 @@ type Process interface {
 	io.Closer
 
 	pfelf.ELFOpener
+}
+
+// FileIDMapper is responsible for mapping between 64-bit file IDs to 128-bit file IDs. The file ID
+// mappings are inserted typically at the same time the files are hashed. The 128-bit file IDs
+// are retrieved prior to reporting requests to the collection agent.
+type FileIDMapper interface {
+	// Get retrieves the 128-bit file ID for the provided 64-bit file ID. Otherwise,
+	// the second return value is false.
+	Get(pre host.FileID) (libpf.FileID, bool)
+	// Set adds a mapping from the 64-bit file ID to the 128-bit file ID.
+	Set(pre host.FileID, post libpf.FileID)
 }
