@@ -22,10 +22,11 @@ import (
 var development bool
 
 func init() {
+	_, dbgEnv := os.LookupEnv("LUA_DEBUG")
 	ex, _ := os.Executable()
 	goRun := strings.Contains(filepath.Dir(ex), "go-build")
 	dlvRun := strings.HasPrefix(filepath.Base(ex), "__debug_bin")
-	development = goRun || dlvRun
+	development = (goRun || dlvRun) && dbgEnv
 }
 
 // During development logf as higher level so they stick out w/o enabling debug firehose.
