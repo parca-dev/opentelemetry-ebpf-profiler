@@ -194,7 +194,22 @@ func (sp *systemProcess) getMappingFile(m *Mapping) string {
 	return fmt.Sprintf("/proc/%v/map_files/%x-%x", sp.pid, m.Vaddr, m.Vaddr+m.Length)
 }
 
+type memoryMappingFile struct {
+	*bytes.Reader
+}
+
+func (m *memoryMappingFile) Close() error {
+	return nil
+}
+
 func (sp *systemProcess) OpenMappingFile(m *Mapping) (ReadAtCloser, error) {
+	if m.IsVDSO() {
+		vdso, err := sp.extractMapping(m)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open VDSO: %v", err)
+		}
+		return &memoryMappingFile{Reader: vdso}, nil
+	}
 	filename := sp.getMappingFile(m)
 	if filename == "" {
 		return nil, errors.New("no backing file for anonymous memory")
