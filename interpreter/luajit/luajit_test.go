@@ -84,6 +84,7 @@ func TestIntegration(t *testing.T) {
 				"1.19.9.1-alpine",
 				"1.21.4.3-buster",
 				"1.25.3.2-bullseye",
+				"jammy",
 			} {
 				t.Run(tag, func(t *testing.T) {
 					image := openrestyBase + ":" + tag
