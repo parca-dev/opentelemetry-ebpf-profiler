@@ -364,7 +364,7 @@ func (l *luajitInstance) symbolizeFrame(symbolReporter reporter.SymbolReporter,
 	}
 	trace.AppendFrame(libpf.LuaJITFrame, fileID, libpf.AddressOrLineno(pc))
 	symbolReporter.FrameMetadata(fileID, libpf.AddressOrLineno(pc), util.SourceLineno(line),
-		0, funcName, fileName)
+		pc, funcName, fileName)
 	return nil
 }
 
