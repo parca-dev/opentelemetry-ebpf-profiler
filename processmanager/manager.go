@@ -16,6 +16,7 @@ import (
 	lru "github.com/elastic/go-freelru"
 	log "github.com/sirupsen/logrus"
 
+	"github.com/open-telemetry/opentelemetry-ebpf-profiler/process"
 	"github.com/open-telemetry/opentelemetry-ebpf-profiler/tracer/types"
 
 	"github.com/open-telemetry/opentelemetry-ebpf-profiler/host"
@@ -69,7 +70,7 @@ var (
 // fileIDMapper and symbolReporter. Specify nil for fileIDMapper to use the default
 // implementation.
 func New(ctx context.Context, includeTracers types.IncludedTracers, monitorInterval time.Duration,
-	ebpf pmebpf.EbpfHandler, fileIDMapper FileIDMapper, symbolReporter reporter.SymbolReporter,
+	ebpf pmebpf.EbpfHandler, fileIDMapper process.FileIDMapper, symbolReporter reporter.SymbolReporter,
 	sdp nativeunwind.StackDeltaProvider, filterErrorFrames bool,
 	collectCustomLabels bool) (*ProcessManager, error) {
 	if fileIDMapper == nil {

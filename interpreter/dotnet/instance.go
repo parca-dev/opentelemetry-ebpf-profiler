@@ -569,7 +569,7 @@ func (i *dotnetInstance) getDacSlotPtr(slot uint) libpf.Address {
 
 func (i *dotnetInstance) SynchronizeMappings(ebpf interpreter.EbpfHandler,
 	symbolReporter reporter.SymbolReporter, pr process.Process,
-	mappings []process.Mapping) error {
+	mappings []process.Mapping, _ process.FileIDMapper) error {
 	// find pointer to codeRangeList if needed
 	vms := &i.d.vmStructs
 	if i.codeRangeListPtr == 0 {

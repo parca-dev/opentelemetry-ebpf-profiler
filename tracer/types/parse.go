@@ -25,6 +25,7 @@ const (
 	RubyTracer
 	V8Tracer
 	DotnetTracer
+	LuaJITTracer
 
 	// maxTracers indicates the max. number of different tracers
 	maxTracers
@@ -38,6 +39,7 @@ var tracerTypeToName = map[tracerType]string{
 	RubyTracer:    "ruby",
 	V8Tracer:      "v8",
 	DotnetTracer:  "dotnet",
+	LuaJITTracer:  "luajit",
 }
 
 var tracerNameToType = make(map[string]tracerType, maxTracers)

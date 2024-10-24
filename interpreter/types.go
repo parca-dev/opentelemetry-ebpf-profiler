@@ -102,7 +102,7 @@ type EbpfHandler interface {
 	UpdatePidInterpreterMapping(libpf.PID, lpm.Prefix, uint8, host.FileID, uint64) error
 
 	// DeletePidInterpreterMapping removes the element specified by pid, prefix
-	// rom the eBPF map pid_page_to_mapping_info.
+	// from the eBPF map pid_page_to_mapping_info.
 	DeletePidInterpreterMapping(libpf.PID, lpm.Prefix) error
 }
 
@@ -135,7 +135,7 @@ type Instance interface {
 	// mappings. Interpreters not needing to process these events can simply ignore them
 	// by just returning a nil.
 	SynchronizeMappings(ebpf EbpfHandler, symbolReporter reporter.SymbolReporter,
-		pr process.Process, mappings []process.Mapping) error
+		pr process.Process, mappings []process.Mapping, fm process.FileIDMapper) error
 
 	// UpdateTSDInfo is called when the process C-library Thread Specific Data related
 	// introspection data has been updated.
