@@ -35,6 +35,10 @@ type ebpfMapsCoredump struct {
 
 var _ interpreter.EbpfHandler = &ebpfMapsCoredump{}
 
+func (emc *ebpfMapsCoredump) CoredumpTest() bool {
+	return true
+}
+
 func (emc *ebpfMapsCoredump) RemoveReportedPID(libpf.PID) {
 }
 
@@ -71,6 +75,8 @@ func (emc *ebpfMapsCoredump) UpdateProcData(t libpf.InterpreterType, pid libpf.P
 		emc.ctx.addMap(&C.ruby_procs, C.u32(pid), sliceBuffer(ptr, C.sizeof_RubyProcInfo))
 	case libpf.V8:
 		emc.ctx.addMap(&C.v8_procs, C.u32(pid), sliceBuffer(ptr, C.sizeof_V8ProcInfo))
+	case libpf.LuaJIT:
+		emc.ctx.addMap(&C.luajit_procs, C.u32(pid), sliceBuffer(ptr, C.sizeof_LuaJITProcInfo))
 	}
 	return nil
 }
@@ -91,6 +97,8 @@ func (emc *ebpfMapsCoredump) DeleteProcData(t libpf.InterpreterType, pid libpf.P
 		emc.ctx.delMap(&C.ruby_procs, C.u32(pid))
 	case libpf.V8:
 		emc.ctx.delMap(&C.v8_procs, C.u32(pid))
+	case libpf.LuaJIT:
+		emc.ctx.delMap(&C.luajit_procs, C.u32(pid))
 	}
 	return nil
 }
