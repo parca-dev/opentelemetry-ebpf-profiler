@@ -294,7 +294,7 @@ type v8Data struct {
 			InlinedFunctionCount      uint8 `name:"DeoptimizationDataInlinedFunctionCountIndex"`
 			LiteralArray              uint8 `name:"DeoptimizationDataLiteralArrayIndex"`
 			SharedFunctionInfo        uint8 `name:"DeoptimizationDataSharedFunctionInfoIndex"`
-			SharedFunctionInfoWrapper uint8 `name:"DeoptimizationDataSharedFunctionInfoWrapperIndex"`
+			SharedFunctionInfoWrapper uint8 `name:"DeoptimizationDataSharedFunctionInfoWrapperIndex" zero:""`
 			InliningPositions         uint8 `name:"DeoptimizationDataInliningPositionsIndex"`
 		} `name:""`
 
@@ -347,19 +347,19 @@ type v8Data struct {
 			Code                      uint16 `name:"Code__CODE_TYPE"`
 			FixedArray                uint16 `name:"FixedArray__FIXED_ARRAY_TYPE"`
 			WeakFixedArray            uint16 `name:"WeakFixedArray__WEAK_FIXED_ARRAY_TYPE"`
-			TrustedByteArray          uint16 `name:"TrustedByteArray__TRUSTED_BYTE_ARRAY_TYPE"`
-			TrustedFixedArray         uint16 `name:"TrustedFixedArray__TRUSTED_FIXED_ARRAY_TYPE"`
-			ProtectedFixedArray       uint16 `name:"ProtectedFixedArray__PROTECTED_FIXED_ARRAY_TYPE"`
+			TrustedByteArray          uint16 `name:"TrustedByteArray__TRUSTED_BYTE_ARRAY_TYPE" zero:""`
+			TrustedFixedArray         uint16 `name:"TrustedFixedArray__TRUSTED_FIXED_ARRAY_TYPE" zero:""`
+			ProtectedFixedArray       uint16 `name:"ProtectedFixedArray__PROTECTED_FIXED_ARRAY_TYPE" zero:""`
 			JSFunction                uint16 `name:"JSFunction__JS_FUNCTION_TYPE"`
 			Map                       uint16 `name:"Map__MAP_TYPE"`
 			Script                    uint16 `name:"Script__SCRIPT_TYPE"`
 			ScopeInfo                 uint16 `name:"ScopeInfo__SCOPE_INFO_TYPE"`
 			SharedFunctionInfo        uint16 `name:"SharedFunctionInfo__SHARED_FUNCTION_INFO_TYPE"`
-			SharedFunctionInfoWrapper uint16 `name:"SharedFunctionInfoWrapper__SHARED_FUNCTION_INFO_WRAPPER_TYPE"`
+			SharedFunctionInfoWrapper uint16 `name:"SharedFunctionInfoWrapper__SHARED_FUNCTION_INFO_WRAPPER_TYPE" zero:""`
 		} `name:"type"`
 
 		SharedFunctionInfoWrapper struct {
-			SharedFunctionInfo uint16 `name:"shared_info__Tagged_SharedFunctionInfo_"`
+			SharedFunctionInfo uint16 `name:"shared_info__Tagged_SharedFunctionInfo_" zero:""`
 		}
 
 		// https://chromium.googlesource.com/v8/v8.git/+/refs/tags/9.2.230.1/src/objects/heap-object.tq#7
