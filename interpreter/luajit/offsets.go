@@ -16,6 +16,9 @@ import (
 	"fmt"
 	"slices"
 
+	log "github.com/sirupsen/logrus"
+
+	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/util"
@@ -40,7 +43,7 @@ import (
 //
 // Some versions of openresty have a stripped luajit which makes things a little more
 // complicated because we have to start from a public symbol and work our way around.
-func extractOffsets(ef *pfelf.File, ljd *luajitData, ir util.Range) error {
+func extractOffsets(ef *pfelf.File, ljd *luajitData, ir util.Range, info *interpreter.LoaderInfo) error {
 	oft := offsetData{}
 	if err := oft.init(ef); err != nil {
 		return err
@@ -75,7 +78,7 @@ func extractOffsets(ef *pfelf.File, ljd *luajitData, ir util.Range) error {
 
 	// If we have symbols we can check that the start address is correct.
 	if s, e := oft.lookupSymbol("lj_vm_asm_begin"); e == nil && ir.Start != uint64(s.Address) {
-		return fmt.Errorf("lj: unexpected start address %x, expected %x", s.Address, ir.Start)
+		log.Warnf("Could not find the `lj_vm_asm_begin` symbol for file %s, unexpected start address %x, expected %x", info.FileName(), s.Address, ir.Start)
 	}
 
 	return nil
