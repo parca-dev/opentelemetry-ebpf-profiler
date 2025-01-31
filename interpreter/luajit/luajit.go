@@ -148,7 +148,7 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 
 	ljd := &luajitData{}
 
-	if err = extractOffsets(ef, ljd, luaInterp); err != nil {
+	if err = extractOffsets(ef, ljd, luaInterp, info); err != nil {
 		return nil, err
 	}
 
