@@ -34,47 +34,42 @@ bool hash_custom_labels(CustomLabelsArray *lbls, int seed, u64 *out) {
         h *= m;
     }
 
-    // hash each k/v len
-    for (int i = 0; i < MAX_CUSTOM_LABELS; ++i) {
-        // force clang not to unroll the loop by hiding the value of i.
-        // Unrolling this loop confuses the verifier.
-        asm volatile("" : "=r"(i) : "0"(i));
-        if (i >= lbls->len)
-            break;
-        u64 k = (((u64)lbls->labels[i].key_len) << 32) | ((u64)lbls->labels[i].val_len);
-        k *= m;
-        k ^= k >> r;
-        k *= m;
+  // hash each k/v len
+  for (int i = 0, n = MIN(MAX_CUSTOM_LABELS,lbls->len); i < n; i++) {
+    u64 k = (((u64)lbls->labels[i].key_len) << 32) | ((u64)lbls->labels[i].val_len);
+    k *= m;
+    k ^= k >> r;
+    k *= m;
 
         h ^= k;
         h *= m;
     }
 
-    // hash each k/v
-    for (int i = 0; i < MAX_CUSTOM_LABELS; ++i) {
-        if (i >= lbls->len)
-            break;
-        CustomLabel *lbl = &lbls->labels[i];
-        u64 kl = ROUNDUP_8(lbl->key_len);
-        for (int j = 0; j < CUSTOM_LABEL_MAX_VAL_LEN / 8; ++j) {
-            if (j >= kl)
-                return false;
-            u64 k = lbl->key.key_u64[j];
-            k *= m;
-            k ^= k >> r;
-            k *= m;
+  // hash each k/v
+  for (int i = 0, n = MIN(MAX_CUSTOM_LABELS,lbls->len); i < n; i++) {
+    CustomLabel *lbl = &lbls->labels[i];
+    u64 kl           = ROUNDUP_8(lbl->key_len);
+#pragma unroll
+    for (int j = 0; j < CUSTOM_LABEL_MAX_VAL_LEN / 8; ++j) {
+      if (j >= kl)
+        return false;
+      u64 k = lbl->key.key_u64[j];
+      k *= m;
+      k ^= k >> r;
+      k *= m;
 
-            h ^= k;
-            h *= m;
-        }
-        u64 vl = ROUNDUP_8(lbl->val_len);
-        for (int j = 0; j < CUSTOM_LABEL_MAX_VAL_LEN / 8; ++j) {
-            if (j >= vl)
-                return false;
-            u64 k = lbl->val.val_u64[j];
-            k *= m;
-            k ^= k >> r;
-            k *= m;
+      h ^= k;
+      h *= m;
+    }
+    u64 vl = ROUNDUP_8(lbl->val_len);
+#pragma unroll
+    for (int j = 0; j < CUSTOM_LABEL_MAX_VAL_LEN / 8; ++j) {
+      if (j >= vl)
+        return false;
+      u64 k = lbl->val.val_u64[j];
+      k *= m;
+      k ^= k >> r;
+      k *= m;
 
             h ^= k;
             h *= m;
