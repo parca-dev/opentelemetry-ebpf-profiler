@@ -3,13 +3,12 @@
 // perf event and will call the appropriate tracer for a given process
 
 #include "bpfdefs.h"
+#include "util.h"
 #include "hash.h"
-#include "opaquify.h"
 #include "kernel.h"
-#include "types.h"
 #include "tracemgmt.h"
 #include "tsd.h"
-#include "util.h"
+#include "types.h"
 
 // Begin shared maps
 
@@ -237,7 +236,6 @@ bpf_map_def SEC("maps") custom_labels = {
 static inline __attribute__((__always_inline__))
 bool get_go_custom_labels(struct pt_regs *ctx, UnwindState *state, void *offsets, CustomLabelsArray *out) {
     GoCustomLabelsOffsets *offs = offsets;
-    bpf_large_memzero((void *)out, sizeof(*out));
     long res;
     size_t m_ptr_addr = (size_t)get_m_ptr(offs, state);
     if (!m_ptr_addr) {
@@ -291,8 +289,8 @@ bool get_go_custom_labels(struct pt_regs *ctx, UnwindState *state, void *offsets
         return false;
     }
 
-    u64 len = 0;
-    for (u64 j = 0; j < MAX_BUCKETS; j++) {
+    int len = 0;
+    for (int j = 0; j < MAX_BUCKETS; j++) {
         if (j >= bucket_count) {
             break;
         }
@@ -301,67 +299,33 @@ bool get_go_custom_labels(struct pt_regs *ctx, UnwindState *state, void *offsets
             continue;
         }
         for (int i = 0; i < 8; ++i) {
-            len = opaquify64(len, bucket_count);
             if (!(len < MAX_CUSTOM_LABELS))
-                return true;
+                goto exit;
             if (map_value->tophash[i] == 0)
                 continue;
             u64 key_len = map_value->keys[i].len;
-            u64 val_len = map_value->values[i].len;
-            CustomLabel *lbl = &out->labels[len];
-            lbl->key_len = key_len;
-            lbl->val_len = val_len;
             if (key_len > CUSTOM_LABEL_MAX_KEY_LEN) {
                 DEBUG_PRINT("failed to read custom label: key too long");
                 continue;
             }
-            res = bpf_probe_read(lbl->key.key_bytes, key_len, map_value->keys[i].str);
-            if (res) {
-                DEBUG_PRINT("failed to read key for custom label: %ld", res);
-                continue;
-            }
+            u64 val_len = map_value->values[i].len;
             if (val_len > CUSTOM_LABEL_MAX_VAL_LEN) {
                 DEBUG_PRINT("failed to read custom label: value too long");
                 continue;
             }
 
-#ifdef TESTING_COREDUMP
+            CustomLabel *lbl = &out->labels[len];
+            res = bpf_probe_read_user(lbl->key.key_bytes, key_len, map_value->keys[i].str);
+            if (res) {
+                DEBUG_PRINT("failed to read key for custom label: %ld", res);
+                continue;
+            }
             if (val_len > CUSTOM_LABEL_MAX_VAL_LEN)
-                res = bpf_probe_read(lbl->val.val_bytes, val_len, map_value->values[i].str);
+                res = bpf_probe_read_user(lbl->val.val_bytes, val_len, map_value->values[i].str);
             else
                 res = -1;
-#else 
-            // The following assembly statement is equivalent to:
-            // if (val_len > CUSTOM_LABEL_MAX_VAL_LEN)
-            //     res = bpf_probe_read(lbl->val, val_len, map_value->values[i].str);
-            // else
-            //     res = -1;
-            //
-            // We need to write this in assembly because the verifier doesn't understand
-            // that val_len has already been bounds-checked above, apparently
-            // because clang has spilled it to the stack rather than
-            // keeping it in a register.
-          
-            // clang-format off          
-            asm volatile(
-                // Note: this branch is never taken, but we
-                // need it to appease the verifier.
-                "if %2 > " STR(CUSTOM_LABEL_MAX_VAL_LEN) " goto 2f\n"
-                "r1 = %1\n"
-                "r2 = %2\n"
-                "r3 = %3\n"
-                "call 4\n"
-                "%0 = r0\n"
-                "goto 1f\n"
-                "2: %0 = -1\n"
-                "1:\n"
-                : "=r"(res)
-                : "r"(lbl->val.val_bytes), "r"(val_len), "r"(map_value->values[i].str)
-                  // all r0-r5 are clobbered since we make a function call.
-                : "r0", "r1", "r2", "r3", "r4", "r5", "memory"
-            );
-#endif
-            // clang-format on
+            lbl->key_len = key_len;
+            lbl->val_len = val_len;
             if (res) {
                 DEBUG_PRINT("failed to read value for custom label: %ld", res);
                 continue;
@@ -370,11 +334,14 @@ bool get_go_custom_labels(struct pt_regs *ctx, UnwindState *state, void *offsets
         }
     }
 
+exit:
     out->len = len;
     return true;
 }
 
 typedef bool (*label_getter)(struct pt_regs *ctx, UnwindState *state, void *data, CustomLabelsArray *out);
+
+static CustomLabelsArray zeroCLA = {0};
 
 static inline __attribute__((__always_inline__))
 bool get_and_add_custom_labels(struct pt_regs *ctx, Trace *trace, UnwindState *state, label_getter getter, void *data) {
@@ -401,8 +368,12 @@ bool get_and_add_custom_labels(struct pt_regs *ctx, Trace *trace, UnwindState *s
         DEBUG_PRINT("failed to compute hash for custom labels");
     } else
       DEBUG_PRINT("failed to get custom labels");
-  } else
+  } else {
     DEBUG_PRINT("failed to get custom labels storage");
+  }
+  // Zero out the storage to for next use.
+  u32 dummy_id = 0;
+  bpf_map_update_elem(&custom_labels_storage, &dummy_id, &zeroCLA, BPF_ANY);
   return success;
 }
 
