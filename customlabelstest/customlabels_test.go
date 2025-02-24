@@ -80,7 +80,6 @@ Loop:
 		case <-stopCh:
 			require.Fail(t, "fail", "Failed to get labels after ten seconds")
 		}
-
 	}
 	require.True(t, good)
 }
