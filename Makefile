@@ -111,9 +111,11 @@ test-deps:
 		($(MAKE) -C "$(testdata_dir)") || exit ; \
 	)
 
-TEST_INTEGRATION_BINARY_DIRS := tracer processmanager/ebpf support go_labels
+TEST_INTEGRATION_BINARY_DIRS := tracer processmanager/ebpf support go_labels customlabelstest
 
 integration-test-binaries: generate ebpf
+	cargo build --release --bin custom-labels-example
+	ln -sf ../target/release/custom-labels-example ./support/custom-labels-example.test
 # Call it a ".test" even though it isn't to get included into bluebox initramfs
 	go build -o ./support/go_labels_canary.test ./go_labels
 	$(foreach test_name, $(TEST_INTEGRATION_BINARY_DIRS), \
