@@ -114,7 +114,7 @@ test-deps:
 TEST_INTEGRATION_BINARY_DIRS := tracer processmanager/ebpf support go_labels customlabelstest
 
 integration-test-binaries: generate ebpf
-	cargo build --release --bin custom-labels-example
+	CC=clang cargo build --release --bin custom-labels-example
 	ln -sf ../target/release/custom-labels-example ./support/custom-labels-example.test
 # Call it a ".test" even though it isn't to get included into bluebox initramfs
 	go build -o ./support/go_labels_canary.test ./go_labels
