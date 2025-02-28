@@ -8,6 +8,8 @@ SHELL := /usr/bin/env bash
 NATIVE_ARCH := $(shell uname -m)
 ifeq ($(NATIVE_ARCH),x86_64)
 NATIVE_ARCH := amd64
+# Building a static Rust binary require explicit target https://github.com/rust-lang/rust/issues/78210
+INT_TEST_CARGO_BUILD_TARGET := x86_64-unknown-linux-musl
 else ifneq (,$(filter $(NATIVE_ARCH),aarch64 arm64))
 NATIVE_ARCH := arm64
 else
@@ -21,7 +23,12 @@ ifeq ($(NATIVE_ARCH),$(TARGET_ARCH))
 ARCH_PREFIX :=
 else ifeq ($(TARGET_ARCH),arm64)
 ARCH_PREFIX := aarch64-linux-gnu-
+INT_TEST_CARGO_BUILD_TARGET := aarch64-unknown-linux-gnu
+# Fixes -m64 command line errors: https://stackoverflow.com/questions/58244095/gcc-7-error-unrecognized-command-line-option-m64
+export CC_aarch64_unknown_linux_gnu = aarch64-linux-gnu-gcc
+export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER = aarch64-linux-gnu-gcc
 else ifeq ($(TARGET_ARCH),amd64)
+export CARGO_BUILD_TARGET = x86_64-unknown-linux-musl
 ARCH_PREFIX := x86_64-linux-gnu-
 else
 $(error Unsupported architecture: $(TARGET_ARCH))
@@ -111,9 +118,11 @@ test-deps:
 		($(MAKE) -C "$(testdata_dir)") || exit ; \
 	)
 
-TEST_INTEGRATION_BINARY_DIRS := tracer processmanager/ebpf support go_labels
+TEST_INTEGRATION_BINARY_DIRS := tracer processmanager/ebpf support go_labels customlabelstest
 
 integration-test-binaries: generate ebpf
+	RUSTFLAGS="-Ctarget-feature=+crt-static" CC= cargo build --target $(INT_TEST_CARGO_BUILD_TARGET) --release --bin custom-labels-example
+	cp -f target/$(INT_TEST_CARGO_BUILD_TARGET)/release/custom-labels-example ./support/custom_labels_example.test
 # Call it a ".test" even though it isn't to get included into bluebox initramfs
 	go build -o ./support/go_labels_canary.test ./go_labels
 	$(foreach test_name, $(TEST_INTEGRATION_BINARY_DIRS), \

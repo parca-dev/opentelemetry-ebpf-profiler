@@ -154,6 +154,10 @@ jobs:
         uses: actions/checkout@v4
       - name: Set up environment
         uses: ./.github/workflows/env
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install rust cross compile for arm64
+        run: rustup target add aarch64-unknown-linux-gnu
       - name: Prepare integration test binaries for qemu tests
         run: make integration-test-binaries TARGET_ARCH=${{ matrix.target_arch }}
       - name: Upload integration test binaries
