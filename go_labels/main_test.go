@@ -32,10 +32,8 @@ func TestGoCustomLabels(t *testing.T) {
 	err := cmd.Start()
 	require.NoError(t, err)
 
-	// Wait 1 second for traces to arrive.
 	for trace := range traceCh {
-		t.Logf("got a trace %s", trace.Comm)
-		if len(trace.CustomLabels) > 0 {
+		if trace != nil && len(trace.CustomLabels) > 0 {
 			for k, v := range trace.CustomLabels {
 				t.Logf("Custom label: %s=%s", k, v)
 			}
