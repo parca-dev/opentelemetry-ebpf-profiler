@@ -1,5 +1,6 @@
 .PHONY: all all-common clean ebpf generate test test-deps protobuf docker-image agent legal \
-	integration-test-binaries codespell lint linter-version debug debug-agent ebpf-profiler
+	integration-test-binaries codespell lint linter-version debug debug-agent ebpf-profiler \
+	format-ebpf
 
 SHELL := /usr/bin/env bash
 
@@ -7,6 +8,8 @@ SHELL := /usr/bin/env bash
 NATIVE_ARCH := $(shell uname -m)
 ifeq ($(NATIVE_ARCH),x86_64)
 NATIVE_ARCH := amd64
+# Building a static Rust binary require explicit target https://github.com/rust-lang/rust/issues/78210
+INT_TEST_CARGO_BUILD_TARGET := x86_64-unknown-linux-musl
 else ifneq (,$(filter $(NATIVE_ARCH),aarch64 arm64))
 NATIVE_ARCH := arm64
 else
@@ -20,7 +23,12 @@ ifeq ($(NATIVE_ARCH),$(TARGET_ARCH))
 ARCH_PREFIX :=
 else ifeq ($(TARGET_ARCH),arm64)
 ARCH_PREFIX := aarch64-linux-gnu-
+INT_TEST_CARGO_BUILD_TARGET := aarch64-unknown-linux-gnu
+# Fixes -m64 command line errors: https://stackoverflow.com/questions/58244095/gcc-7-error-unrecognized-command-line-option-m64
+export CC_aarch64_unknown_linux_gnu = aarch64-linux-gnu-gcc
+export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER = aarch64-linux-gnu-gcc
 else ifeq ($(TARGET_ARCH),amd64)
+export CARGO_BUILD_TARGET = x86_64-unknown-linux-musl
 ARCH_PREFIX := x86_64-linux-gnu-
 else
 $(error Unsupported architecture: $(TARGET_ARCH))
@@ -66,18 +74,23 @@ clean:
 	@rm -rf go .cache
 
 generate:
-	go generate ./...
+	GOARCH=$(NATIVE_ARCH) go generate ./...
+	(cd support && ./generate.sh)
 
-ebpf:
+ebpf: generate
 	$(MAKE) $(EBPF_FLAGS) -C support/ebpf
 
 ebpf-profiler: generate ebpf
 	go build $(GO_FLAGS) -tags $(GO_TAGS)
 
-GOLANGCI_LINT_VERSION = "v1.60.1"
+GOLANGCI_LINT_VERSION = "v1.63.4"
 lint: generate vanity-import-check
+	$(MAKE) lint -C support/ebpf
 	go run github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) version
 	go run github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run
+
+format-ebpf:
+	$(MAKE) format -C support/ebpf
 
 linter-version:
 	@echo $(GOLANGCI_LINT_VERSION)
@@ -105,9 +118,11 @@ test-deps:
 		($(MAKE) -C "$(testdata_dir)") || exit ; \
 	)
 
-TEST_INTEGRATION_BINARY_DIRS := tracer processmanager/ebpf support go_labels
+TEST_INTEGRATION_BINARY_DIRS := tracer processmanager/ebpf support go_labels customlabelstest
 
 integration-test-binaries: generate ebpf
+	RUSTFLAGS="-Ctarget-feature=+crt-static" CC= cargo build --target $(INT_TEST_CARGO_BUILD_TARGET) --release --bin custom-labels-example
+	cp -f target/$(INT_TEST_CARGO_BUILD_TARGET)/release/custom-labels-example ./support/custom_labels_example.test
 # Call it a ".test" even though it isn't to get included into bluebox initramfs
 	go build -o ./support/go_labels_canary.test ./go_labels
 	$(foreach test_name, $(TEST_INTEGRATION_BINARY_DIRS), \
@@ -121,11 +136,11 @@ docker-image:
 	docker build -t profiling-agent -f Dockerfile .
 
 agent:
-	docker run -v "$$PWD":/agent -it --rm --user $(shell id -u):$(shell id -g) profiling-agent \
+	docker run -v "$$PWD":/agent -it --rm --user $(shell id -u):$(shell id -g) otel/opentelemetry-ebpf-profiler-dev:latest \
 	   "make TARGET_ARCH=$(TARGET_ARCH) VERSION=$(VERSION) REVISION=$(REVISION) BUILD_TIMESTAMP=$(BUILD_TIMESTAMP)"
 
 debug-agent:
-	docker run -v "$$PWD":/agent -it --rm --user $(shell id -u):$(shell id -g) profiling-agent \
+	docker run -v "$$PWD":/agent -it --rm --user $(shell id -u):$(shell id -g) otel/opentelemetry-ebpf-profiler-dev:latest \
 	   "make TARGET_ARCH=$(TARGET_ARCH) VERSION=$(VERSION) REVISION=$(REVISION) BUILD_TIMESTAMP=$(BUILD_TIMESTAMP) debug"
 
 legal:

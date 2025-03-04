@@ -23,24 +23,10 @@ func TestNativeCustomLabels(t *testing.T) {
 	defer cancel()
 
 	traceCh, _ := testutils.StartTracer(ctx, t, enabledTracers, r)
-	// TODO - change this to `cargo build --release --bin custom-labels-example`
-	// once we have the Rust workspace from upstream.
-	cmd := exec.Command("cargo", "build", "--release",
-		"--manifest-path", "./rust-crates/custom-labels-example/Cargo.toml")
-	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, string(out))
 
-	errCh := make(chan error, 1)
-
-	cmd = exec.CommandContext(ctx,
-		"./rust-crates/custom-labels-example/target/release/custom-labels-example")
-	err = cmd.Start()
+	cmd := exec.CommandContext(ctx, "./custom_labels_example.test")
+	err := cmd.Start()
 	require.NoError(t, err)
-
-	go func() {
-		err := cmd.Wait()
-		errCh <- err
-	}()
 
 	stopCh := time.After(10 * time.Second)
 
@@ -52,6 +38,9 @@ Loop:
 		case trace, ok := <-traceCh:
 			if !ok {
 				break Loop
+			}
+			if trace == nil {
+				continue
 			}
 			t.Logf("got a trace %s", trace.Comm)
 			if len(trace.CustomLabels) > 0 {
@@ -75,11 +64,11 @@ Loop:
 					break Loop
 				}
 			}
-		case err := <-errCh:
-			require.Failf(t, "fail", "Failed to run custom-labels-example, err = %v", err)
 		case <-stopCh:
 			require.Fail(t, "fail", "Failed to get labels after ten seconds")
 		}
 	}
+	err = cmd.Cancel()
+	require.NoError(t, err)
 	require.True(t, good)
 }

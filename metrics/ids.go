@@ -689,12 +689,21 @@ const (
 	// Number of times the stack delta provider succeeded to extract stack deltas
 	IDStackDeltaProviderSuccess = 271
 
+	// Number of lost trace events in the communication between kernel and user space (trace_events)
+	IDTraceEventLost = 272
+
+	// Number of times a trace event was received without data (trace_events)
+	IDTraceEventNoData = 273
+
+	// Number of times a trace event read failed (trace_events)
+	IDTraceEventReadError = 274
+
 	// Number of attempted LuaJIT unwinds
-	IDUnwindLuaJITAttempts = 272
+	IDUnwindLuaJITAttempts = 275
 
 	// Number of times we didn't find an entry for this process in the LuaJIT process info array
-	IDUnwindLuaJITErrNoProcInfo = 273
+	IDUnwindLuaJITErrNoProcInfo = 276
 
 	// max number of ID values, keep this as *last entry*
-	IDMax = 274
+	IDMax = 277
 )

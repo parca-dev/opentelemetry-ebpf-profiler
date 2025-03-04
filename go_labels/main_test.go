@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"os"
 	"os/exec"
 	"testing"
 
@@ -28,21 +27,19 @@ func TestGoCustomLabels(t *testing.T) {
 	// Use a separate exe for getting labels as the bpf code doesn't seem to work with
 	// go test static binaries at the moment, not clear if that's a problem with the bpf
 	// code or a bug/fact of life for static go binaries and getting g from TLS.
-	cmd := exec.Command("./go_labels_canary.test")
+	cmd := exec.CommandContext(ctx, "./go_labels_canary.test")
 	err := cmd.Start()
 	require.NoError(t, err)
 
-	// Wait 1 second for traces to arrive.
 	for trace := range traceCh {
-		t.Logf("got a trace %s", trace.Comm)
-		if len(trace.CustomLabels) > 0 {
+		if trace != nil && len(trace.CustomLabels) > 0 {
 			for k, v := range trace.CustomLabels {
 				t.Logf("Custom label: %s=%s", k, v)
 			}
 			break
 		}
 	}
+	err = cmd.Cancel()
+	require.NoError(t, err)
 	cancel()
-	_ = cmd.Process.Signal(os.Kill)
-	_ = cmd.Wait()
 }
