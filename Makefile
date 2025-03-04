@@ -1,5 +1,6 @@
 .PHONY: all all-common clean ebpf generate test test-deps protobuf docker-image agent legal \
-	integration-test-binaries codespell lint linter-version debug debug-agent ebpf-profiler
+	integration-test-binaries codespell lint linter-version debug debug-agent ebpf-profiler \
+	format-ebpf
 
 SHELL := /usr/bin/env bash
 
@@ -66,18 +67,23 @@ clean:
 	@rm -rf go .cache
 
 generate:
-	go generate ./...
+	GOARCH=$(NATIVE_ARCH) go generate ./...
+	(cd support && ./generate.sh)
 
-ebpf:
+ebpf: generate
 	$(MAKE) $(EBPF_FLAGS) -C support/ebpf
 
 ebpf-profiler: generate ebpf
 	go build $(GO_FLAGS) -tags $(GO_TAGS)
 
-GOLANGCI_LINT_VERSION = "v1.60.1"
+GOLANGCI_LINT_VERSION = "v1.63.4"
 lint: generate vanity-import-check
+	$(MAKE) lint -C support/ebpf
 	go run github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) version
 	go run github.com/golangci/golangci-lint/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run
+
+format-ebpf:
+	$(MAKE) format -C support/ebpf
 
 linter-version:
 	@echo $(GOLANGCI_LINT_VERSION)
@@ -121,11 +127,11 @@ docker-image:
 	docker build -t profiling-agent -f Dockerfile .
 
 agent:
-	docker run -v "$$PWD":/agent -it --rm --user $(shell id -u):$(shell id -g) profiling-agent \
+	docker run -v "$$PWD":/agent -it --rm --user $(shell id -u):$(shell id -g) otel/opentelemetry-ebpf-profiler-dev:latest \
 	   "make TARGET_ARCH=$(TARGET_ARCH) VERSION=$(VERSION) REVISION=$(REVISION) BUILD_TIMESTAMP=$(BUILD_TIMESTAMP)"
 
 debug-agent:
-	docker run -v "$$PWD":/agent -it --rm --user $(shell id -u):$(shell id -g) profiling-agent \
+	docker run -v "$$PWD":/agent -it --rm --user $(shell id -u):$(shell id -g) otel/opentelemetry-ebpf-profiler-dev:latest \
 	   "make TARGET_ARCH=$(TARGET_ARCH) VERSION=$(VERSION) REVISION=$(REVISION) BUILD_TIMESTAMP=$(BUILD_TIMESTAMP) debug"
 
 legal:

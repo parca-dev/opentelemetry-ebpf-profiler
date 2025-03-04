@@ -119,11 +119,11 @@ int bpf_tail_call(void *ctx, bpf_map_def *map, int index)
 	case PROG_UNWIND_DOTNET:
 		rc = unwind_dotnet(ctx);
 		break;
+	case PROG_GO_LABELS:
+		rc = perf_go_labels(ctx);
+		break;
 	case PROG_UNWIND_LUAJIT:
 		rc = unwind_luajit(ctx);
-		break;
-    case PROG_GO_LABELS:
-		rc = go_labels(ctx);
 		break;
 	default:
 		return -1;

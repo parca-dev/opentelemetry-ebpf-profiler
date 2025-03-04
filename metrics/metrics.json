@@ -1939,17 +1939,38 @@
     "id": 271
   },
   {
+    "description": "Number of lost trace events in the communication between kernel and user space (trace_events)",
+    "type": "counter",
+    "name": "TraceEventLost",
+    "field": "agent.errors.trace_event_lost",
+    "id": 272
+  },
+  {
+    "description": "Number of times a trace event was received without data (trace_events)",
+    "type": "counter",
+    "name": "TraceEventNoData",
+    "field": "agent.errors.trace_event_no_data",
+    "id": 273
+  },
+  {
+    "description": "Number of times a trace event read failed (trace_events)",
+    "type": "counter",
+    "name": "TraceEventReadError",
+    "field": "agent.errors.trace_event_read_error",
+    "id": 274
+  },
+  {
     "description": "Number of attempted LuaJIT unwinds",
     "type": "counter",
     "name": "UnwindLuaJITAttempts",
     "field": "bpf.luajit.attempts",
-    "id": 272
+    "id": 275
   },
   {
     "description": "Number of times we didn't find an entry for this process in the LuaJIT process info array",
     "type": "counter",
     "name": "UnwindLuaJITErrNoProcInfo",
     "field": "bpf.luajit.errors.no_proc_info",
-    "id": 273
+    "id": 276
   }
 ]
