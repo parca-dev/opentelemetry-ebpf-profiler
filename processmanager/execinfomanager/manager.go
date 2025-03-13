@@ -26,6 +26,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter/nodev8"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/perl"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/php"
+	"go.opentelemetry.io/ebpf-profiler/interpreter/probes"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/python"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/ruby"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
@@ -130,6 +131,9 @@ func NewExecutableInfoManager(
 	}
 	if includeTracers.Has(types.LuaJITTracer) {
 		interpreterLoaders = append(interpreterLoaders, luajit.Loader)
+	}
+	if includeTracers.Has(types.ProbeTracer) {
+		interpreterLoaders = append(interpreterLoaders, probes.Loader)
 	}
 
 	interpreterLoaders = append(interpreterLoaders, apmint.Loader)

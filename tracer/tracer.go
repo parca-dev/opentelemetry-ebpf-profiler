@@ -496,6 +496,11 @@ func initializeMapsAndPrograms(kernelSymbols *libpf.SymbolMap, cfg *Config) (
 			name:   "unwind_luajit",
 			enable: cfg.IncludeTracers.Has(types.LuaJITTracer),
 		},
+		{
+			progID: uint32(support.ProgUnwindProbe),
+			name:   "unwind_probe",
+			enable: cfg.IncludeTracers.Has(types.ProbeTracer),
+		},
 	}
 
 	if err = loadPerfUnwinders(coll, ebpfProgs, ebpfMaps["perf_progs"], tailCallProgs,
@@ -1041,6 +1046,11 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) *host.Trace {
 			lbl := ptr.custom_labels.labels[i]
 			key := C.GoString((*C.char)(unsafe.Pointer(&lbl.key)))
 			val := C.GoString((*C.char)(unsafe.Pointer(&lbl.val)))
+			if key == "" {
+				id := int(lbl.key[1] - '0')
+				key = fmt.Sprintf("probe%d", id)
+				//fmt.Printf("got probe label with empty key: %d = \"%s\"\n", id, val)
+			}
 			trace.CustomLabels[key] = val
 		}
 	}

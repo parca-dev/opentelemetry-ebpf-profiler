@@ -33,6 +33,8 @@ const (
 	Dotnet InterpreterType = support.FrameMarkerDotnet
 	// LuaJIT identifies the LuaJIT interpreter.
 	LuaJIT InterpreterType = support.FrameMarkerLuaJIT
+	// Probe identifies the label probe pseudo frame.
+	Probe InterpreterType = support.FrameMarkerProbe
 )
 
 // Pseudo-interpreters without a corresponding frame type.

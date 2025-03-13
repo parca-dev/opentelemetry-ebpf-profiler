@@ -125,6 +125,9 @@ int bpf_tail_call(void *ctx, bpf_map_def *map, int index)
     case PROG_GO_LABELS:
 		rc = perf_go_labels(ctx);
 		break;
+    case PROG_UNWIND_PROBE:
+		rc = unwind_probe(ctx);
+		break;
 	default:
 		return -1;
 	}

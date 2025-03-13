@@ -20,6 +20,7 @@ const (
 	FrameMarkerV8       = 0x8
 	FrameMarkerDotnet   = 0xa
 	FrameMarkerLuaJIT   = 0xb
+	FrameMarkerProbe    = 0xc
 	FrameMarkerAbort    = 0xff
 )
 
@@ -35,6 +36,7 @@ const (
 	ProgUnwindDotnet  = 0x8
 	ProgGoLabels      = 0x9
 	ProgUnwindLuaJIT  = 0xa
+	ProgUnwindProbe   = 0xb
 )
 
 const (
