@@ -159,6 +159,8 @@ type Config struct {
 	ProbabilisticThreshold uint
 	// OffCPUThreshold is the user defined threshold for off-cpu profiling.
 	OffCPUThreshold uint32
+	// MaxTailCalls is the number of tail calls the eBPF is allowed to make before giving up.
+	MaxTailCalls uint8
 }
 
 // hookPoint specifies the group and name of the hooked point in the kernel.
@@ -511,7 +513,7 @@ func initializeMapsAndPrograms(kernelSymbols *libpf.SymbolMap, cfg *Config) (
 	}
 
 	if err = loadSystemConfig(coll, ebpfMaps, kernelSymbols, cfg.IncludeTracers,
-		cfg.OffCPUThreshold, cfg.FilterErrorFrames); err != nil {
+		cfg.OffCPUThreshold, cfg.FilterErrorFrames, cfg.MaxTailCalls); err != nil {
 		return nil, nil, fmt.Errorf("failed to load system config: %v", err)
 	}
 
