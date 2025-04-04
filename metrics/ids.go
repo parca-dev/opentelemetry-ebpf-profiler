@@ -269,12 +269,6 @@ const (
 	// Number of failures to unwind because return address was not found with heuristic
 	IDUnwindHotspotErrInvalidRA = 130
 
-	// Number of cache hits in tracehandler trace cache by BPF hash
-	IDKnownTracesHit = 131
-
-	// Number of cache misses in tracehandler trace cache by BPF hash
-	IDKnownTracesMiss = 132
-
 	// Current size of the unwind info array
 	IDUnwindInfoArraySize = 133
 
@@ -638,17 +632,20 @@ const (
 	// Number of times a trace event read failed (trace_events)
 	IDTraceEventReadError = 274
 
+	// Number of parsing errors seen during processing /proc/<PID>/maps
+	IDErrProcParse = 275
+
 	// Number of attempts to read Go custom labels
-	IDUnwindGoCustomLabelsAttempts = 275
+	IDUnwindGoCustomLabelsAttempts = 276
 
 	// Number of failures reading Go custom labels
-	IDUnwindGoCustomLabelsFailures = 276
+	IDUnwindGoCustomLabelsFailures = 277
 
 	// Number of attempted LuaJIT unwinds
-	IDUnwindLuaJITAttempts = 277
+	IDUnwindLuaJITAttempts = 278
 
 	// Number of times we didn't find an entry for this process in the LuaJIT process info array
-	IDUnwindLuaJITErrNoProcInfo = 278
+	IDUnwindLuaJITErrNoProcInfo = 279
 
 	// max number of ID values, keep this as *last entry*
 	IDMax = 279

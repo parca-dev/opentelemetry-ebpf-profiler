@@ -34,6 +34,8 @@ func (d data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID,
 	return &d, nil
 }
 
+func (d data) Unload(_ interpreter.EbpfHandler) {}
+
 func (d data) Detach(ebpf interpreter.EbpfHandler, pid libpf.PID) error {
 	return ebpf.DeleteProcData(libpf.Go, pid)
 }
