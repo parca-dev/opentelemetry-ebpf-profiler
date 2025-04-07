@@ -834,6 +834,61 @@ func calcSysvHash(s libpf.SymbolName) uint32 {
 	return h & 0xfffffff
 }
 
+// roundUp rounds `value` up to the nearest multiple of `multiple`.
+func roundUp(multiple, value uint64) uint64 {
+	if multiple == 0 {
+		return value
+	}
+	return (value + multiple - 1) / multiple * multiple
+}
+
+// LookupTlsSymbolOffset computes the offset of a symbol
+// in thread-local storage of the main binary.
+//
+// On x86-64,  this is the offset from the fs-base internal register (and should be negative).
+// On aarch64, this is the offset from the tpidr_el0 register (and should be positive).
+//
+// Note that this only works _in the main binary of the executable_.
+// Lookup up a thread-local variable in a shared library requires a more complex
+// procedure.
+func (f *File) LookupTlsSymbolOffset(symbol libpf.SymbolName) (int64, error) {
+	tlsSym, err := f.LookupSymbol(symbol)
+	if err != nil {
+		return 0, err
+	}
+	if f.Machine == elf.EM_AARCH64 {
+		return int64(tlsSym.Address), nil
+	}
+	if f.Machine == elf.EM_X86_64 {
+		// Symbol addresses are relative to the start of the
+		// thread-local storage image, but the thread pointer points to the _end_
+		// of the image. So we need to find the size of the image in order to know where the
+		// beginning is.
+		//
+		// The image is just .tdata followed by .tbss,
+		// but we also have to respect the alignment.
+		tbss, err := f.Tbss()
+		if err != nil {
+			return 0, err
+		}
+		tdata, err := f.Tdata()
+		var tdataSize uint64
+		if err != nil {
+			// No Tdata is ok, it's the same as size 0
+			if err != ErrNoTdata {
+				return 0, err
+			}
+		} else {
+			tdataSize = tdata.Size
+		}
+
+		imageSize := roundUp(tbss.Addralign, tdataSize) + tbss.Size
+		offset := int64(tlsSym.Address) - int64(imageSize)
+		return offset, nil
+	}
+	return 0, fmt.Errorf("unrecognized machine: %s", f.Machine.String())
+}
+
 // LookupSymbol searches for a given symbol in the ELF
 func (f *File) LookupSymbol(symbol libpf.SymbolName) (*libpf.Symbol, error) {
 	if f.gnuHash.addr != 0 {
