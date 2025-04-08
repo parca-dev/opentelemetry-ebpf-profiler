@@ -62,6 +62,8 @@ var ErrNoTbss = errors.New("no thread-local uninitialized data section (tbss)")
 // ErrNoTdata is returned when the tdata section cannot be found
 var ErrNoTdata = errors.New("no thread-local initialized data section (tdata)")
 
+var ErrNoTls = errors.New("no TLS program header")
+
 // File represents an open ELF file
 type File struct {
 	// closer is called internally when resources for this File are to be released
@@ -454,6 +456,16 @@ func (f *File) Tdata() (*Section, error) {
 		}
 	}
 	return nil, ErrNoTdata
+}
+
+// Tls gets the TLS segment (program header)
+func (f *File) Tls() (*Prog, error) {
+	for _, seg := range f.Progs {
+		if seg.Type == elf.PT_TLS {
+			return &seg, nil
+		}
+	}
+	return nil, ErrNoTls
 }
 
 // ReadVirtualMemory reads bytes from given virtual address
@@ -865,25 +877,20 @@ func (f *File) LookupTlsSymbolOffset(symbol libpf.SymbolName) (int64, error) {
 		// of the image. So we need to find the size of the image in order to know where the
 		// beginning is.
 		//
-		// The image is just .tdata followed by .tbss,
-		// but we also have to respect the alignment.
-		tbss, err := f.Tbss()
+		// Furthermore, the thread pointer (fs-base) respects the TLS segment's alignment
+		// (which is a bit weird given that offsets are negative, but it is in fact true).
+		//
+		// So if the segment is 32-byte aligned, and some object is at byte 4 in the segment,
+		// it will be at offset -28 from fs-base.
+		//
+		// See "ELF Handling For Thread-Local Storage" (https://www.uclibc.org/docs/tls.pdf),
+		// pp. 8 ("Variant II"), 11 ("IA-32 Specific"), 14 ("x86-64 Specific").
+		tls, err := f.Tls()
 		if err != nil {
 			return 0, err
 		}
-		tdata, err := f.Tdata()
-		var tdataSize uint64
-		if err != nil {
-			// No Tdata is ok, it's the same as size 0
-			if err != ErrNoTdata {
-				return 0, err
-			}
-		} else {
-			tdataSize = tdata.Size
-		}
+		offset := int64(tlsSym.Address) - int64(roundUp(tls.Align, tls.Memsz))
 
-		imageSize := roundUp(tbss.Addralign, tdataSize) + tbss.Size
-		offset := int64(tlsSym.Address) - int64(imageSize)
 		return offset, nil
 	}
 	return 0, fmt.Errorf("unrecognized machine: %s", f.Machine.String())
