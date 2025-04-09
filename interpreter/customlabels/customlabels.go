@@ -31,13 +31,6 @@ type data struct {
 
 var _ interpreter.Data = &data{}
 
-func roundUp(multiple, value uint64) uint64 {
-	if multiple == 0 {
-		return value
-	}
-	return (value + multiple - 1) / multiple * multiple
-}
-
 func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpreter.Data, error) {
 	ef, err := info.GetELF()
 	if err != nil {

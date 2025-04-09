@@ -55,32 +55,28 @@ ubuntu-kernel-image: test.c
 go-binary: gotest.go
 	go build -o go-binary -ldflags "-w -s" gotest.go
 
-# -fcf-protection=none is only necessary to avoid
-# emitting 'endbr64' which the Go disassembler can't
-# handle.
-#
 # -Wl,-E makes all the symbols dynamic.
 
 tls-tbss: tls-lookup.c
-	$(CC) -Wl,-E -fcf-protection=none -DHAS_TBSS=1 $< -o $@
+	$(CC) -Wl,-E -DHAS_TBSS=1 $< -o $@
 
 tls-aligned-tbss: tls-lookup.c
-	$(CC) -Wl,-E -fcf-protection=none -DHAS_TBSS=1 -DTBSS_ALIGN=1 $< -o $@
+	$(CC) -Wl,-E -DHAS_TBSS=1 -DTBSS_ALIGN=1 $< -o $@
 
 tls-tdata: tls-lookup.c
-	$(CC) -Wl,-E -fcf-protection=none -DHAS_TDATA=1 $< -o $@
+	$(CC) -Wl,-E -DHAS_TDATA=1 $< -o $@
 
 tls-aligned-tdata: tls-lookup.c
-	$(CC) -Wl,-E -fcf-protection=none -DHAS_TDATA=1 -DTDATA_ALIGN=1 $< -o $@
+	$(CC) -Wl,-E -DHAS_TDATA=1 -DTDATA_ALIGN=1 $< -o $@
 
 tls-tbss-tdata: tls-lookup.c
-	$(CC) -Wl,-E -fcf-protection=none -DHAS_TBSS=1 -DHAS_TDATA=1 $< -o $@
+	$(CC) -Wl,-E -DHAS_TBSS=1 -DHAS_TDATA=1 $< -o $@
 
 tls-aligned-tbss-tdata: tls-lookup.c
-	$(CC) -Wl,-E -fcf-protection=none -DHAS_TBSS=1 -DTBSS_ALIGN=1 -DHAS_TDATA=1 $< -o $@
+	$(CC) -Wl,-E -DHAS_TBSS=1 -DTBSS_ALIGN=1 -DHAS_TDATA=1 $< -o $@
 
 tls-tbss-aligned-tdata: tls-lookup.c
-	$(CC) -Wl,-E -fcf-protection=none -DHAS_TBSS=1 -DHAS_TDATA=1 -DTDATA_ALIGN=1 $< -o $@
+	$(CC) -Wl,-E -DHAS_TBSS=1 -DHAS_TDATA=1 -DTDATA_ALIGN=1 $< -o $@
 
 tls-aligned-tbss-aligned-tdata: tls-lookup.c
-	$(CC) -Wl,-E -fcf-protection=none -DHAS_TBSS=1 -DTDATA_ALIGN=1 -DHAS_TDATA=1 -DTDATA_ALIGN=1 $< -o $@
+	$(CC) -Wl,-E -DHAS_TBSS=1 -DTDATA_ALIGN=1 -DHAS_TDATA=1 -DTDATA_ALIGN=1 $< -o $@

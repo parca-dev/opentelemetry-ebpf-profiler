@@ -847,7 +847,7 @@ func calcSysvHash(s libpf.SymbolName) uint32 {
 }
 
 // roundUp rounds `value` up to the nearest multiple of `multiple`.
-func roundUp(multiple, value uint64) uint64 {
+func roundUp(value, multiple uint64) uint64 {
 	if multiple == 0 {
 		return value
 	}
@@ -880,7 +880,7 @@ func (f *File) LookupTlsSymbolOffset(symbol libpf.SymbolName) (int64, error) {
 		// Furthermore, the thread pointer (fs-base) respects the TLS segment's alignment
 		// (which is a bit weird given that offsets are negative, but it is in fact true).
 		//
-		// So if the segment is 32-byte aligned, and some object is at byte 4 in the segment,
+		// So if the segment is 32-byte aligned (and of size <= 32), and some object is at byte 4 in the segment,
 		// it will be at offset -28 from fs-base.
 		//
 		// See "ELF Handling For Thread-Local Storage" (https://www.uclibc.org/docs/tls.pdf),
@@ -889,7 +889,7 @@ func (f *File) LookupTlsSymbolOffset(symbol libpf.SymbolName) (int64, error) {
 		if err != nil {
 			return 0, err
 		}
-		offset := int64(tlsSym.Address) - int64(roundUp(tls.Align, tls.Memsz))
+		offset := int64(tlsSym.Address) - int64(roundUp(tls.Memsz, tls.Align))
 
 		return offset, nil
 	}

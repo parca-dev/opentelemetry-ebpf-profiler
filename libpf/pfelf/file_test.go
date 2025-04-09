@@ -16,6 +16,7 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	xx "golang.org/x/arch/x86/x86asm"
+	xh "go.opentelemetry.io/ebpf-profiler/x86helpers"
 )
 
 func getPFELF(path string, t *testing.T) *File {
@@ -100,6 +101,7 @@ func TestGoVersion(t *testing.T) {
 
 func symbolOffsetFromCodeX86(code []byte) (int64, error) {
 	// e.g. mov    eax,DWORD PTR fs:0xfffffffffffffffc
+	b, _ := xh.SkipEndBranch(b)
 	offset := 0
 	for {
 		insn, err := xx.Decode(code[offset:], 64)
