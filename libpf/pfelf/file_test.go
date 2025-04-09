@@ -144,8 +144,8 @@ func TestLookupTlsSymbolOffset(t *testing.T) {
 		// Testing this on arm is nontrivial, because we need to actually follow some
 		// pointers in-process to get the address of the tls block. So let's
 		// ignore it and just test x86.
-		if runtime.GOARCH == "amd64" {
-			return
+		if runtime.GOARCH != "amd64" {
+			t.Skip("this test is only supported on x86")
 		}
 		ef, err := Open(fmt.Sprintf("testdata/%s", test.exe))
 		assert.NoError(t, err)
