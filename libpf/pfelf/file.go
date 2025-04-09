@@ -62,7 +62,7 @@ var ErrNoTbss = errors.New("no thread-local uninitialized data section (tbss)")
 // ErrNoTdata is returned when the tdata section cannot be found
 var ErrNoTdata = errors.New("no thread-local initialized data section (tdata)")
 
-var ErrNoTls = errors.New("no TLS program header")
+var ErrNoTLS = errors.New("no TLS program header")
 
 // File represents an open ELF file
 type File struct {
@@ -458,14 +458,14 @@ func (f *File) Tdata() (*Section, error) {
 	return nil, ErrNoTdata
 }
 
-// Tls gets the TLS segment (program header)
-func (f *File) Tls() (*Prog, error) {
+// TLS gets the TLS segment (program header)
+func (f *File) TLS() (*Prog, error) {
 	for _, seg := range f.Progs {
 		if seg.Type == elf.PT_TLS {
 			return &seg, nil
 		}
 	}
-	return nil, ErrNoTls
+	return nil, ErrNoTLS
 }
 
 // ReadVirtualMemory reads bytes from given virtual address
@@ -854,7 +854,7 @@ func roundUp(value, multiple uint64) uint64 {
 	return (value + multiple - 1) / multiple * multiple
 }
 
-// LookupTlsSymbolOffset computes the offset of a symbol
+// LookupTLSSymbolOffset computes the offset of a symbol
 // in thread-local storage of the main binary.
 //
 // On x86-64,  this is the offset from the fs-base internal register (and should be negative).
@@ -863,7 +863,7 @@ func roundUp(value, multiple uint64) uint64 {
 // Note that this only works _in the main binary of the executable_.
 // Lookup up a thread-local variable in a shared library requires a more complex
 // procedure.
-func (f *File) LookupTlsSymbolOffset(symbol libpf.SymbolName) (int64, error) {
+func (f *File) LookupTLSSymbolOffset(symbol libpf.SymbolName) (int64, error) {
 	tlsSym, err := f.LookupSymbol(symbol)
 	if err != nil {
 		return 0, err
@@ -880,12 +880,13 @@ func (f *File) LookupTlsSymbolOffset(symbol libpf.SymbolName) (int64, error) {
 		// Furthermore, the thread pointer (fs-base) respects the TLS segment's alignment
 		// (which is a bit weird given that offsets are negative, but it is in fact true).
 		//
-		// So if the segment is 32-byte aligned (and of size <= 32), and some object is at byte 4 in the segment,
+		// So if the segment is 32-byte aligned (and of size <= 32), and some object is at
+		// byte 4 in the segment,
 		// it will be at offset -28 from fs-base.
 		//
 		// See "ELF Handling For Thread-Local Storage" (https://www.uclibc.org/docs/tls.pdf),
 		// pp. 8 ("Variant II"), 11 ("IA-32 Specific"), 14 ("x86-64 Specific").
-		tls, err := f.Tls()
+		tls, err := f.TLS()
 		if err != nil {
 			return 0, err
 		}

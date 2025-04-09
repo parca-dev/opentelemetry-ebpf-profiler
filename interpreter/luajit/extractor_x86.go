@@ -15,8 +15,8 @@ import (
 	"errors"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
-	"golang.org/x/arch/x86/x86asm"
 	xh "go.opentelemetry.io/ebpf-profiler/x86helpers"
+	"golang.org/x/arch/x86/x86asm"
 )
 
 type x86Extractor struct {

@@ -4,7 +4,6 @@ package customlabels // import "go.opentelemetry.io/ebpf-profiler/interpreter/cu
 // #include "../../support/ebpf/types.h"
 import "C"
 import (
-	"debug/elf"
 	"errors"
 	"fmt"
 	"regexp"
@@ -68,7 +67,7 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 			return nil, errors.New("failed to locate TLS descriptor for custom labels")
 		}
 	} else {
-		offset, err := ef.LookupTlsSymbolOffset(tlsExport)
+		offset, err := ef.LookupTLSSymbolOffset(tlsExport)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get tls symbol offset: %w", err)
 		}

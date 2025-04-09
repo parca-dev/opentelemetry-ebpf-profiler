@@ -4,7 +4,6 @@
 package pfelf
 
 import (
-	"fmt"
 	"go/version"
 	"os"
 	"runtime"
@@ -15,8 +14,8 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/testsupport"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
-	xx "golang.org/x/arch/x86/x86asm"
 	xh "go.opentelemetry.io/ebpf-profiler/x86helpers"
+	xx "golang.org/x/arch/x86/x86asm"
 )
 
 func getPFELF(path string, t *testing.T) *File {
@@ -101,7 +100,7 @@ func TestGoVersion(t *testing.T) {
 
 func symbolOffsetFromCodeX86(code []byte) (int64, error) {
 	// e.g. mov    eax,DWORD PTR fs:0xfffffffffffffffc
-	b, _ := xh.SkipEndBranch(b)
+	code, _ = xh.SkipEndBranch(code)
 	offset := 0
 	for {
 		insn, err := xx.Decode(code[offset:], 64)
@@ -149,38 +148,38 @@ func TestLookupTlsSymbolOffset(t *testing.T) {
 		if runtime.GOARCH != "amd64" {
 			t.Skip("this test is only supported on x86")
 		}
-		ef, err := Open(fmt.Sprintf("testdata/%s", test.exe))
-		assert.NoError(t, err)
+		ef, err := Open("testdata/" + test.exe)
+		require.NoError(t, err)
 
 		if test.hasTbss {
 			sym, err := ef.LookupSymbol("get_tbss")
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			code := make([]byte, sym.Size)
 			_, err = ef.ReadVirtualMemory(code, int64(sym.Address))
-			assert.NoError(t, err)
+			require.NoError(t, err)
 
 			offset, err := symbolOffsetFromCodeX86(code)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 
-			offset2, err := ef.LookupTlsSymbolOffset("tbss")
-			assert.NoError(t, err)
+			offset2, err := ef.LookupTLSSymbolOffset("tbss")
+			require.NoError(t, err)
 
-			assert.Equal(t, offset, offset2)
+			require.Equal(t, offset, offset2)
 		}
 		if test.hasTdata {
 			sym, err := ef.LookupSymbol("get_tdata")
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			code := make([]byte, sym.Size)
 			_, err = ef.ReadVirtualMemory(code, int64(sym.Address))
-			assert.NoError(t, err)
+			require.NoError(t, err)
 
 			offset, err := symbolOffsetFromCodeX86(code)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 
-			offset2, err := ef.LookupTlsSymbolOffset("tdata")
-			assert.NoError(t, err)
+			offset2, err := ef.LookupTLSSymbolOffset("tdata")
+			require.NoError(t, err)
 
-			assert.Equal(t, offset, offset2)
+			require.Equal(t, offset, offset2)
 		}
 	}
 }
