@@ -1219,6 +1219,8 @@ func (t *Tracer) GetEbpfMaps() map[string]*cebpf.Map {
 // entry point is always the native tracer. The native tracer will determine when to invoke the
 // interpreter tracers based on address range information.
 func (t *Tracer) AttachTracer() error {
+	fmt.Println(t.ebpfProgs)
+	panic(42)
 	tracerProg, ok := t.ebpfProgs["native_tracer_entry"]
 	if !ok {
 		return errors.New("entry program is not available")
@@ -1247,6 +1249,9 @@ func (t *Tracer) AttachTracer() error {
 		}
 		*events = append(*events, perfEvent)
 	}
+
+	// link.npa
+	
 	return nil
 }
 

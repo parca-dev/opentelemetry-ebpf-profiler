@@ -646,3 +646,10 @@ int native_tracer_entry(struct bpf_perf_event_data *ctx)
   return collect_trace((struct pt_regs *)&ctx->regs, TRACE_SAMPLING, pid, tid, ts, 0);
 }
 MULTI_USE_FUNC(unwind_native)
+
+
+SEC("uprobe/asdf")
+int btv() {
+  DEBUG_PRINT("hi");
+  return 0;
+}

@@ -47,7 +47,7 @@ const (
 	// maxBytesLargeSection is the maximum section size for large libpf
 	// parsed sections (e.g. symbol tables and string tables; libxul
 	// has about 4MB .dynstr)
-	maxBytesLargeSection = 16 * 1024 * 1024
+	maxBytesLargeSection = 32 * 1024 * 1024
 )
 
 // ErrSymbolNotFound is returned when requested symbol was not found
@@ -1001,6 +1001,41 @@ func (f *File) LookupSymbolAddress(symbol libpf.SymbolName) (libpf.SymbolValue, 
 		return libpf.SymbolValueInvalid, err
 	}
 	return s.Address, nil
+}
+
+func (f *File) StreamSymbolTable(name string, cb func (libpf.Symbol)) error {
+	symTab := f.Section(name)
+	if symTab == nil {
+		return fmt.Errorf("failed to read %v: section not present", name)
+	}
+	if symTab.Link >= uint32(len(f.Sections)) {
+		return fmt.Errorf("failed to read %v strtab: link %v out of range",
+			name, symTab.Link)
+	}
+	strTab := f.Sections[symTab.Link]
+	strs, err := strTab.Data(maxBytesLargeSection)
+	if err != nil {
+		return fmt.Errorf("failed to read %v: %v", strTab.Name, err)
+	}
+	syms, err := symTab.Data(maxBytesLargeSection)
+	if err != nil {
+		return fmt.Errorf("failed to read %v: %v", name, err)
+	}
+	symSz := int(unsafe.Sizeof(elf.Sym64{}))
+	for i := 0; i < len(syms); i += symSz {
+		sym := (*elf.Sym64)(unsafe.Pointer(&syms[i]))
+		name, ok := getString(strs, int(sym.Name))
+		if !ok {
+			continue
+		}
+		pfSym := libpf.Symbol{
+			Name:    libpf.SymbolName(name),
+			Address: libpf.SymbolValue(sym.Value),
+			Size:    sym.Size,
+		}
+		cb(pfSym)
+	}
+	return nil
 }
 
 // loadSymbolTable reads given symbol table
