@@ -513,6 +513,21 @@ func initializeMapsAndPrograms(kernelSymbols *libpf.SymbolMap, cfg *Config) (
 		}
 	}
 
+	progSpec, ok := coll.Programs["btv"]
+	if !ok {
+		for p, s := range(coll.Programs) {
+			fmt.Printf("%s %s\n", p, s.Name)
+		}
+		panic(42)
+	}
+	programOptions := cebpf.ProgramOptions{
+		LogLevel: cebpf.LogLevel(cfg.BPFVerifierLogLevel),
+	}
+
+	if err := loadProgram(ebpfProgs, nil, 0, progSpec, programOptions, true); err != nil {
+		panic(err)
+	}
+
 	if err = loadSystemConfig(coll, ebpfMaps, kernelSymbols, cfg.IncludeTracers,
 		cfg.OffCPUThreshold, cfg.FilterErrorFrames); err != nil {
 		return nil, nil, fmt.Errorf("failed to load system config: %v", err)
@@ -1215,12 +1230,23 @@ func (t *Tracer) GetEbpfMaps() map[string]*cebpf.Map {
 	return t.ebpfMaps
 }
 
+func (t *Tracer) AttachCuda(libcudartPath string) error {
+	x, err := link.OpenExecutable(libcudartPath)
+	if err != nil {
+		return err
+	}
+	p, ok := t.ebpfProgs["btv"]
+	if !ok {
+		return errors.New("uprobe program is not available")
+	}
+	_, err = x.Uprobe("cudaLaunchKernel", p, &link.UprobeOptions{})
+	return err
+}
+
 // AttachTracer attaches the main tracer entry point to the perf interrupt events. The tracer
 // entry point is always the native tracer. The native tracer will determine when to invoke the
 // interpreter tracers based on address range information.
 func (t *Tracer) AttachTracer() error {
-	fmt.Println(t.ebpfProgs)
-	panic(42)
 	tracerProg, ok := t.ebpfProgs["native_tracer_entry"]
 	if !ok {
 		return errors.New("entry program is not available")
@@ -1251,7 +1277,7 @@ func (t *Tracer) AttachTracer() error {
 	}
 
 	// link.npa
-	
+
 	return nil
 }
 

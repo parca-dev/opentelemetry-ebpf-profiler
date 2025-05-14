@@ -650,6 +650,6 @@ MULTI_USE_FUNC(unwind_native)
 
 SEC("uprobe/asdf")
 int btv() {
-  DEBUG_PRINT("hi");
+  DEBUG_PRINT("hi from btv");
   return 0;
 }
