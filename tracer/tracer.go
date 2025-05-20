@@ -591,7 +591,7 @@ func loadAllMaps(coll *cebpf.CollectionSpec, cfg *Config,
 	}
 
 	for mapName, mapSpec := range coll.Maps {
-		if mapName == "sched_times" /* && cfg.OffCPUThreshold == 0 */ {
+		if mapName == "sched_times" && cfg.OffCPUThreshold == 0 {
 			// Off CPU Profiling is disabled. So do not load this map.
 			continue
 		}
