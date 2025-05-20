@@ -662,7 +662,7 @@ static inline bool ptregs_is_usermode(struct pt_regs *regs)
 // if something fails. has_usermode_regs is set to true if a user-mode register
 // context was found: not every thread that we interrupt will actually have
 // a user-mode context (e.g. kernel worker threads won't).
-static inline ErrorCode
+static inline __attribute__((__always_inline__)) ErrorCode
 get_usermode_regs(struct pt_regs *ctx, UnwindState *state, bool *has_usermode_regs)
 {
   ErrorCode error;

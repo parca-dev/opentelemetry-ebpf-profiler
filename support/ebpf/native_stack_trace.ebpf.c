@@ -630,8 +630,7 @@ static inline __attribute__((__always_inline__)) int unwind_native(struct pt_reg
   return -1;
 }
 
-SEC("perf_event/native_tracer_entry")
-int native_tracer_entry(struct bpf_perf_event_data *ctx)
+static inline __attribute__((__always_inline__)) int native_tracer_entry_inner(struct pt_regs *regs)
 {
   // Get the PID and TGID register.
   u64 id  = bpf_get_current_pid_tgid();
@@ -643,13 +642,89 @@ int native_tracer_entry(struct bpf_perf_event_data *ctx)
   }
 
   u64 ts = bpf_ktime_get_ns();
-  return collect_trace((struct pt_regs *)&ctx->regs, TRACE_SAMPLING, pid, tid, ts, 0);
+  return collect_trace(regs, TRACE_SAMPLING, pid, tid, ts, 0);
+}
+
+SEC("perf_event/native_tracer_entry")
+int native_tracer_entry(struct bpf_perf_event_data *ctx)
+{
+  return native_tracer_entry_inner((struct pt_regs *)&ctx->regs);
 }
 MULTI_USE_FUNC(unwind_native)
 
-
 SEC("uprobe/asdf")
-int btv() {
-  DEBUG_PRINT("hi from btv");
-  return 0;
+int btv(struct pt_regs *ctx)
+{
+  u64 arg = ctx->
+#if defined(__x86_64)
+            di
+#elif defined(__aarch64__)
+            regs[0]
+#else
+  #error "Unsupported architecture"
+#endif
+  ;
+  DEBUG_PRINT("hi from btv. arg is 0x%08llx", arg);
+  /* return native_tracer_entry_inner(regs); */
+  /* return 0; */
+  // Get the PID and TGID register.
+  u64 id  = bpf_get_current_pid_tgid();
+  u32 pid = id >> 32;
+  u32 tid = id & 0xFFFFFFFF;
+
+  if (pid == 0) {
+    return 0;
+  }
+
+  u64 trace_timestamp = bpf_ktime_get_ns();
+  TraceOrigin origin = TRACE_SAMPLING;
+  u64 off_cpu_time = 0;
+  /* return collect_trace(ctx, origin, pid, tid, ts, 0); */
+  /* return 0; */
+
+    // The trace is reused on each call to this function so we have to reset the
+  // variables used to maintain state.
+  DEBUG_PRINT("Resetting CPU record");
+  PerCPURecord *record = get_pristine_per_cpu_record();
+  if (!record) {
+    return -1;
+  }
+
+  Trace *trace   = &record->trace;
+  trace->origin  = origin;
+  trace->pid     = pid;
+  trace->tid     = tid;
+  trace->ktime   = trace_timestamp;
+  trace->offtime = off_cpu_time;
+  if (bpf_get_current_comm(&(trace->comm), sizeof(trace->comm)) < 0) {
+    increment_metric(metricID_ErrBPFCurrentComm);
+  }
+
+  // Get the kernel mode stack trace first
+  trace->kernel_stack_id = bpf_get_stackid(ctx, &kernel_stackmap, BPF_F_REUSE_STACKID);
+  DEBUG_PRINT("kernel stack id = %d", trace->kernel_stack_id);
+
+  // Recursive unwind frames
+  int unwinder           = PROG_UNWIND_STOP;
+  bool has_usermode_regs = false;
+  ErrorCode error        = get_usermode_regs(ctx, &record->state, &has_usermode_regs);
+  if (error || !has_usermode_regs) {
+    goto exit;
+  }
+
+  if (!pid_information_exists(ctx, pid)) {
+    /* if (report_pid(ctx, pid, RATELIMIT_ACTION_DEFAULT)) { */
+    /*   increment_metric(metricID_NumProcNew); */
+    /* } */
+    return 0;
+  }
+  error = get_next_unwinder_after_native_frame(record, &unwinder);
+
+exit:
+  record->state.unwind_error = error;
+  tail_call(ctx, unwinder);
+  DEBUG_PRINT("bpf_tail call failed for %d in native_tracer_entry", unwinder);
+  return -1;
+
+/* return 0; */
 }
