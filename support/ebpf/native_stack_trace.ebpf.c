@@ -612,6 +612,10 @@ static inline __attribute__((__always_inline__)) int unwind_native(struct pt_reg
         DEBUG_PRINT("not a cuda application");
       } else {
         DEBUG_PRINT("btv cuda: [0x%08llx, 0x%08llx), we are at 0x%08llx", cuda->launch_sym_addr, cuda->launch_sym_addr + cuda->launch_sym_size, record->state.pc);
+        if (record->state.pc >= cuda->launch_sym_addr && record->state.pc - cuda->launch_sym_addr < cuda->launch_sym_size) {
+          DEBUG_PRINT("btv cuda: yay! We found it: 0x%08llx", record->state.first_arg);
+          trace->cuda_kernel_token = record->state.first_arg;
+        }
       }
     }
 
