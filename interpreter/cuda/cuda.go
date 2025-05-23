@@ -32,11 +32,11 @@ type data struct {
 	// interpreter.InstanceStubs
 }
 
-var dsoRegex = regexp.MustCompile(`.*/libcuda\..*so`)
+var dsoRegex = regexp.MustCompile(`.*/libcudart\..*so`)
 
 func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpreter.Data, error) {
 	if !dsoRegex.MatchString(info.FileName()) {
-		log.Debugf("file %s is not libcuda", info.FileName())
+		log.Debugf("file %s is not libcudart", info.FileName())
 		return nil, nil
 	}
 

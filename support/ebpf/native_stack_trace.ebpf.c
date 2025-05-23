@@ -607,7 +607,12 @@ static inline __attribute__((__always_inline__)) int unwind_native(struct pt_reg
     }
 
     if (trace->origin == TRACE_CUDA_LAUNCH && !trace->cuda_kernel_token) {
-      
+      CudaProcInfo *cuda = bpf_map_lookup_elem(&cuda_procs, &trace->pid);
+      if (!cuda) {
+        DEBUG_PRINT("not a cuda application");
+      } else {
+        DEBUG_PRINT("btv cuda: [0x%08llx, 0x%08llx), we are at 0x%08llx", cuda->launch_sym_addr, cuda->launch_sym_addr + cuda->launch_sym_size, record->state.pc);
+      }
     }
 
     // Unwind the native frame using stack deltas. Stop if no next frame.
