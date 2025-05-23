@@ -14,6 +14,7 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	// "go.opentelemetry.io/ebpf-profiler/support"
+	"go.opentelemetry.io/ebpf-profiler/support"
 	"go.opentelemetry.io/ebpf-profiler/tracer/types"
 
 	"go.opentelemetry.io/ebpf-profiler/host"
@@ -240,7 +241,7 @@ func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace
 		case libpf.UnknownInterp:
 			log.Errorf("Unexpected frame type 0x%02X (neither error nor interpreter frame)",
 				uint8(frame.Type))
-		case libpf.Native, libpf.Kernel, libpf.CudaLaunch:
+		case libpf.Native, libpf.Kernel, support.FrameMarkerCudaLaunch:
 			// The BPF code classifies whether an address is a return address or not.
 			// Return addresses are where execution resumes when returning to the stack
 			// frame and point to the **next instruction** after the call instruction
@@ -263,7 +264,7 @@ func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace
 			// Locate mapping info for the frame.
 			var mappingStart, mappingEnd libpf.Address
 			var fileOffset uint64
-			if frame.Type.Interpreter() == libpf.Native  || frame.Type.Interpreter() == libpf.CudaLaunch {
+			if frame.Type.Interpreter() == libpf.Native  || frame.Type.Interpreter() == support.FrameMarkerCudaLaunch {
 				if mapping, ok := pm.findMappingForTrace(trace.PID, frame.File, frame.Lineno); ok {
 					mappingStart = mapping.Vaddr - libpf.Address(mapping.Bias)
 					mappingEnd = mappingStart + libpf.Address(mapping.Length)
