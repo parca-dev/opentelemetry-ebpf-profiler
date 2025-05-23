@@ -724,5 +724,5 @@ int btv(struct pt_regs *ctx)
 /*   DEBUG_PRINT("bias is 0x%llx", bias); */
 
   DEBUG_PRINT("btv: attached");
-  return native_tracer_entry_inner(ctx, TRACE_CUDA_LAUNCHY);
+  return native_tracer_entry_inner(ctx, TRACE_CUDA_LAUNCH);
 }
