@@ -378,7 +378,7 @@ typedef enum TraceOrigin {
   TRACE_UNKNOWN,
   TRACE_SAMPLING,
   TRACE_OFF_CPU,
-  TRACE_CUDA,
+  TRACE_CUDA_LAUNCH,
 } TraceOrigin;
 
 // OFF_CPU_THRESHOLD_MAX defines the maximum threshold.
@@ -639,7 +639,7 @@ typedef struct Trace {
   u64 offtime;
 
   // The value passed to `cudaLaunchKernel`
-  u64 cudaKernelToken;
+  u64 cuda_kernel_token;
 
   // The frames of the stack trace.
   Frame frames[MAX_FRAME_UNWINDS];

@@ -105,6 +105,7 @@ type ebpfMapsImpl struct {
 	apmIntProcs        *cebpf.Map
 	goProcs            *cebpf.Map
 	clProcs            *cebpf.Map
+	cudaProcs          *cebpf.Map
 	luajitProcs        *cebpf.Map
 
 	// Stackdelta and process related eBPF maps
@@ -220,6 +221,12 @@ func LoadMaps(ctx context.Context, maps map[string]*cebpf.Map) (EbpfHandler, err
 	}
 	impl.clProcs = clProcs
 
+	cudaProcs, ok := maps["cuda_procs"]
+	if !ok {
+		log.Fatalf("Map cuda_procs is not available")
+	}
+	impl.cudaProcs = cudaProcs
+
 	luajitProcs, ok := maps["luajit_procs"]
 	if !ok {
 		log.Fatalf("Map luajit_procs is not available")
@@ -325,6 +332,8 @@ func (impl *ebpfMapsImpl) getInterpreterTypeMap(typ libpf.InterpreterType) (*ceb
 		return impl.goProcs, nil
 	case libpf.CustomLabels:
 		return impl.clProcs, nil
+	case libpf.CudaLaunch:
+		return impl.cudaProcs, nil
 	case libpf.LuaJIT:
 		return impl.luajitProcs, nil
 	default:

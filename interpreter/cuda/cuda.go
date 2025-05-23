@@ -11,6 +11,7 @@ import (
 	// "fmt"
 	// "io"
 	"errors"
+	"fmt"
 	"regexp"
 	"unsafe"
 
@@ -72,6 +73,8 @@ func (d data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID,
 	if err := ebpf.UpdateProcData(libpf.Cuda, pid, unsafe.Pointer(&procInfo)); err != nil {
 		return nil, err
 	}
+
+	fmt.Println("btv: successfully attached cuda")
 
 	return &instance{}, nil
 

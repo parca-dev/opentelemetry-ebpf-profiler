@@ -606,6 +606,10 @@ static inline __attribute__((__always_inline__)) int unwind_native(struct pt_reg
       break;
     }
 
+    if (trace->origin == TRACE_CUDA_LAUNCH && !trace->cuda_kernel_token) {
+      
+    }
+
     // Unwind the native frame using stack deltas. Stop if no next frame.
     bool stop;
     error = unwind_one_frame(trace->pid, frame_idx, &record->state, &stop);
@@ -720,5 +724,5 @@ int btv(struct pt_regs *ctx)
 /*   DEBUG_PRINT("bias is 0x%llx", bias); */
 
   DEBUG_PRINT("btv: attached");
-  return native_tracer_entry_inner(ctx, TRACE_CUDA);
+  return native_tracer_entry_inner(ctx, TRACE_CUDA_LAUNCHY);
 }
