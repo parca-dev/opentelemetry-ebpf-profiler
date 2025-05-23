@@ -219,6 +219,7 @@ static inline PerCPURecord *get_pristine_per_cpu_record()
   record->state.lr_invalid = false;
   record->state.r28        = 0;
 #endif
+  record->state.first_arg                  = 0;
   record->state.return_address             = false;
   record->state.error_metric               = -1;
   record->state.unwind_error               = ERR_OK;
@@ -248,6 +249,7 @@ static inline PerCPURecord *get_pristine_per_cpu_record()
   trace->apm_trace_id.as_int.hi    = 0;
   trace->apm_trace_id.as_int.lo    = 0;
   trace->apm_transaction_id.as_int = 0;
+  trace->cudaKernelToken           = 0;
 
   u64 *labels_space = (u64 *)&trace->custom_labels;
 #pragma unroll
@@ -431,6 +433,7 @@ static ErrorCode resolve_unwind_mapping(PerCPURecord *record, int *unwinder)
   decode_bias_and_unwind_program(val->bias_and_unwind_program, &state->text_section_bias, unwinder);
   state->text_section_id     = val->file_id;
   state->text_section_offset = pc - state->text_section_bias;
+
   DEBUG_PRINT(
     "Text section id for PC %lx is %llx (unwinder %d)",
     (unsigned long)pc,
@@ -575,15 +578,16 @@ copy_state_regs(UnwindState *state, struct pt_regs *regs, bool interrupted_kerne
   if (regs->cs == __USER32_CS) {
     return ERR_NATIVE_X64_32BIT_COMPAT_MODE;
   }
-  state->pc  = regs->ip;
-  state->sp  = regs->sp;
-  state->fp  = regs->bp;
-  state->rax = regs->ax;
-  state->r9  = regs->r9;
-  state->r11 = regs->r11;
-  state->r13 = regs->r13;
-  state->r14 = regs->r14;
-  state->r15 = regs->r15;
+  state->pc        = regs->ip;
+  state->sp        = regs->sp;
+  state->fp        = regs->bp;
+  state->rax       = regs->ax;
+  state->r9        = regs->r9;
+  state->r11       = regs->r11;
+  state->r13       = regs->r13;
+  state->r14       = regs->r14;
+  state->r15       = regs->r15;
+  state->first_arg = regs->di;
 
   // Treat syscalls as return addresses, but not IRQ handling, page faults, etc..
   // https://github.com/torvalds/linux/blob/2ef5971ff3/arch/x86/include/asm/syscall.h#L31-L39
@@ -595,13 +599,14 @@ copy_state_regs(UnwindState *state, struct pt_regs *regs, bool interrupted_kerne
   if (regs->pstate & PSR_MODE32_BIT) {
     return ERR_NATIVE_AARCH64_32BIT_COMPAT_MODE;
   }
-  state->pc  = normalize_pac_ptr(regs->pc);
-  state->sp  = regs->sp;
-  state->fp  = regs->regs[29];
-  state->lr  = normalize_pac_ptr(regs->regs[30]);
-  state->r7  = regs->regs[7];
-  state->r22 = regs->regs[22];
-  state->r28 = regs->regs[28];
+  state->pc        = normalize_pac_ptr(regs->pc);
+  state->sp        = regs->sp;
+  state->fp        = regs->regs[29];
+  state->lr        = normalize_pac_ptr(regs->regs[30]);
+  state->r7        = regs->regs[7];
+  state->r22       = regs->regs[22];
+  state->r28       = regs->regs[28];
+  state->first_arg = regs->regs[0];
 
   // Treat syscalls as return addresses, but not IRQ handling, page faults, etc..
   // https://github.com/torvalds/linux/blob/2ef5971ff3/arch/arm64/include/asm/ptrace.h#L118
@@ -748,6 +753,42 @@ static inline int collect_trace(
   if (error || !has_usermode_regs) {
     goto exit;
   }
+  /* // XXX - extract all this into its own function. */
+  /* // It doesn't need to be its own unwinder type because we never tail call into it, it is only
+   * ever */
+  /* // at the leaf. */
+  /* if (origin == TRACE_CUDA) { */
+  /*   u64 cuda_token = record->state.first_arg; */
+  /*   PIDPage key    = {}; */
+  /*   key.prefixLen  = BIT_WIDTH_PID + BIT_WIDTH_PAGE; */
+  /*   key.pid        = __constant_cpu_to_be32((u32)pid); */
+  /*   key.page       = __constant_cpu_to_be64(cuda_token); */
+
+  /*   // Check if we have the data for this virtual address */
+  /*   PIDPageMappingInfo *val = bpf_map_lookup_elem(&pid_page_to_mapping_info, &key); */
+  /*   if (!val) { */
+  /*     DEBUG_PRINT("Failure to look up interval memory mapping for cuda token 0x%llx",
+   * cuda_token); */
+  /*     // XXX error */
+  /*     /\* state->error_metric = metricID_UnwindNativeErrWrongTextSection; *\/ */
+  /*     // XXX - should we just continue here? */
+  /*     return ERR_NATIVE_NO_PID_PAGE_MAPPING; */
+  /*   } */
+
+  /*   u64 text_section_bias; */
+  /*   decode_bias_and_unwind_program(val->bias_and_unwind_program, &text_section_bias, NULL); */
+  /*   /\* state->text_section_id     = val->file_id; *\/ */
+  /*   /\* state->text_section_offset = pc - state->text_section_bias; *\/ */
+
+  /*   // push_cuda function? */
+  /*   error = _push_with_return_address( */
+  /*     trace, val->file_id, cuda_token - text_section_bias, FRAME_MARKER_CUDA_LAUNCH, false); */
+  /*   if (error) { */
+  /*     // bump metric? */
+  /*     goto exit; */
+  /*   } */
+  /* } */
+  /* // end XXX */
 
   if (!pid_information_exists(ctx, pid)) {
     if (report_pid(ctx, pid, RATELIMIT_ACTION_DEFAULT)) {

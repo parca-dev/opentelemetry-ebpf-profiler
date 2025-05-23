@@ -13,6 +13,7 @@ import (
 	lru "github.com/elastic/go-freelru"
 	log "github.com/sirupsen/logrus"
 
+	// "go.opentelemetry.io/ebpf-profiler/support"
 	"go.opentelemetry.io/ebpf-profiler/tracer/types"
 
 	"go.opentelemetry.io/ebpf-profiler/host"
@@ -67,7 +68,7 @@ var (
 func New(ctx context.Context, includeTracers types.IncludedTracers, monitorInterval time.Duration,
 	ebpf pmebpf.EbpfHandler, fileIDMapper FileIDMapper, symbolReporter reporter.SymbolReporter,
 	sdp nativeunwind.StackDeltaProvider, filterErrorFrames bool,
-	collectCustomLabels bool, includeEnvVars libpf.Set[string]) (*ProcessManager, error) {
+	collectCustomLabels bool, instrumentCudaLaunch bool, includeEnvVars libpf.Set[string]) (*ProcessManager, error) {
 	if fileIDMapper == nil {
 		var err error
 		fileIDMapper, err = newFileIDMapper(lruFileIDCacheSize)
@@ -83,7 +84,7 @@ func New(ctx context.Context, includeTracers types.IncludedTracers, monitorInter
 	}
 	elfInfoCache.SetLifetime(elfInfoCacheTTL)
 
-	em, err := eim.NewExecutableInfoManager(sdp, ebpf, includeTracers, collectCustomLabels)
+	em, err := eim.NewExecutableInfoManager(sdp, ebpf, includeTracers, collectCustomLabels, instrumentCudaLaunch)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create ExecutableInfoManager: %v", err)
 	}
@@ -239,7 +240,7 @@ func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace
 		case libpf.UnknownInterp:
 			log.Errorf("Unexpected frame type 0x%02X (neither error nor interpreter frame)",
 				uint8(frame.Type))
-		case libpf.Native, libpf.Kernel:
+		case libpf.Native, libpf.Kernel, libpf.CudaLaunch:
 			// The BPF code classifies whether an address is a return address or not.
 			// Return addresses are where execution resumes when returning to the stack
 			// frame and point to the **next instruction** after the call instruction
@@ -262,7 +263,7 @@ func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace
 			// Locate mapping info for the frame.
 			var mappingStart, mappingEnd libpf.Address
 			var fileOffset uint64
-			if frame.Type.Interpreter() == libpf.Native {
+			if frame.Type.Interpreter() == libpf.Native  || frame.Type.Interpreter() == libpf.CudaLaunch {
 				if mapping, ok := pm.findMappingForTrace(trace.PID, frame.File, frame.Lineno); ok {
 					mappingStart = mapping.Vaddr - libpf.Address(mapping.Bias)
 					mappingEnd = mappingStart + libpf.Address(mapping.Length)
@@ -297,6 +298,9 @@ func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace
 			}
 		}
 	}
+	// if trace.Origin == support.TraceOriginCuda {
+	// 	newTrace.AppendFrameFull(libpf.CudaFrame, )
+	// }
 	newTrace.Hash = traceutil.HashTrace(newTrace)
 	return newTrace, nil
 }

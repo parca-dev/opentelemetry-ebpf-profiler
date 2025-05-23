@@ -378,6 +378,7 @@ typedef enum TraceOrigin {
   TRACE_UNKNOWN,
   TRACE_SAMPLING,
   TRACE_OFF_CPU,
+  TRACE_CUDA,
 } TraceOrigin;
 
 // OFF_CPU_THRESHOLD_MAX defines the maximum threshold.
@@ -637,6 +638,9 @@ typedef struct Trace {
   // offtime stores the nanoseconds that the trace was off-cpu for.
   u64 offtime;
 
+  // The value passed to `cudaLaunchKernel`
+  u64 cudaKernelToken;
+
   // The frames of the stack trace.
   Frame frames[MAX_FRAME_UNWINDS];
 
@@ -661,6 +665,11 @@ typedef struct UnwindState {
   // Current register values for named registers
   u64 lr, r7, r22, r28;
 #endif
+
+  // The first argument to a function in the calling convention.
+  // (Only actually guaranteed to still contain that argument
+  //  if we are at the beginning of a native function).
+  u64 first_arg;
 
   // The executable ID/hash associated with PC
   u64 text_section_id;
@@ -1020,8 +1029,10 @@ encode_bias_and_unwind_program(u64 bias, int unwind_program)
 static inline __attribute__((__always_inline__)) void
 decode_bias_and_unwind_program(u64 bias_and_unwind_program, u64 *bias, int *unwind_program)
 {
-  *bias           = bias_and_unwind_program & 0x00FFFFFFFFFFFFFF;
-  *unwind_program = bias_and_unwind_program >> 56;
+  if (bias)
+    *bias           = bias_and_unwind_program & 0x00FFFFFFFFFFFFFF;
+  if (unwind_program)
+    *unwind_program = bias_and_unwind_program >> 56;
 }
 
 // Smallest stack delta bucket that holds up to 2^8 entries
@@ -1066,6 +1077,11 @@ typedef struct ApmIntProcInfo {
 typedef struct NativeCustomLabelsProcInfo {
   u64 tls_offset;
 } NativeCustomLabelsProcInfo;
+
+typedef struct CudaProcInfo {
+  u64 launch_sym_addr;
+  u64 launch_sym_size;
+} CudaProcInfo;
 
 typedef struct GoCustomLabelsOffsets {
   u32 m_offset;

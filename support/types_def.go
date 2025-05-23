@@ -25,6 +25,7 @@ const (
 	FrameMarkerV8       = C.FRAME_MARKER_V8
 	FrameMarkerDotnet   = C.FRAME_MARKER_DOTNET
 	FrameMarkerLuaJIT   = C.FRAME_MARKER_LUAJIT
+	FrameMarkerMax      = C.FRAME_MARKER_LUAJIT
 	FrameMarkerAbort    = C.FRAME_MARKER_ABORT
 )
 
@@ -93,6 +94,7 @@ const (
 	TraceOriginUnknown  = C.TRACE_UNKNOWN
 	TraceOriginSampling = C.TRACE_SAMPLING
 	TraceOriginOffCPU   = C.TRACE_OFF_CPU
+	TraceOriginCuda     = C.TRACE_CUDA
 )
 
 const OffCPUThresholdMax = C.OFF_CPU_THRESHOLD_MAX

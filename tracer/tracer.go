@@ -151,6 +151,8 @@ type Config struct {
 	// CollectCustomLabels determines whether to collect custom labels in
 	// languages that support them.
 	CollectCustomLabels bool
+	// InstrumentCudaLaunch determines whether to instrument calls to `cudaLaunchKernel`.
+	InstrumentCudaLaunch bool
 	// BPFVerifierLogLevel is the log level of the eBPF verifier output.
 	BPFVerifierLogLevel uint32
 	// ProbabilisticInterval is the time interval for which probabilistic profiling will be enabled.
@@ -302,7 +304,7 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 
 	processManager, err := pm.New(ctx, cfg.IncludeTracers, cfg.Intervals.MonitorInterval(),
 		ebpfHandler, nil, cfg.Reporter, elfunwindinfo.NewStackDeltaProvider(),
-		cfg.FilterErrorFrames, cfg.CollectCustomLabels, cfg.IncludeEnvVars)
+		cfg.FilterErrorFrames, cfg.CollectCustomLabels, cfg.InstrumentCudaLaunch, cfg.IncludeEnvVars)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create processManager: %v", err)
 	}
@@ -583,7 +585,7 @@ func loadAllMaps(coll *cebpf.CollectionSpec, cfg *Config,
 	// calculate a size based on an assumed upper bound of scheduler events per
 	// second (1000hz) multiplied by an average time a task remains off CPU (3s),
 	// scaled by the probability of capturing a trace.
-	adaption["sched_times"] = (4096 * cfg.OffCPUThreshold) / support.OffCPUThresholdMax
+	adaption["sched_times"] = 4 // (4096 * cfg.OffCPUThreshold) / support.OffCPUThresholdMax
 
 	for i := support.StackDeltaBucketSmallest; i <= support.StackDeltaBucketLargest; i++ {
 		mapName := fmt.Sprintf("exe_id_to_%d_stack_deltas", i)
@@ -591,7 +593,7 @@ func loadAllMaps(coll *cebpf.CollectionSpec, cfg *Config,
 	}
 
 	for mapName, mapSpec := range coll.Maps {
-		if mapName == "sched_times" && cfg.OffCPUThreshold == 0 {
+		if mapName == "sched_times" && false /* cfg.OffCPUThreshold == 0 */ {
 			// Off CPU Profiling is disabled. So do not load this map.
 			continue
 		}
@@ -1010,7 +1012,7 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) *host.Trace {
 
 	// NOTE: can't do exact check here: kernel adds a few padding bytes to messages.
 	if len(raw) < frameListOffs+int(ptr.stack_len)*frameSize {
-		panic("unexpected record size")
+		panic(fmt.Sprintf("unexpected record size: raw is %d, should not be less than %d", len(raw), frameListOffs+int(ptr.stack_len)*frameSize))
 	}
 
 	pid := libpf.PID(ptr.pid)
@@ -1030,7 +1032,7 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) *host.Trace {
 		EnvVars:          procMeta.EnvVariables,
 	}
 
-	if trace.Origin != support.TraceOriginSampling && trace.Origin != support.TraceOriginOffCPU {
+	if trace.Origin != support.TraceOriginSampling && trace.Origin != support.TraceOriginOffCPU && trace.Origin != 0x3 {
 		log.Warnf("Skip handling trace from unexpected %d origin", trace.Origin)
 		return nil
 	}

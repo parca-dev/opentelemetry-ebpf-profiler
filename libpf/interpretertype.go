@@ -33,6 +33,7 @@ const (
 	Dotnet InterpreterType = support.FrameMarkerDotnet
 	// LuaJIT identifies the LuaJIT interpreter.
 	LuaJIT InterpreterType = support.FrameMarkerLuaJIT
+	CudaLaunch InterpreterType = support.FrameMarkerCudaLaunch
 )
 
 // Pseudo-interpreters without a corresponding frame type.
@@ -48,6 +49,9 @@ const (
 
 	// CustomLabels identifies the pseudo-interpreter for native custom labels support.
 	CustomLabels InterpreterType = 0x102
+
+	// Cuda identifies the pseudo-interpreter for cuda launch support.
+	Cuda InterpreterType = 0x103
 )
 
 // Frame converts the interpreter type into the corresponding frame type.

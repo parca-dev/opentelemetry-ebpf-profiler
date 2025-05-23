@@ -35,6 +35,8 @@
 #define FRAME_MARKER_DOTNET  0xA
 // Indicates a LuaJIT frame
 #define FRAME_MARKER_LUAJIT  0xB
+// Indicates a (synthetic) CUDA kernel launch frame.
+#define FRAME_MARKER_CUDA_LAUNCH    0xC
 
 // Indicates a frame containing information about a critical unwinding error
 // that caused further unwinding to be aborted.
