@@ -332,7 +332,7 @@ func (impl *ebpfMapsImpl) getInterpreterTypeMap(typ libpf.InterpreterType) (*ceb
 		return impl.goProcs, nil
 	case libpf.CustomLabels:
 		return impl.clProcs, nil
-	case libpf.CudaLaunch:
+	case libpf.Cuda:
 		return impl.cudaProcs, nil
 	case libpf.LuaJIT:
 		return impl.luajitProcs, nil

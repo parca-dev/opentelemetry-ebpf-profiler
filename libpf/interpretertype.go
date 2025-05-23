@@ -33,7 +33,6 @@ const (
 	Dotnet InterpreterType = support.FrameMarkerDotnet
 	// LuaJIT identifies the LuaJIT interpreter.
 	LuaJIT InterpreterType = support.FrameMarkerLuaJIT
-	CudaLaunch InterpreterType = support.FrameMarkerCudaLaunch
 )
 
 // Pseudo-interpreters without a corresponding frame type.
