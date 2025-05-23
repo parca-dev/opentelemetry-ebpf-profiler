@@ -1239,8 +1239,8 @@ func (t *Tracer) GetEbpfMaps() map[string]*cebpf.Map {
 	return t.ebpfMaps
 }
 
-func (t *Tracer) AttachCuda(libcudartPath string) (link.Link, error) {
-	x, err := link.OpenExecutable(libcudartPath)
+func (t *Tracer) AttachCuda(libcudaPath string) (link.Link, error) {
+	x, err := link.OpenExecutable(libcudaPath)
 	if err != nil {
 		return nil, err
 	}
@@ -1248,8 +1248,8 @@ func (t *Tracer) AttachCuda(libcudartPath string) (link.Link, error) {
 	if !ok {
 		return nil, errors.New("uprobe program is not available")
 	}
-	// u, err := x.Uprobe("cudaLaunchKernel", p, &link.UprobeOptions{})
-	u, err := x.Uprobe("derp", p, &link.UprobeOptions{})
+	u, err := x.Uprobe("cuLaunchKernel", p, &link.UprobeOptions{})
+	// u, err := x.Uprobe("derp", p, &link.UprobeOptions{})
 	return u, err
 }
 
