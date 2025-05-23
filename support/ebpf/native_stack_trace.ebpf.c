@@ -719,6 +719,6 @@ int btv(struct pt_regs *ctx)
 /*   decode_bias_and_unwind_program(val->bias_and_unwind_program, &bias, &unwinder); */
 /*   DEBUG_PRINT("bias is 0x%llx", bias); */
 
-  DEBUG_PRINT("attached 😎");
+  DEBUG_PRINT("btv: attached");
   return native_tracer_entry_inner(ctx, TRACE_CUDA);
 }
