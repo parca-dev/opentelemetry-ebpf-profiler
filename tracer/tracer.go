@@ -1239,7 +1239,12 @@ func (t *Tracer) GetEbpfMaps() map[string]*cebpf.Map {
 	return t.ebpfMaps
 }
 
-func (t *Tracer) AttachCuda(libcudaPath string) (link.Link, error) {
+type CudaAttachment struct {
+	uprobe    link.Link
+	uretprobe link.Link
+}
+
+func (t *Tracer) AttachCuda(libcudaPath string) (*CudaAttachment, error) {
 	x, err := link.OpenExecutable(libcudaPath)
 	if err != nil {
 		return nil, err
@@ -1248,9 +1253,24 @@ func (t *Tracer) AttachCuda(libcudaPath string) (link.Link, error) {
 	if !ok {
 		return nil, errors.New("uprobe program is not available")
 	}
-	u, err := x.Uprobe("cuLaunchKernel", p, &link.UprobeOptions{})
+	uprobe, err := x.Uprobe("cuLaunchKernel", p, &link.UprobeOptions{})
 	// u, err := x.Uprobe("derp", p, &link.UprobeOptions{})
-	return u, err
+	if err != nil {
+		return nil, err
+	}
+	p2, ok := t.ebpfProgs["btv2"]
+	if !ok {
+		return nil, errors.New("uretprobe program is not available")
+	}
+	uretprobe, err := x.Uretprobe("cuLaunchKernel", p2, &link.UprobeOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	return &CudaAttachment{
+		uprobe,
+		uretprobe,
+	}, nil
 }
 
 // AttachTracer attaches the main tracer entry point to the perf interrupt events. The tracer

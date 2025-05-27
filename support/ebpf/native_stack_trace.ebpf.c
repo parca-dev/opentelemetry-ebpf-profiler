@@ -666,6 +666,15 @@ int native_tracer_entry(struct bpf_perf_event_data *ctx)
 }
 MULTI_USE_FUNC(unwind_native)
 
+// sched_times keeps track of sched_switch call times.
+bpf_map_def SEC("maps") cuda_launch_times = {
+  .type        = BPF_MAP_TYPE_LRU_PERCPU_HASH,
+  .key_size    = sizeof(u64), // pid_tgid
+  .value_size  = sizeof(u64), // time in ns
+  .max_entries = 256,         // value is adjusted at load time in loadAllMaps.
+};
+
+
 SEC("uprobe/asdf")
 int btv(struct pt_regs *ctx)
 {
@@ -733,5 +742,12 @@ int btv(struct pt_regs *ctx)
 /*   DEBUG_PRINT("bias is 0x%llx", bias); */
 
   DEBUG_PRINT("btv: attached");
+  return native_tracer_entry_inner(ctx, TRACE_CUDA_LAUNCH);
+}
+
+SEC("uretprobe/asdf")
+int btv2(struct pt_regs *ctx)
+{
+  DEBUG_PRINT("btv: donezo");
   return native_tracer_entry_inner(ctx, TRACE_CUDA_LAUNCH);
 }
