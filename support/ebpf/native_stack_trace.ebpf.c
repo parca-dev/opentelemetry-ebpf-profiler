@@ -764,7 +764,8 @@ int btv(struct pt_regs *ctx)
   /*   DEBUG_PRINT("bias is 0x%llx", bias); */
 
   DEBUG_PRINT("btv: attached");
-  return native_tracer_entry_inner(ctx, TRACE_CUDA_LAUNCH);
+  /* return native_tracer_entry_inner(ctx, TRACE_CUDA_LAUNCH); */
+  return 0;
 }
 
 SEC("uretprobe/asdf")
@@ -789,5 +790,7 @@ int btv2(struct pt_regs *ctx)
 
   DEBUG_PRINT("btv: donezo %lld", diff);
 
-  return 0;
+  return collect_trace(ctx, TRACE_CUDA_LAUNCH, pid, tid, *start_ts, diff);
+
+  /* return 0; */
 }

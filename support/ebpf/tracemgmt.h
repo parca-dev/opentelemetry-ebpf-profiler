@@ -721,7 +721,7 @@ get_usermode_regs(struct pt_regs *ctx, UnwindState *state, bool *has_usermode_re
 
 #endif // TESTING_COREDUMP
 
-static inline int collect_trace(
+static inline __attribute__((__always_inline__)) int collect_trace(
   struct pt_regs *ctx, TraceOrigin origin, u32 pid, u32 tid, u64 trace_timestamp, u64 off_cpu_time)
 {
   // The trace is reused on each call to this function so we have to reset the
