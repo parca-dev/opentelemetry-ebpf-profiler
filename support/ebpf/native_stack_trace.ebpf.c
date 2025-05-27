@@ -770,6 +770,24 @@ int btv(struct pt_regs *ctx)
 SEC("uretprobe/asdf")
 int btv2(struct pt_regs *ctx)
 {
-  DEBUG_PRINT("btv: donezo");
-  return native_tracer_entry_inner(ctx, TRACE_CUDA_LAUNCH);
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid      = pid_tgid >> 32;
+  u32 tid      = pid_tgid & 0xFFFFFFFF;
+
+  if (pid == 0 || tid == 0) {
+    return 0;
+  }
+  u64 ts = bpf_ktime_get_ns();
+
+  u64 *start_ts = bpf_map_lookup_elem(&cuda_launch_times, &pid_tgid);
+  if (!start_ts || *start_ts == 0) {
+    // There is no information from the sched/sched_switch entry hook.
+    return 0;
+  }
+
+  u64 diff = ts - *start_ts;
+
+  DEBUG_PRINT("btv: donezo %lld", diff);
+
+  return 0;
 }
