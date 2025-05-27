@@ -1037,7 +1037,7 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) *host.Trace {
 		EnvVars:          procMeta.EnvVariables,
 	}
 
-	if trace.Origin != support.TraceOriginSampling && trace.Origin != support.TraceOriginOffCPU && trace.Origin != 0x3 {
+	if trace.Origin != support.TraceOriginSampling && trace.Origin != support.TraceOriginOffCPU && trace.Origin != support.TraceOriginCuda {
 		log.Warnf("Skip handling trace from unexpected %d origin", trace.Origin)
 		return nil
 	}
