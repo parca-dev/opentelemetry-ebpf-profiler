@@ -705,6 +705,11 @@ func loadKProbeUnwinders(coll *cebpf.CollectionSpec, ebpfProgs map[string]*cebpf
 			noTailCallTarget: true,
 			enable:           true,
 		},
+		progLoaderHelper{
+			name:             "btv2",
+			noTailCallTarget: true,
+			enable:           true,
+		},
 	)
 
 	for _, unwindProg := range progs {
