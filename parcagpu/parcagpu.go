@@ -110,15 +110,15 @@ func startParcaGpuReader(pid libpf.PID, ctx context.Context, cancel context.Canc
 		for {
 			select {
 			case time := <-timeChan:
-				fmt.Printf("[btv] got time and id: %f, %d\n", time.millis, time.id)
+				fmt.Printf("[btv] got time and id: %f, 0x%x\n", time.millis, time.id)
 				if trace := rdr.addTime(time.id, time.millis); trace != nil {
 					fmt.Printf("[btv] trace complete: %d\n", trace.ParcaGPUTraceID)
 					traceOutChan <- trace
 				}
 			case trace := <-traceChan:
-				fmt.Printf("[btv] got trace with id: %d\n", trace.ParcaGPUTraceID)
+				fmt.Printf("[btv] got trace with id: 0x%x\n", trace.ParcaGPUTraceID)
 				if trace := rdr.addTrace(trace); trace != nil {
-					fmt.Printf("[btv] trace complete: %d\n", trace.ParcaGPUTraceID)
+					fmt.Printf("[btv] trace complete: 0x%x\n", trace.ParcaGPUTraceID)
 					traceOutChan <- trace
 				}
 			}
