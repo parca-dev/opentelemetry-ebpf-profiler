@@ -515,21 +515,6 @@ func initializeMapsAndPrograms(kernelSymbols *libpf.SymbolMap, cfg *Config) (
 		}
 	}
 
-	// progSpec, ok := coll.Programs["btv"]
-	// if !ok {
-	// 	for p, s := range(coll.Programs) {
-	// 		fmt.Printf("%s %s\n", p, s.Name)
-	// 	}
-	// 	panic(42)
-	// }
-	// programOptions := cebpf.ProgramOptions{
-	// 	LogLevel: cebpf.LogLevel(cfg.BPFVerifierLogLevel),
-	// }
-
-	// if err := loadProgram(ebpfProgs, nil, 0, progSpec, programOptions, true); err != nil {
-	// 	panic(err)
-	// }
-
 	if err = loadSystemConfig(coll, ebpfMaps, kernelSymbols, cfg.IncludeTracers,
 		cfg.OffCPUThreshold, cfg.FilterErrorFrames); err != nil {
 		return nil, nil, fmt.Errorf("failed to load system config: %v", err)
@@ -702,11 +687,6 @@ func loadKProbeUnwinders(coll *cebpf.CollectionSpec, ebpfProgs map[string]*cebpf
 		},
 		progLoaderHelper{
 			name:             "btv",
-			noTailCallTarget: true,
-			enable:           true,
-		},
-		progLoaderHelper{
-			name:             "btv2",
 			noTailCallTarget: true,
 			enable:           true,
 		},
@@ -1033,6 +1013,7 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) *host.Trace {
 		Origin:           libpf.Origin(ptr.origin),
 		OffTime:          int64(ptr.offtime),
 		KTime:            times.KTime(ptr.ktime),
+		ParcaGPUTraceID:  uint32(ptr.parca_gpu_trace_id),
 		CPU:              cpu,
 		EnvVars:          procMeta.EnvVariables,
 	}
@@ -1244,38 +1225,8 @@ func (t *Tracer) GetEbpfMaps() map[string]*cebpf.Map {
 	return t.ebpfMaps
 }
 
-type CudaAttachment struct {
-	uprobe    link.Link
-	uretprobe link.Link
-}
-
-func (t *Tracer) AttachCuda(libcudaPath string) (*CudaAttachment, error) {
-	x, err := link.OpenExecutable(libcudaPath)
-	if err != nil {
-		return nil, err
-	}
-	p, ok := t.ebpfProgs["btv"]
-	if !ok {
-		return nil, errors.New("uprobe program is not available")
-	}
-	uprobe, err := x.Uprobe("cuLaunchKernel", p, &link.UprobeOptions{})
-	// u, err := x.Uprobe("derp", p, &link.UprobeOptions{})
-	if err != nil {
-		return nil, err
-	}
-	p2, ok := t.ebpfProgs["btv2"]
-	if !ok {
-		return nil, errors.New("uretprobe program is not available")
-	}
-	uretprobe, err := x.Uretprobe("cuLaunchKernel", p2, &link.UprobeOptions{})
-	if err != nil {
-		return nil, err
-	}
-
-	return &CudaAttachment{
-		uprobe,
-		uretprobe,
-	}, nil
+func (t *Tracer) GetEbpfProgs() map[string]*cebpf.Program {
+	return t.ebpfProgs
 }
 
 // AttachTracer attaches the main tracer entry point to the perf interrupt events. The tracer

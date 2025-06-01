@@ -650,7 +650,7 @@ static inline __attribute__((__always_inline__)) int unwind_native(struct pt_reg
 }
 
 static inline __attribute__((__always_inline__)) int
-native_tracer_entry_inner(struct pt_regs *regs, TraceOrigin origin)
+native_tracer_entry_inner(struct pt_regs *regs, TraceOrigin origin, u32 cudaId)
 {
   // Get the PID and TGID register.
   u64 id  = bpf_get_current_pid_tgid();
@@ -662,13 +662,13 @@ native_tracer_entry_inner(struct pt_regs *regs, TraceOrigin origin)
   }
 
   u64 ts = bpf_ktime_get_ns();
-  return collect_trace(regs, origin, pid, tid, ts, 0);
+  return collect_trace(regs, origin, pid, tid, ts, 0, cudaId);
 }
 
 SEC("perf_event/native_tracer_entry")
 int native_tracer_entry(struct bpf_perf_event_data *ctx)
 {
-  return native_tracer_entry_inner((struct pt_regs *)&ctx->regs, TRACE_SAMPLING);
+  return native_tracer_entry_inner((struct pt_regs *)&ctx->regs, TRACE_SAMPLING, 0);
 }
 MULTI_USE_FUNC(unwind_native)
 
@@ -697,100 +697,17 @@ int btv(struct pt_regs *ctx)
     return 0;
   }
 
-  /*   u64 arg = ctx-> */
-  /* #if defined(__x86_64) */
-  /*             di */
-  /* #elif defined(__aarch64__) */
-  /*             regs[0] */
-  /* #else */
-  /*   #error "Unsupported architecture" */
-  /* #endif */
-  /*     ; */
+  u64 arg = ctx->
+#if defined(__x86_64)
+            di
+#elif defined(__aarch64__)
+            regs[0]
+#else
+  #error "Unsupported architecture"
+#endif
+    ;
 
-  /*   u64 pc = ctx-> */
-  /* #if defined(__x86_64) */
-  /*            ip */
-  /* #elif defined(__aarch64__) */
-  /*            pc */
-  /* #else */
-  /*   #error "Unsupported architecture" */
-  /* #endif */
-  /*     ; */
-
-  /*   u64 ra = ctx-> */
-  /* #if defined(__x86_64) */
-  /*            asdfasdf */
-  /* #elif defined(__aarch64__) */
-  /*            regs[30] */
-  /* #else */
-  /*   #error "Unsupported architecture" */
-  /* #endif */
-  /*     ; */
-
-  /*   DEBUG_PRINT("hi from btv. arg is 0x%08llx, pc is 0x%08llx, return addr is 0x%08llx", arg, pc,
-   * ra); */
-
-  /*   // hack. cuda tokens are symbolized. */
-  /*   // */
-  /*   // todo -- refactor to get rid of dupe code in other functions. In particular should we just
-   * get */
-  /*   // pid/tid and state here and pass it down? Why are we getting state lower down?? */
-
-  /*   // Get the PID and TGID register. */
-  /*   u64 id  = bpf_get_current_pid_tgid(); */
-  /*   u32 pid = id >> 32; */
-  /*   /\* u32 tid = id & 0xFFFFFFFF; *\/ */
-
-  /*   if (pid == 0) { */
-  /*     return 0; */
-  /*   } */
-  /*   PIDPage key   = {}; */
-  /*   key.prefixLen = BIT_WIDTH_PID + BIT_WIDTH_PAGE; */
-  /*   key.pid       = __constant_cpu_to_be32((u32)pid); */
-  /*   key.page      = __constant_cpu_to_be64(ra); */
-
-  /*   PIDPageMappingInfo *val = bpf_map_lookup_elem(&pid_page_to_mapping_info, &key); */
-  /*   if (!val) { */
-  /*     DEBUG_PRINT("Failure to look up interval memory mapping for PC 0x%lx", (unsigned long)pc);
-   */
-  /*     /\* state->error_metric = metricID_UnwindNativeErrWrongTextSection; *\/ */
-  /*     return ERR_NATIVE_NO_PID_PAGE_MAPPING; */
-  /*   } */
-  /*   DEBUG_PRINT("BAUP is 0x%llx", val->bias_and_unwind_program); */
-
-  /*   u64 bias; */
-  /*   int unwinder; */
-  /*   decode_bias_and_unwind_program(val->bias_and_unwind_program, &bias, &unwinder); */
-  /*   DEBUG_PRINT("bias is 0x%llx", bias); */
-
-  DEBUG_PRINT("btv: attached");
-  /* return native_tracer_entry_inner(ctx, TRACE_CUDA_LAUNCH); */
-  return 0;
+  DEBUG_PRINT("btv: attached, func is 0x%llx", arg);
+  return native_tracer_entry_inner(ctx, TRACE_CUDA_LAUNCH, arg);
 }
 
-SEC("uretprobe/asdf")
-int btv2(struct pt_regs *ctx)
-{
-  u64 pid_tgid = bpf_get_current_pid_tgid();
-  u32 pid      = pid_tgid >> 32;
-  u32 tid      = pid_tgid & 0xFFFFFFFF;
-
-  if (pid == 0 || tid == 0) {
-    return 0;
-  }
-  u64 ts = bpf_ktime_get_ns();
-
-  u64 *start_ts = bpf_map_lookup_elem(&cuda_launch_times, &pid_tgid);
-  if (!start_ts || *start_ts == 0) {
-    // There is no information from the sched/sched_switch entry hook.
-    return 0;
-  }
-
-  u64 diff = ts - *start_ts;
-
-  DEBUG_PRINT("btv: donezo %lld", diff);
-
-  return collect_trace(ctx, TRACE_CUDA_LAUNCH, pid, tid, *start_ts, diff);
-
-  /* return 0; */
-}

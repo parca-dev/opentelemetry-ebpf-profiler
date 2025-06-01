@@ -625,6 +625,7 @@ typedef struct Trace {
   ApmSpanID apm_transaction_id;
   // APM trace ID or all-zero if not present.
   ApmTraceID apm_trace_id;
+  u32 parca_gpu_trace_id;
   // Custom Labels
   CustomLabelsArray custom_labels;
   // The kernel stack ID.

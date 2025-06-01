@@ -18,8 +18,10 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/times"
 
 	"go.opentelemetry.io/ebpf-profiler/host"
+	"go.opentelemetry.io/ebpf-profiler/parcagpu"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
+	cebpf "github.com/cilium/ebpf"
 )
 
 // Compile time check to make sure config.Times satisfies the interfaces.
@@ -163,6 +165,7 @@ func (m *traceHandler) HandleTrace(bpfTrace *host.Trace) {
 // to exit after a cancellation through the context.
 func Start(ctx context.Context, rep reporter.TraceReporter, traceProcessor TraceProcessor,
 	traceInChan <-chan *host.Trace, intervals Times, cacheSize uint32,
+	parcagpuProg *cebpf.Program,
 ) (workerExited <-chan libpf.Void, err error) {
 	handler, err :=
 		newTraceHandler(ctx, rep, traceProcessor, intervals, cacheSize)
@@ -170,8 +173,19 @@ func Start(ctx context.Context, rep reporter.TraceReporter, traceProcessor Trace
 		return nil, fmt.Errorf("failed to create traceHandler: %v", err)
 	}
 
+	traceChan := make(chan *host.Trace)
+	parcagpuTraceChan := make (chan *host.Trace)
+
+	go func() {
+		for {
+			traceChan <- (<- traceInChan)
+		}
+	}()
+
 	exitChan := make(chan libpf.Void)
 
+	err = parcagpu.StartParcaGpuHandler(parcagpuTraceChan, traceChan, parcagpuProg)
+	
 	go func() {
 		defer close(exitChan)
 

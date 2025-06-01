@@ -249,7 +249,8 @@ static inline PerCPURecord *get_pristine_per_cpu_record()
   trace->apm_trace_id.as_int.hi    = 0;
   trace->apm_trace_id.as_int.lo    = 0;
   trace->apm_transaction_id.as_int = 0;
-  trace->cuda_kernel_token           = 0;
+  trace->parca_gpu_trace_id        = 0;
+  trace->cuda_kernel_token         = 0;
 
   u64 *labels_space = (u64 *)&trace->custom_labels;
 #pragma unroll
@@ -722,7 +723,13 @@ get_usermode_regs(struct pt_regs *ctx, UnwindState *state, bool *has_usermode_re
 #endif // TESTING_COREDUMP
 
 static inline __attribute__((__always_inline__)) int collect_trace(
-  struct pt_regs *ctx, TraceOrigin origin, u32 pid, u32 tid, u64 trace_timestamp, u64 off_cpu_time)
+  struct pt_regs *ctx,
+  TraceOrigin origin,
+  u32 pid,
+  u32 tid,
+  u64 trace_timestamp,
+  u64 off_cpu_time,
+  u32 cuda_id)
 {
   // The trace is reused on each call to this function so we have to reset the
   // variables used to maintain state.
@@ -738,6 +745,7 @@ static inline __attribute__((__always_inline__)) int collect_trace(
   trace->tid     = tid;
   trace->ktime   = trace_timestamp;
   trace->offtime = off_cpu_time;
+  trace->parca_gpu_trace_id = cuda_id;
   if (bpf_get_current_comm(&(trace->comm), sizeof(trace->comm)) < 0) {
     increment_metric(metricID_ErrBPFCurrentComm);
   }
