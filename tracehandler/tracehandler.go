@@ -15,13 +15,14 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
+	"go.opentelemetry.io/ebpf-profiler/support"
 	"go.opentelemetry.io/ebpf-profiler/times"
 
-	"go.opentelemetry.io/ebpf-profiler/host"
-	"go.opentelemetry.io/ebpf-profiler/parcagpu"
-	"go.opentelemetry.io/ebpf-profiler/libpf"
-	"go.opentelemetry.io/ebpf-profiler/reporter"
 	cebpf "github.com/cilium/ebpf"
+	"go.opentelemetry.io/ebpf-profiler/host"
+	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/parcagpu"
+	"go.opentelemetry.io/ebpf-profiler/reporter"
 )
 
 // Compile time check to make sure config.Times satisfies the interfaces.
@@ -195,9 +196,14 @@ func Start(ctx context.Context, rep reporter.TraceReporter, traceProcessor Trace
 		// Poll the output channels
 		for {
 			select {
-			case traceUpdate := <-traceInChan:
+			case traceUpdate := <-traceChan:
 				if traceUpdate != nil {
-					handler.HandleTrace(traceUpdate)
+					if traceUpdate.Origin == support.TraceOriginCuda  && traceUpdate.OffTime == 0 {
+						fmt.Println("btv: got trace for cuda, sending to parcagpu")
+						parcagpuTraceChan <- traceUpdate
+					} else {
+						handler.HandleTrace(traceUpdate)
+					}
 				}
 			case <-metricsTicker.C:
 				handler.collectMetrics()
