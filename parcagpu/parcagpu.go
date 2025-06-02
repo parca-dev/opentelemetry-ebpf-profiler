@@ -1,6 +1,7 @@
 package parcagpu
 
 import (
+	"bufio"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -14,10 +15,10 @@ import (
 	"strings"
 	"time"
 
+	cebpf "github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	log "github.com/sirupsen/logrus"
-	cebpf "github.com/cilium/ebpf"
-	
+
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/process"
@@ -66,7 +67,7 @@ type idAndTime struct {
 }
 
 func watchSocket(pid libpf.PID, timeOutChan chan<- idAndTime, ctx context.Context) error {
-	path := fmt.Sprintf("/tmp/parcagpu.%d", pid)
+	path := fmt.Sprintf("\x00parcagpu.%d", pid)
 	addr := net.UnixAddr{Name: path, Net: "unix"}
 	conn, err := net.DialUnix("unix", nil, &addr)
 	defer conn.Close()
@@ -133,7 +134,7 @@ type deviceAndInode struct {
 	inode  uint64
 }
 
-func handleParcaGpu(ctx context.Context, cancel context.CancelFunc, traceOutChan chan <- *host.Trace, attachedDsos map[deviceAndInode]link.Link, pid libpf.PID, prog *cebpf.Program) (*parcaGpuReader, error) {
+func handleParcaGpu(ctx context.Context, cancel context.CancelFunc, traceOutChan chan<- *host.Trace, attachedDsos map[deviceAndInode]link.Link, pid libpf.PID, prog *cebpf.Program) (*parcaGpuReader, error) {
 	fmt.Printf("[btv] handling %d\n", pid)
 
 	// Get the mappings of pid
@@ -167,11 +168,10 @@ func handleParcaGpu(ctx context.Context, cancel context.CancelFunc, traceOutChan
 		if err != nil {
 			return nil, err
 		}
-		
 
-		attachedDsos[dai] = uprobe		
+		attachedDsos[dai] = uprobe
 	}
-	
+
 	//
 	// in either case, see if we already have a ParcaGpuReader for this
 	// pid. If not, create one and store it in a map (pid |-> ParcaGpuReader). The ParcaGpuReader will
@@ -180,11 +180,57 @@ func handleParcaGpu(ctx context.Context, cancel context.CancelFunc, traceOutChan
 	//
 	// It will connect to /tmp/parcagpu.{pid}
 	// and listen for id/time correlations; we'll also notify it of new traces that require times.
-	//	
+	//
 	// When either matches, pass it on to the reporter.
 
 	rdr := startParcaGpuReader(pid, ctx, cancel, traceOutChan)
 	return rdr, nil
+}
+
+// GetParcaGPUPIDs parses /proc/net/unix and returns a slice of PIDs
+// for sockets named @parcagpu.<pid> in the abstract namespace.
+func getParcaGPUPIDs() ([]libpf.PID, error) {
+	file, err := os.Open("/proc/net/unix")
+	if err != nil {
+		return nil, fmt.Errorf("failed to open /proc/net/unix: %w", err)
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+
+	// Skip the header line
+	if !scanner.Scan() {
+		return nil, fmt.Errorf("file is empty or unreadable")
+	}
+
+	var pids []libpf.PID
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		fields := strings.Fields(line)
+
+		// The path (socket name) is typically the last field, if present
+		if len(fields) < 8 {
+			continue
+		}
+		path := fields[len(fields)-1]
+
+		// Match abstract namespace socket and check for @parcagpu.<pid>
+		before, after, found := strings.Cut(path, ".")
+		if found && before == "@parcagpu" {
+			pid, err := strconv.Atoi(after)
+			if err != nil {
+				continue
+			}
+			pids = append(pids, libpf.PID(pid))
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("error scanning file: %w", err)
+	}
+
+	return pids, nil
 }
 
 func StartParcaGpuHandler(traceInChan <-chan *host.Trace, traceOutChan chan<- *host.Trace, prog *cebpf.Program) error {
@@ -192,24 +238,32 @@ func StartParcaGpuHandler(traceInChan <-chan *host.Trace, traceOutChan chan<- *h
 
 	go func() {
 		for {
-			f, err := os.Open("/tmp")
+			// f, err := os.Open("/tmp")
+			// if err != nil {
+			// 	log.Errorf("Error opening /tmp: %w", err)
+			// }
+			// names, err := f.Readdirnames(0)
+			// if err != nil {
+			// 	log.Errorf("Error reading entries in /tmp: %w", err)
+			// 	continue
+			// }
+			// for _, name := range names {
+			// 	// fmt.Println(name)
+			// 	before, after, found := strings.Cut(name, ".")
+			// 	if found && before == "parcagpu" {
+			// 		pid, err := strconv.Atoi(after)
+			// 		if err != nil {
+			// 			continue
+			// 		}
+			// 		pidChan <- libpf.PID(pid)
+			// 	}
+			// }
+			pids, err := getParcaGPUPIDs()
 			if err != nil {
-				log.Errorf("Error opening /tmp: %w", err)
-			}
-			names, err := f.Readdirnames(0)
-			if err != nil {
-				log.Errorf("Error reading entries in /tmp: %w", err)
-				continue
-			}
-			for _, name := range names {
-				// fmt.Println(name)
-				before, after, found := strings.Cut(name, ".")
-				if found && before == "parcagpu" {
-					pid, err := strconv.Atoi(after)
-					if err != nil {
-						continue
-					}
-					pidChan <- libpf.PID(pid)
+				log.Errorf("Error getting parcagpu PIDs: %w", err)
+			} else {
+				for _, pid := range pids {
+					pidChan <- pid
 				}
 			}
 			time.Sleep(10 * time.Second)
