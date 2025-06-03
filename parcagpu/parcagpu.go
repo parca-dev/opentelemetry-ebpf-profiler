@@ -252,7 +252,6 @@ func StartParcaGpuHandler(traceInChan <-chan *host.Trace, traceOutChan chan<- *h
 	go func() {
 		readers := make(map[libpf.PID]*parcaGpuReader)
 		attachedDsos := make(map[deviceAndInode]link.Link)
-		ctx, cancel := context.WithCancel(context.TODO())
 		for {
 			select {
 			case pid := <-pidChan:
@@ -260,6 +259,7 @@ func StartParcaGpuHandler(traceInChan <-chan *host.Trace, traceOutChan chan<- *h
 				if _, ok := readers[pid]; ok {
 					continue
 				}
+				ctx, cancel := context.WithCancel(context.TODO())
 				rdr, err := handleParcaGpu(ctx, cancel, traceOutChan, attachedDsos, pid, prog)
 				if err != nil {
 					log.Warnf("Error handling parcagpu: %v", err)
