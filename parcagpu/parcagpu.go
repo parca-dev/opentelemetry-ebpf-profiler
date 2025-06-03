@@ -97,7 +97,7 @@ func startParcaGpuReader(pid libpf.PID, ctx context.Context, cancel context.Canc
 
 	go func() {
 		err := watchSocket(pid, timeChan, ctx)
-		log.Debugf("parcagpu socket for %d hung up: %v", pid, err)
+		log.Infof("parcagpu socket for %d hung up: %w", pid, err)
 		cancel()
 	}()
 
