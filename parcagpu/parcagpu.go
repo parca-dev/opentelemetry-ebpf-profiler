@@ -111,15 +111,15 @@ func startParcaGpuReader(pid libpf.PID, ctx context.Context, cancel context.Canc
 		for {
 			select {
 			case time := <-timeChan:
-				fmt.Printf("[btv] got time and id: %f, 0x%x\n", time.millis, time.id)
+				// fmt.Printf("[btv] got time and id: %f, 0x%x\n", time.millis, time.id)
 				if trace := rdr.addTime(time.id, time.millis); trace != nil {
-					fmt.Printf("[btv] trace complete: %d\n", trace.ParcaGPUTraceID)
+					// fmt.Printf("[btv] trace complete: %d\n", trace.ParcaGPUTraceID)
 					traceOutChan <- trace
 				}
 			case trace := <-traceChan:
-				fmt.Printf("[btv] got trace with id: 0x%x\n", trace.ParcaGPUTraceID)
+				// fmt.Printf("[btv] got trace with id: 0x%x\n", trace.ParcaGPUTraceID)
 				if trace := rdr.addTrace(trace); trace != nil {
-					fmt.Printf("[btv] trace complete: 0x%x\n", trace.ParcaGPUTraceID)
+					// fmt.Printf("[btv] trace complete: 0x%x\n", trace.ParcaGPUTraceID)
 					traceOutChan <- trace
 				}
 			}
@@ -135,7 +135,7 @@ type deviceAndInode struct {
 }
 
 func handleParcaGpu(ctx context.Context, cancel context.CancelFunc, traceOutChan chan<- *host.Trace, attachedDsos map[deviceAndInode]link.Link, pid libpf.PID, prog *cebpf.Program) (*parcaGpuReader, error) {
-	fmt.Printf("[btv] handling %d\n", pid)
+	// fmt.Printf("[btv] handling %d\n", pid)
 
 	// Get the mappings of pid
 	proc := process.New(pid)
@@ -255,7 +255,7 @@ func StartParcaGpuHandler(traceInChan <-chan *host.Trace, traceOutChan chan<- *h
 		for {
 			select {
 			case pid := <-pidChan:
-				fmt.Printf("[btv] parcagpu: got new pid: %d\n", pid)
+				// fmt.Printf("[btv] parcagpu: got new pid: %d\n", pid)
 				if _, ok := readers[pid]; ok {
 					continue
 				}

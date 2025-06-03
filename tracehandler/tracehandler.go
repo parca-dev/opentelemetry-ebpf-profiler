@@ -199,7 +199,7 @@ func Start(ctx context.Context, rep reporter.TraceReporter, traceProcessor Trace
 			case traceUpdate := <-traceChan:
 				if traceUpdate != nil {
 					if traceUpdate.Origin == support.TraceOriginCuda  && traceUpdate.OffTime == 0 {
-						fmt.Printf("[btv] got trace with id 0x%x for cuda, sending to parcagpu\n", traceUpdate.ParcaGPUTraceID)
+						// fmt.Printf("[btv] got trace with id 0x%x for cuda, sending to parcagpu\n", traceUpdate.ParcaGPUTraceID)
 						parcagpuTraceChan <- traceUpdate
 					} else {
 						handler.HandleTrace(traceUpdate)
