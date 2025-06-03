@@ -174,7 +174,7 @@ func Start(ctx context.Context, rep reporter.TraceReporter, traceProcessor Trace
 		return nil, fmt.Errorf("failed to create traceHandler: %v", err)
 	}
 
-	traceChan := make(chan *host.Trace)
+	traceChan := make(chan *host.Trace, 1024 /* xxx */)
 	parcagpuTraceChan := make (chan *host.Trace)
 
 	go func() {

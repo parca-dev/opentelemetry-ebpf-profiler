@@ -238,26 +238,6 @@ func StartParcaGpuHandler(traceInChan <-chan *host.Trace, traceOutChan chan<- *h
 
 	go func() {
 		for {
-			// f, err := os.Open("/tmp")
-			// if err != nil {
-			// 	log.Errorf("Error opening /tmp: %w", err)
-			// }
-			// names, err := f.Readdirnames(0)
-			// if err != nil {
-			// 	log.Errorf("Error reading entries in /tmp: %w", err)
-			// 	continue
-			// }
-			// for _, name := range names {
-			// 	// fmt.Println(name)
-			// 	before, after, found := strings.Cut(name, ".")
-			// 	if found && before == "parcagpu" {
-			// 		pid, err := strconv.Atoi(after)
-			// 		if err != nil {
-			// 			continue
-			// 		}
-			// 		pidChan <- libpf.PID(pid)
-			// 	}
-			// }
 			pids, err := getParcaGPUPIDs()
 			if err != nil {
 				log.Errorf("Error getting parcagpu PIDs: %w", err)
