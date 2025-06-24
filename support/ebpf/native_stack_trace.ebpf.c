@@ -606,6 +606,8 @@ static inline __attribute__((__always_inline__)) int unwind_native(struct pt_reg
       break;
     }
 
+    // TODO[btv] -- I'm pretty sure cuda_kernel_token is not used anywhere and all this is a remnant
+    // of when I was planning on doing cuda tracing a different way. Verify that and remove this code if so.
     if (trace->origin == TRACE_CUDA_LAUNCH && !trace->cuda_kernel_token) {
       CudaProcInfo *cuda = bpf_map_lookup_elem(&cuda_procs, &trace->pid);
       if (!cuda) {

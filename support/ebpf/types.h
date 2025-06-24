@@ -640,6 +640,8 @@ typedef struct Trace {
   u64 offtime;
 
   // The value passed to `cudaLaunchKernel`
+  // TODO[btv] -- I'm pretty sure cuda_kernel_token is not used anywhere and all this is a remnant
+  // of when I was planning on doing cuda tracing a different way. Verify that and remove this code if so.
   u64 cuda_kernel_token;
 
   // The frames of the stack trace.
