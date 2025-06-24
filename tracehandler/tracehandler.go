@@ -175,17 +175,24 @@ func Start(ctx context.Context, rep reporter.TraceReporter, traceProcessor Trace
 	}
 
 	traceChan := make(chan *host.Trace, 1024 /* xxx */)
-	parcagpuTraceChan := make (chan *host.Trace)
-
+	
 	go func() {
 		for {
 			traceChan <- (<- traceInChan)
 		}
 	}()
 
-	exitChan := make(chan libpf.Void)
+	var parcagpuTraceChan chan *host.Trace
 
-	err = parcagpu.StartParcaGpuHandler(parcagpuTraceChan, traceChan, parcagpuProg)
+	if parcagpuProg != nil {
+		parcagpuTraceChan = make (chan *host.Trace)
+		err = parcagpu.StartParcaGpuHandler(parcagpuTraceChan, traceChan, parcagpuProg)
+		if err != nil {
+			return nil, fmt.Errorf("Failed to start parca GPU handler: %w", err)
+		}
+	}
+
+	exitChan := make(chan libpf.Void)
 	
 	go func() {
 		defer close(exitChan)
@@ -198,9 +205,16 @@ func Start(ctx context.Context, rep reporter.TraceReporter, traceProcessor Trace
 			select {
 			case traceUpdate := <-traceChan:
 				if traceUpdate != nil {
-					if traceUpdate.Origin == support.TraceOriginCuda  && traceUpdate.OffTime == 0 {
+					if traceUpdate.Origin == support.TraceOriginCuda && traceUpdate.OffTime == 0 {
 						// fmt.Printf("[btv] got trace with id 0x%x for cuda, sending to parcagpu\n", traceUpdate.ParcaGPUTraceID)
-						parcagpuTraceChan <- traceUpdate
+						if parcagpuTraceChan != nil {
+							parcagpuTraceChan <- traceUpdate
+						} else {
+							// This should never happen -- the only way we don't make
+							// the channel is if we never loaded the program
+							// and aren't doing GPU profiling at all.
+							log.Error("unexpected CUDA trace despite CUDA profiling not being turned on")
+						}
 					} else {
 						handler.HandleTrace(traceUpdate)
 					}
