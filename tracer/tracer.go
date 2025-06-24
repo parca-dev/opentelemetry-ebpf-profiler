@@ -686,7 +686,7 @@ func loadKProbeUnwinders(coll *cebpf.CollectionSpec, ebpfProgs map[string]*cebpf
 			enable:           true,
 		},
 		progLoaderHelper{
-			name:             "btv",
+			name:             "cuda_launch_shim",
 			noTailCallTarget: true,
 			enable:           true,
 		},
