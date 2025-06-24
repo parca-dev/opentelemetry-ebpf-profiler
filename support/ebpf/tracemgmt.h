@@ -761,42 +761,6 @@ static inline __attribute__((__always_inline__)) int collect_trace(
   if (error || !has_usermode_regs) {
     goto exit;
   }
-  /* // XXX - extract all this into its own function. */
-  /* // It doesn't need to be its own unwinder type because we never tail call into it, it is only
-   * ever */
-  /* // at the leaf. */
-  /* if (origin == TRACE_CUDA) { */
-  /*   u64 cuda_token = record->state.first_arg; */
-  /*   PIDPage key    = {}; */
-  /*   key.prefixLen  = BIT_WIDTH_PID + BIT_WIDTH_PAGE; */
-  /*   key.pid        = __constant_cpu_to_be32((u32)pid); */
-  /*   key.page       = __constant_cpu_to_be64(cuda_token); */
-
-  /*   // Check if we have the data for this virtual address */
-  /*   PIDPageMappingInfo *val = bpf_map_lookup_elem(&pid_page_to_mapping_info, &key); */
-  /*   if (!val) { */
-  /*     DEBUG_PRINT("Failure to look up interval memory mapping for cuda token 0x%llx",
-   * cuda_token); */
-  /*     // XXX error */
-  /*     /\* state->error_metric = metricID_UnwindNativeErrWrongTextSection; *\/ */
-  /*     // XXX - should we just continue here? */
-  /*     return ERR_NATIVE_NO_PID_PAGE_MAPPING; */
-  /*   } */
-
-  /*   u64 text_section_bias; */
-  /*   decode_bias_and_unwind_program(val->bias_and_unwind_program, &text_section_bias, NULL); */
-  /*   /\* state->text_section_id     = val->file_id; *\/ */
-  /*   /\* state->text_section_offset = pc - state->text_section_bias; *\/ */
-
-  /*   // push_cuda function? */
-  /*   error = _push_with_return_address( */
-  /*     trace, val->file_id, cuda_token - text_section_bias, FRAME_MARKER_CUDA_LAUNCH, false); */
-  /*   if (error) { */
-  /*     // bump metric? */
-  /*     goto exit; */
-  /*   } */
-  /* } */
-  /* // end XXX */
 
   if (!pid_information_exists(ctx, pid)) {
     if (report_pid(ctx, pid, RATELIMIT_ACTION_DEFAULT)) {
