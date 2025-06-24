@@ -140,13 +140,6 @@ bpf_map_def SEC("maps") cl_procs = {
   .max_entries = 128,
 };
 
-bpf_map_def SEC("maps") cuda_procs = {
-  .type        = BPF_MAP_TYPE_HASH,
-  .key_size    = sizeof(pid_t),
-  .value_size  = sizeof(CudaProcInfo),
-  .max_entries = 128,
-};
-
 static inline __attribute__((__always_inline__)) void *
 get_m_ptr(struct GoCustomLabelsOffsets *offs, UnwindState *state)
 {

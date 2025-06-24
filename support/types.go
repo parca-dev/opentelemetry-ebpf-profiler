@@ -20,7 +20,6 @@ const (
 	FrameMarkerV8         = 0x8
 	FrameMarkerDotnet     = 0xa
 	FrameMarkerLuaJIT     = 0xb
-	FrameMarkerCudaLaunch = 0xc
 	FrameMarkerMax        = 0xc
 	FrameMarkerAbort      = 0xff
 )

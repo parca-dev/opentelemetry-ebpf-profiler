@@ -18,7 +18,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/apmint"
-	"go.opentelemetry.io/ebpf-profiler/interpreter/cuda"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/customlabels"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/dotnet"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/golang"
@@ -105,7 +104,6 @@ func NewExecutableInfoManager(
 	ebpf pmebpf.EbpfHandler,
 	includeTracers types.IncludedTracers,
 	collectCustomLabels bool,
-	instrumentCudaLaunch bool,
 ) (*ExecutableInfoManager, error) {
 	// Initialize interpreter loaders.
 	interpreterLoaders := make([]interpreter.Loader, 0)
@@ -137,10 +135,6 @@ func NewExecutableInfoManager(
 	interpreterLoaders = append(interpreterLoaders, apmint.Loader)
 	if collectCustomLabels {
 		interpreterLoaders = append(interpreterLoaders, golang.Loader, customlabels.Loader)
-	}
-
-	if instrumentCudaLaunch {
-		interpreterLoaders = append(interpreterLoaders, cuda.Loader)
 	}
 
 	deferredFileIDs, err := lru.NewSynced[host.FileID, libpf.Void](deferredFileIDSize,

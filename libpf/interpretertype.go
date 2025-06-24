@@ -48,10 +48,6 @@ const (
 
 	// CustomLabels identifies the pseudo-interpreter for native custom labels support.
 	CustomLabels InterpreterType = 0x102
-
-	// Cuda identifies the pseudo-interpreter for cuda launch support.
-	// XXX think about whether this should be the same as FrameMarkerCudaLaunch
-	Cuda InterpreterType = 0x103
 )
 
 // Frame converts the interpreter type into the corresponding frame type.

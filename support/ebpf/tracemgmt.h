@@ -250,7 +250,6 @@ static inline PerCPURecord *get_pristine_per_cpu_record()
   trace->apm_trace_id.as_int.lo    = 0;
   trace->apm_transaction_id.as_int = 0;
   trace->parca_gpu_trace_id        = 0;
-  trace->cuda_kernel_token         = 0;
 
   u64 *labels_space = (u64 *)&trace->custom_labels;
 #pragma unroll

@@ -639,11 +639,6 @@ typedef struct Trace {
   // offtime stores the nanoseconds that the trace was off-cpu for.
   u64 offtime;
 
-  // The value passed to `cudaLaunchKernel`
-  // TODO[btv] -- I'm pretty sure cuda_kernel_token is not used anywhere and all this is a remnant
-  // of when I was planning on doing cuda tracing a different way. Verify that and remove this code if so.
-  u64 cuda_kernel_token;
-
   // The frames of the stack trace.
   Frame frames[MAX_FRAME_UNWINDS];
 
@@ -1080,11 +1075,6 @@ typedef struct ApmIntProcInfo {
 typedef struct NativeCustomLabelsProcInfo {
   u64 tls_offset;
 } NativeCustomLabelsProcInfo;
-
-typedef struct CudaProcInfo {
-  u64 launch_sym_addr;
-  u64 launch_sym_size;
-} CudaProcInfo;
 
 typedef struct GoCustomLabelsOffsets {
   u32 m_offset;

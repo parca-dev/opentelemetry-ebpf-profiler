@@ -606,27 +606,6 @@ static inline __attribute__((__always_inline__)) int unwind_native(struct pt_reg
       break;
     }
 
-    // TODO[btv] -- I'm pretty sure cuda_kernel_token is not used anywhere and all this is a remnant
-    // of when I was planning on doing cuda tracing a different way. Verify that and remove this code if so.
-    if (trace->origin == TRACE_CUDA_LAUNCH && !trace->cuda_kernel_token) {
-      CudaProcInfo *cuda = bpf_map_lookup_elem(&cuda_procs, &trace->pid);
-      if (!cuda) {
-        DEBUG_PRINT("not a cuda application");
-      } else {
-        DEBUG_PRINT(
-          "btv cuda: [0x%08llx, 0x%08llx), we are at 0x%08llx",
-          cuda->launch_sym_addr,
-          cuda->launch_sym_addr + cuda->launch_sym_size,
-          record->state.pc);
-        if (
-          record->state.pc >= cuda->launch_sym_addr &&
-          record->state.pc - cuda->launch_sym_addr < cuda->launch_sym_size) {
-          DEBUG_PRINT("btv cuda: yay! We found it: 0x%08llx", record->state.first_arg);
-          trace->cuda_kernel_token = record->state.first_arg;
-        }
-      }
-    }
-
     // Unwind the native frame using stack deltas. Stop if no next frame.
     bool stop;
     error = unwind_one_frame(trace->pid, frame_idx, &record->state, &stop);
@@ -674,28 +653,14 @@ int native_tracer_entry(struct bpf_perf_event_data *ctx)
 }
 MULTI_USE_FUNC(unwind_native)
 
-// sched_times keeps track of sched_switch call times.
-bpf_map_def SEC("maps") cuda_launch_times = {
-  .type        = BPF_MAP_TYPE_LRU_PERCPU_HASH,
-  .key_size    = sizeof(u64), // pid_tgid
-  .value_size  = sizeof(u64), // time in ns
-  .max_entries = 256,         // value is adjusted at load time in loadAllMaps.
-};
-
-SEC("uprobe/asdf")
-int btv(struct pt_regs *ctx)
+SEC("uprobe/cuda_launch_shim")
+int cuda_launch_shim(struct pt_regs *ctx)
 {
   u64 pid_tgid = bpf_get_current_pid_tgid();
   u32 pid      = pid_tgid >> 32;
   u32 tid      = pid_tgid & 0xFFFFFFFF;
 
   if (pid == 0 || tid == 0) {
-    return 0;
-  }
-  u64 ts = bpf_ktime_get_ns();
-
-  if (bpf_map_update_elem(&cuda_launch_times, &pid_tgid, &ts, BPF_ANY) < 0) {
-    DEBUG_PRINT("Failed to record cuda_launch_times event entry");
     return 0;
   }
 
