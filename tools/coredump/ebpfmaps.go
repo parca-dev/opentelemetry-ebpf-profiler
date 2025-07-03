@@ -8,6 +8,7 @@ import (
 	"math/bits"
 	"unsafe"
 
+	"github.com/cilium/ebpf"
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
@@ -264,4 +265,9 @@ func (emc *ebpfMapsCoredump) SupportsGenericBatchOperations() bool {
 
 func (emc *ebpfMapsCoredump) SupportsLPMTrieBatchOperations() bool {
 	return false
+}
+
+func (emc *ebpfMapsCoredump) GetProgram(_ string) *ebpf.Program {
+	// TODO: implement GetProgram for coredump
+	return nil
 }

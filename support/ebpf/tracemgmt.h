@@ -219,6 +219,7 @@ static inline PerCPURecord *get_pristine_per_cpu_record()
   record->state.lr_invalid = false;
   record->state.r28        = 0;
 #endif
+  record->state.first_arg                  = 0;
   record->state.return_address             = false;
   record->state.error_metric               = -1;
   record->state.unwind_error               = ERR_OK;
@@ -248,6 +249,7 @@ static inline PerCPURecord *get_pristine_per_cpu_record()
   trace->apm_trace_id.as_int.hi    = 0;
   trace->apm_trace_id.as_int.lo    = 0;
   trace->apm_transaction_id.as_int = 0;
+  trace->parca_gpu_trace_id        = 0;
 
   u64 *labels_space = (u64 *)&trace->custom_labels;
 #pragma unroll
@@ -431,6 +433,7 @@ static ErrorCode resolve_unwind_mapping(PerCPURecord *record, int *unwinder)
   decode_bias_and_unwind_program(val->bias_and_unwind_program, &state->text_section_bias, unwinder);
   state->text_section_id     = val->file_id;
   state->text_section_offset = pc - state->text_section_bias;
+
   DEBUG_PRINT(
     "Text section id for PC %lx is %llx (unwinder %d)",
     (unsigned long)pc,
@@ -575,15 +578,16 @@ copy_state_regs(UnwindState *state, struct pt_regs *regs, bool interrupted_kerne
   if (regs->cs == __USER32_CS) {
     return ERR_NATIVE_X64_32BIT_COMPAT_MODE;
   }
-  state->pc  = regs->ip;
-  state->sp  = regs->sp;
-  state->fp  = regs->bp;
-  state->rax = regs->ax;
-  state->r9  = regs->r9;
-  state->r11 = regs->r11;
-  state->r13 = regs->r13;
-  state->r14 = regs->r14;
-  state->r15 = regs->r15;
+  state->pc        = regs->ip;
+  state->sp        = regs->sp;
+  state->fp        = regs->bp;
+  state->rax       = regs->ax;
+  state->r9        = regs->r9;
+  state->r11       = regs->r11;
+  state->r13       = regs->r13;
+  state->r14       = regs->r14;
+  state->r15       = regs->r15;
+  state->first_arg = regs->di;
 
   // Treat syscalls as return addresses, but not IRQ handling, page faults, etc..
   // https://github.com/torvalds/linux/blob/2ef5971ff3/arch/x86/include/asm/syscall.h#L31-L39
@@ -595,13 +599,14 @@ copy_state_regs(UnwindState *state, struct pt_regs *regs, bool interrupted_kerne
   if (regs->pstate & PSR_MODE32_BIT) {
     return ERR_NATIVE_AARCH64_32BIT_COMPAT_MODE;
   }
-  state->pc  = normalize_pac_ptr(regs->pc);
-  state->sp  = regs->sp;
-  state->fp  = regs->regs[29];
-  state->lr  = normalize_pac_ptr(regs->regs[30]);
-  state->r7  = regs->regs[7];
-  state->r22 = regs->regs[22];
-  state->r28 = regs->regs[28];
+  state->pc        = normalize_pac_ptr(regs->pc);
+  state->sp        = regs->sp;
+  state->fp        = regs->regs[29];
+  state->lr        = normalize_pac_ptr(regs->regs[30]);
+  state->r7        = regs->regs[7];
+  state->r22       = regs->regs[22];
+  state->r28       = regs->regs[28];
+  state->first_arg = regs->regs[0];
 
   // Treat syscalls as return addresses, but not IRQ handling, page faults, etc..
   // https://github.com/torvalds/linux/blob/2ef5971ff3/arch/arm64/include/asm/ptrace.h#L118
@@ -662,7 +667,7 @@ static inline bool ptregs_is_usermode(struct pt_regs *regs)
 // if something fails. has_usermode_regs is set to true if a user-mode register
 // context was found: not every thread that we interrupt will actually have
 // a user-mode context (e.g. kernel worker threads won't).
-static inline ErrorCode
+static inline __attribute__((__always_inline__)) ErrorCode
 get_usermode_regs(struct pt_regs *ctx, UnwindState *state, bool *has_usermode_regs)
 {
   ErrorCode error;
@@ -716,8 +721,14 @@ get_usermode_regs(struct pt_regs *ctx, UnwindState *state, bool *has_usermode_re
 
 #endif // TESTING_COREDUMP
 
-static inline int collect_trace(
-  struct pt_regs *ctx, TraceOrigin origin, u32 pid, u32 tid, u64 trace_timestamp, u64 off_cpu_time)
+static inline __attribute__((__always_inline__)) int collect_trace(
+  struct pt_regs *ctx,
+  TraceOrigin origin,
+  u32 pid,
+  u32 tid,
+  u64 trace_timestamp,
+  u64 off_cpu_time,
+  u32 cuda_id)
 {
   // The trace is reused on each call to this function so we have to reset the
   // variables used to maintain state.
@@ -727,12 +738,13 @@ static inline int collect_trace(
     return -1;
   }
 
-  Trace *trace   = &record->trace;
-  trace->origin  = origin;
-  trace->pid     = pid;
-  trace->tid     = tid;
-  trace->ktime   = trace_timestamp;
-  trace->offtime = off_cpu_time;
+  Trace *trace              = &record->trace;
+  trace->origin             = origin;
+  trace->pid                = pid;
+  trace->tid                = tid;
+  trace->ktime              = trace_timestamp;
+  trace->offtime            = off_cpu_time;
+  trace->parca_gpu_trace_id = cuda_id;
   if (bpf_get_current_comm(&(trace->comm), sizeof(trace->comm)) < 0) {
     increment_metric(metricID_ErrBPFCurrentComm);
   }

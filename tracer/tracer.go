@@ -151,6 +151,8 @@ type Config struct {
 	// CollectCustomLabels determines whether to collect custom labels in
 	// languages that support them.
 	CollectCustomLabels bool
+	// InstrumentCudaLaunch determines whether to instrument calls to `cudaLaunchKernel`.
+	InstrumentCudaLaunch bool
 	// BPFVerifierLogLevel is the log level of the eBPF verifier output.
 	BPFVerifierLogLevel uint32
 	// ProbabilisticInterval is the time interval for which probabilistic profiling will be enabled.
@@ -293,7 +295,7 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 		return nil, fmt.Errorf("failed to load eBPF code: %v", err)
 	}
 
-	ebpfHandler, err := pmebpf.LoadMaps(ctx, ebpfMaps)
+	ebpfHandler, err := pmebpf.LoadMaps(ctx, ebpfMaps, ebpfProgs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load eBPF maps: %v", err)
 	}
@@ -506,8 +508,8 @@ func initializeMapsAndPrograms(kernelSymbols *libpf.SymbolMap, cfg *Config) (
 		return nil, nil, fmt.Errorf("failed to load perf eBPF programs: %v", err)
 	}
 
-	if cfg.OffCPUThreshold > 0 {
-		if err = loadKProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], tailCallProgs,
+	if cfg.OffCPUThreshold > 0 || cfg.InstrumentCudaLaunch {
+		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], tailCallProgs,
 			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD()); err != nil {
 			return nil, nil, fmt.Errorf("failed to load kprobe eBPF programs: %v", err)
 		}
@@ -568,7 +570,7 @@ func loadAllMaps(coll *cebpf.CollectionSpec, cfg *Config,
 	// calculate a size based on an assumed upper bound of scheduler events per
 	// second (1000hz) multiplied by an average time a task remains off CPU (3s),
 	// scaled by the probability of capturing a trace.
-	adaption["sched_times"] = (4096 * cfg.OffCPUThreshold) / support.OffCPUThresholdMax
+	adaption["sched_times"] = 4 // (4096 * cfg.OffCPUThreshold) / support.OffCPUThresholdMax
 
 	for i := support.StackDeltaBucketSmallest; i <= support.StackDeltaBucketLargest; i++ {
 		mapName := fmt.Sprintf("exe_id_to_%d_stack_deltas", i)
@@ -576,9 +578,16 @@ func loadAllMaps(coll *cebpf.CollectionSpec, cfg *Config,
 	}
 
 	for mapName, mapSpec := range coll.Maps {
-		if mapName == "sched_times" && cfg.OffCPUThreshold == 0 {
+		if mapName == "sched_times" && false /* cfg.OffCPUThreshold == 0 */ {
 			// Off CPU Profiling is disabled. So do not load this map.
 			continue
+		}
+		if mapName == "cuda_timing_events" {
+			if !cfg.InstrumentCudaLaunch {
+				// Cuda launch instrumentation is disabled. So do not load this map.
+				continue
+			}
+			log.Debug("Loading cuda_timing_events map")
 		}
 		if newSize, ok := adaption[mapName]; ok {
 			log.Debugf("Size of eBPF map %s: %v", mapName, newSize)
@@ -660,10 +669,10 @@ func progArrayReferences(perfTailCallMapFD int, insns asm.Instructions) []int {
 	return insNos
 }
 
-// loadKProbeUnwinders reuses large parts of loadPerfUnwinders. By default all eBPF programs
-// are written as perf event eBPF programs. loadKProbeUnwinders dynamically rewrites the
-// specification of these programs to kprobe eBPF programs and adjusts tail call maps.
-func loadKProbeUnwinders(coll *cebpf.CollectionSpec, ebpfProgs map[string]*cebpf.Program,
+// loadProbeUnwinders reuses large parts of loadPerfUnwinders. By default all eBPF programs
+// are written as perf event eBPF programs. loadProbeUnwinders dynamically rewrites the
+// specification of these programs to kprobe/uprobe eBPF programs and adjusts tail call maps.
+func loadProbeUnwinders(coll *cebpf.CollectionSpec, ebpfProgs map[string]*cebpf.Program,
 	tailcallMap *cebpf.Map, tailCallProgs []progLoaderHelper,
 	bpfVerifierLogLevel uint32, perfTailCallMapFD int) error {
 	programOptions := cebpf.ProgramOptions{
@@ -680,6 +689,16 @@ func loadKProbeUnwinders(coll *cebpf.CollectionSpec, ebpfProgs map[string]*cebpf
 		},
 		progLoaderHelper{
 			name:             "tracepoint__sched_switch",
+			noTailCallTarget: true,
+			enable:           true,
+		},
+		progLoaderHelper{
+			name:             "cuda_launch_shim",
+			noTailCallTarget: true,
+			enable:           true,
+		},
+		progLoaderHelper{
+			name:             "cuda_timing_probe",
 			noTailCallTarget: true,
 			enable:           true,
 		},
@@ -734,6 +753,8 @@ func loadProgram(ebpfProgs map[string]*cebpf.Program, tailcallMap *cebpf.Map,
 		// These errors tend to have hundreds of lines (or more),
 		// so we print each line individually.
 		if ve, ok := err.(*cebpf.VerifierError); ok {
+			log.Errorf("%v", ve.Cause.Error())
+			// ve.Error()
 			for _, line := range ve.Log {
 				log.Error(line)
 			}
@@ -988,7 +1009,8 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) *host.Trace {
 
 	// NOTE: can't do exact check here: kernel adds a few padding bytes to messages.
 	if len(raw) < frameListOffs+int(ptr.stack_len)*frameSize {
-		panic("unexpected record size")
+		panic(fmt.Sprintf("unexpected record size: raw is %d, should not be less than %d",
+			len(raw), frameListOffs+int(ptr.stack_len)*frameSize))
 	}
 
 	pid := libpf.PID(ptr.pid)
@@ -1004,11 +1026,14 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) *host.Trace {
 		Origin:           libpf.Origin(ptr.origin),
 		OffTime:          int64(ptr.offtime),
 		KTime:            times.KTime(ptr.ktime),
+		ParcaGPUTraceID:  uint32(ptr.parca_gpu_trace_id),
 		CPU:              cpu,
 		EnvVars:          procMeta.EnvVariables,
 	}
 
-	if trace.Origin != support.TraceOriginSampling && trace.Origin != support.TraceOriginOffCPU {
+	if trace.Origin != support.TraceOriginSampling &&
+		trace.Origin != support.TraceOriginOffCPU &&
+		trace.Origin != support.TraceOriginCuda {
 		log.Warnf("Skip handling trace from unexpected %d origin", trace.Origin)
 		return nil
 	}
@@ -1215,6 +1240,10 @@ func (t *Tracer) GetEbpfMaps() map[string]*cebpf.Map {
 	return t.ebpfMaps
 }
 
+func (t *Tracer) GetEbpfProgs() map[string]*cebpf.Program {
+	return t.ebpfProgs
+}
+
 // AttachTracer attaches the main tracer entry point to the perf interrupt events. The tracer
 // entry point is always the native tracer. The native tracer will determine when to invoke the
 // interpreter tracers based on address range information.
@@ -1247,6 +1276,7 @@ func (t *Tracer) AttachTracer() error {
 		}
 		*events = append(*events, perfEvent)
 	}
+
 	return nil
 }
 

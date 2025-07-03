@@ -15,6 +15,7 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/cilium/ebpf"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
@@ -62,6 +63,10 @@ func (m *ebpfMapsMockup) UpdateProcData(libpf.InterpreterType, libpf.PID,
 }
 
 func (m *ebpfMapsMockup) DeleteProcData(libpf.InterpreterType, libpf.PID) error {
+	return nil
+}
+
+func (m *ebpfMapsMockup) GetProgram(_ string) *ebpf.Program {
 	return nil
 }
 

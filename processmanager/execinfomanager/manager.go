@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter/customlabels"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/dotnet"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/golang"
+	"go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/hotspot"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/luajit"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/nodev8"
@@ -107,6 +108,10 @@ func NewExecutableInfoManager(
 ) (*ExecutableInfoManager, error) {
 	// Initialize interpreter loaders.
 	interpreterLoaders := make([]interpreter.Loader, 0)
+	// This isn't a real interpreter, because gpu.Loader always returns nil but
+	// it does setup uprobes for GPU libraries and we want it to work in concert
+	// with the other interpreters so put it first.
+	interpreterLoaders = append(interpreterLoaders, gpu.Loader)
 	if includeTracers.Has(types.PerlTracer) {
 		interpreterLoaders = append(interpreterLoaders, perl.Loader)
 	}
@@ -131,7 +136,6 @@ func NewExecutableInfoManager(
 	if includeTracers.Has(types.LuaJITTracer) {
 		interpreterLoaders = append(interpreterLoaders, luajit.Loader)
 	}
-
 	interpreterLoaders = append(interpreterLoaders, apmint.Loader)
 	if collectCustomLabels {
 		interpreterLoaders = append(interpreterLoaders, golang.Loader, customlabels.Loader)
@@ -365,7 +369,7 @@ func (state *executableInfoManagerState) detectAndLoadInterpData(
 			continue
 		}
 
-		log.Debugf("Interpreter data %v for %v (%#016x)",
+		log.Debugf("Interpreter data %T %v for %v (%#016x)", data,
 			data, loaderInfo.FileName(), loaderInfo.FileID())
 		return data
 	}

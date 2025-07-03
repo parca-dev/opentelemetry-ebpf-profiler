@@ -4,8 +4,11 @@
 package util // import "go.opentelemetry.io/ebpf-profiler/util"
 
 import (
+	"errors"
 	"math/bits"
+	"os"
 	"sync/atomic"
+	"syscall"
 	"unicode"
 	"unicode/utf8"
 
@@ -78,4 +81,23 @@ type OnDiskFileIdentifier struct {
 
 func (odfi OnDiskFileIdentifier) Hash32() uint32 {
 	return uint32(hash.Uint64(odfi.InodeNum) + odfi.DeviceID)
+}
+
+// GetOnDiskFileIdentifier returns an OnDiskFileIdentifier for a given file path.
+func GetOnDiskFileIdentifier(path string) (OnDiskFileIdentifier, error) {
+	fileInfo, err := os.Stat(path)
+	if err != nil {
+		return OnDiskFileIdentifier{}, err
+	}
+
+	// Type assert to get the underlying syscall.Stat_t
+	stat, ok := fileInfo.Sys().(*syscall.Stat_t)
+	if !ok {
+		return OnDiskFileIdentifier{}, errors.New("not a syscall.Stat_t")
+	}
+
+	return OnDiskFileIdentifier{
+		DeviceID: stat.Dev,
+		InodeNum: stat.Ino,
+	}, nil
 }
