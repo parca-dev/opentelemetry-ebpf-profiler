@@ -566,6 +566,10 @@ func loadAllMaps(coll *cebpf.CollectionSpec, cfg *Config,
 	adaption["stack_delta_page_to_info"] =
 		1 << uint32(stackDeltaPageToInfoSize+cfg.MapScaleFactor)
 
+	if cfg.InstrumentCudaLaunch {
+		adaption["cuda_timing_events"] = 1024
+	}
+
 	// To not lose too many scheduling events but also not oversize sched_times,
 	// calculate a size based on an assumed upper bound of scheduler events per
 	// second (1000hz) multiplied by an average time a task remains off CPU (3s),
@@ -581,13 +585,6 @@ func loadAllMaps(coll *cebpf.CollectionSpec, cfg *Config,
 		if mapName == "sched_times" && cfg.OffCPUThreshold == 0 {
 			// Off CPU Profiling is disabled. So do not load this map.
 			continue
-		}
-		if mapName == "cuda_timing_events" {
-			if !cfg.InstrumentCudaLaunch {
-				// Cuda launch instrumentation is disabled. So do not load this map.
-				continue
-			}
-			log.Debug("Loading cuda_timing_events map")
 		}
 		if newSize, ok := adaption[mapName]; ok {
 			log.Debugf("Size of eBPF map %s: %v", mapName, newSize)
