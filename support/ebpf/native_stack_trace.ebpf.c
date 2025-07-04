@@ -674,7 +674,7 @@ int cuda_launch_shim(struct pt_regs *ctx)
 #endif
     ;
 
-  DEBUG_PRINT("btv: attached, func is 0x%llx", arg);
+  DEBUG_PRINT("cuda_launch_shim: attached, func is 0x%llx", arg);
   return native_tracer_entry_inner(ctx, TRACE_CUDA_LAUNCH, arg);
 }
 
@@ -717,7 +717,7 @@ int cuda_timing_probe(struct pt_regs *ctx)
   #error "Unsupported architecture"
 #endif
   ;
-  DEBUG_PRINT("launchKernelTiming: kernel_id=%u, duration_bits=0x%x\n", kernel_id, duration_bits);
+  DEBUG_PRINT("cuda_timing_probe: kernel_id=%u, duration_bits=0x%x\n", kernel_id, duration_bits);
 
   // Send the actual timing data from the function parameters
   struct kernel_timing timing = {

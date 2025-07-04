@@ -570,7 +570,7 @@ func loadAllMaps(coll *cebpf.CollectionSpec, cfg *Config,
 	// calculate a size based on an assumed upper bound of scheduler events per
 	// second (1000hz) multiplied by an average time a task remains off CPU (3s),
 	// scaled by the probability of capturing a trace.
-	adaption["sched_times"] = 4 // (4096 * cfg.OffCPUThreshold) / support.OffCPUThresholdMax
+	adaption["sched_times"] = (4096 * cfg.OffCPUThreshold) / support.OffCPUThresholdMax
 
 	for i := support.StackDeltaBucketSmallest; i <= support.StackDeltaBucketLargest; i++ {
 		mapName := fmt.Sprintf("exe_id_to_%d_stack_deltas", i)
@@ -578,7 +578,7 @@ func loadAllMaps(coll *cebpf.CollectionSpec, cfg *Config,
 	}
 
 	for mapName, mapSpec := range coll.Maps {
-		if mapName == "sched_times" && false /* cfg.OffCPUThreshold == 0 */ {
+		if mapName == "sched_times" && cfg.OffCPUThreshold == 0 {
 			// Off CPU Profiling is disabled. So do not load this map.
 			continue
 		}
@@ -753,8 +753,6 @@ func loadProgram(ebpfProgs map[string]*cebpf.Program, tailcallMap *cebpf.Map,
 		// These errors tend to have hundreds of lines (or more),
 		// so we print each line individually.
 		if ve, ok := err.(*cebpf.VerifierError); ok {
-			log.Errorf("%v", ve.Cause.Error())
-			// ve.Error()
 			for _, line := range ve.Log {
 				log.Error(line)
 			}
@@ -1276,7 +1274,6 @@ func (t *Tracer) AttachTracer() error {
 		}
 		*events = append(*events, perfEvent)
 	}
-
 	return nil
 }
 

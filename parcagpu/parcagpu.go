@@ -55,6 +55,8 @@ func (p *gpuTraceFixer) clear() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if len(p.timesAwaitingTraces) > 100 || len(p.tracesAwaitingTimes) > 100 {
+		log.Warnf("clearing gpu trace fixer maps, too many entries: %d traces, %d times",
+			len(p.tracesAwaitingTimes), len(p.timesAwaitingTraces))
 		p.timesAwaitingTraces = map[uint32]float32{}
 		p.tracesAwaitingTimes = map[uint32]*host.Trace{}
 	}
@@ -89,7 +91,6 @@ func Start(ctx context.Context, traceInCh <-chan *host.Trace,
 			select {
 			case <-timer.C:
 				// We don't want to leak memory, so we purge the readers map every 60 seconds.
-				// TODO: we should hook up to pid events from the
 				fixer.clear()
 			case <-ctx.Done():
 				return
