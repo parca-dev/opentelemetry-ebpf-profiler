@@ -574,7 +574,9 @@ func loadAllMaps(coll *cebpf.CollectionSpec, cfg *Config,
 	// calculate a size based on an assumed upper bound of scheduler events per
 	// second (1000hz) multiplied by an average time a task remains off CPU (3s),
 	// scaled by the probability of capturing a trace.
-	adaption["sched_times"] = (4096 * cfg.OffCPUThreshold) / support.OffCPUThresholdMax
+	if cfg.OffCPUThreshold != 0 {
+		adaption["sched_times"] = (4096 * cfg.OffCPUThreshold) / support.OffCPUThresholdMax
+	}
 
 	for i := support.StackDeltaBucketSmallest; i <= support.StackDeltaBucketLargest; i++ {
 		mapName := fmt.Sprintf("exe_id_to_%d_stack_deltas", i)
@@ -582,10 +584,6 @@ func loadAllMaps(coll *cebpf.CollectionSpec, cfg *Config,
 	}
 
 	for mapName, mapSpec := range coll.Maps {
-		if mapName == "sched_times" && cfg.OffCPUThreshold == 0 {
-			// Off CPU Profiling is disabled. So do not load this map.
-			continue
-		}
 		if newSize, ok := adaption[mapName]; ok {
 			log.Debugf("Size of eBPF map %s: %v", mapName, newSize)
 			mapSpec.MaxEntries = newSize

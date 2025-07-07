@@ -12,7 +12,6 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"go.opentelemetry.io/ebpf-profiler/host"
-	"go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 	"go.opentelemetry.io/ebpf-profiler/support"
 )
 
@@ -81,10 +80,6 @@ func Start(ctx context.Context, traceInCh <-chan *host.Trace,
 
 	// Read traces coming from ebpf and send normal traces through
 	go func() {
-		// Hack, gpu can't be a regular interpreter since there can be only one and we want to allow
-		// python etc to use parcagpu.  So it needs some help in the shutdown department.
-		defer gpu.Close()
-
 		timer := time.NewTicker(60 * time.Second)
 
 		for {
@@ -96,9 +91,9 @@ func Start(ctx context.Context, traceInCh <-chan *host.Trace,
 				return
 			case t := <-traceInCh:
 				if t != nil && t.Origin == support.TraceOriginCuda {
-					log.Debugf("got trace with id 0x%x for cuda", t.ParcaGPUTraceID)
+					log.Debugf("[cuda]: got trace with id 0x%x for cuda", t.ParcaGPUTraceID)
 					if tr := fixer.addTrace(t); tr != nil {
-						log.Debugf("trace complete: 0x%x", tr.ParcaGPUTraceID)
+						log.Debugf("[cuda]: trace complete: 0x%x", tr.ParcaGPUTraceID)
 						traceOutChan <- tr
 					}
 				} else {
@@ -134,9 +129,9 @@ func Start(ctx context.Context, traceInCh <-chan *host.Trace,
 					continue
 				}
 				event := (*kernelTimingEvent)(unsafe.Pointer(&data.RawSample[0]))
-				log.Debugf("got timing info with id 0x%x for cuda", event.id)
+				log.Debugf("[cuda]: got timing info with id 0x%x for cuda", event.id)
 				if tr := fixer.addTime(event.id, event.millis); tr != nil {
-					log.Debugf("trace complete: 0x%x", tr.ParcaGPUTraceID)
+					log.Debugf("[cuda]: trace complete: 0x%x", tr.ParcaGPUTraceID)
 					traceOutChan <- tr
 				}
 			}
