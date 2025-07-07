@@ -664,15 +664,7 @@ int cuda_launch_shim(struct pt_regs *ctx)
     return 0;
   }
 
-  u64 arg = ctx->
-#if defined(__x86_64)
-            di
-#elif defined(__aarch64__)
-            regs[0]
-#else
-  #error "Unsupported architecture"
-#endif
-    ;
+  u64 arg = PT_REGS_PARM1(ctx);
 
   DEBUG_PRINT("cuda_launch_shim: attached, func is 0x%llx", arg);
   return native_tracer_entry_inner(ctx, TRACE_CUDA_LAUNCH, arg);
@@ -699,24 +691,8 @@ int cuda_timing_probe(struct pt_regs *ctx)
   // We're now attaching to launchKernelTiming(id: u32, duration_bits: u32)
   // Parameters: RDI = id (u32), RSI = duration_bits (u32)
 
-  u32 kernel_id = ctx->
-#if defined(__x86_64)
-                  di; // RDI - first parameter (id)
-#elif defined(__aarch64__)
-                  regs[0]; // RDI - first parameter (id)
-#else
-  #error "Unsupported architecture"
-#endif
-  ;
-  u32 duration_bits = ctx->
-#if defined(__x86_64)
-                      si; // RSI - second parameter (duration_bits)
-#elif defined(__aarch64__)
-                      regs[1]; // RSI - second parameter (duration_bits)
-#else
-  #error "Unsupported architecture"
-#endif
-  ;
+  u32 kernel_id = PT_REGS_PARM1(ctx);
+  u32 duration_bits = PT_REGS_PARM2(ctx);
   DEBUG_PRINT("cuda_timing_probe: kernel_id=%u, duration_bits=0x%x\n", kernel_id, duration_bits);
 
   // Send the actual timing data from the function parameters
