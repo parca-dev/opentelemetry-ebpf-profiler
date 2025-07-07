@@ -2,7 +2,6 @@
 #include "tracemgmt.h"
 #include "types.h"
 
-
 SEC("uprobe/cuda_launch_shim")
 int cuda_launch_shim(struct pt_regs *ctx)
 {
