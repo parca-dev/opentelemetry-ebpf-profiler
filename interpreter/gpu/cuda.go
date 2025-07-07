@@ -21,7 +21,7 @@ type instance struct {
 	interpreter.InstanceStubs
 }
 
-func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpreter.Data, error) {
+func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpreter.Data, error) {
 	ef, err := info.GetELF()
 	if err != nil {
 		return nil, err
@@ -54,7 +54,7 @@ func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Addre
 	return &instance{}, nil
 }
 
-func (i *instance) Detach(_ interpreter.EbpfHandler, pid libpf.PID) error {
+func (i *instance) Detach(_ interpreter.EbpfHandler, _ libpf.PID) error {
 	return nil
 }
 
