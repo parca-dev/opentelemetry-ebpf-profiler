@@ -691,7 +691,7 @@ int cuda_timing_probe(struct pt_regs *ctx)
   // We're now attaching to launchKernelTiming(id: u32, duration_bits: u32)
   // Parameters: RDI = id (u32), RSI = duration_bits (u32)
 
-  u32 kernel_id = PT_REGS_PARM1(ctx);
+  u32 kernel_id     = PT_REGS_PARM1(ctx);
   u32 duration_bits = PT_REGS_PARM2(ctx);
   DEBUG_PRINT("cuda_timing_probe: kernel_id=%u, duration_bits=0x%x\n", kernel_id, duration_bits);
 

@@ -145,17 +145,16 @@ static long (*bpf_probe_read_kernel)(void *dst, int size, const void *unsafe_ptr
 #endif // !TESTING_COREDUMP
 
 #if defined(__x86_64__)
-#define __PT_PARM1_REG di
-#define __PT_PARM2_REG si
+  #define __PT_PARM1_REG di
+  #define __PT_PARM2_REG si
 #elif defined(__aarch64__)
-#define __PT_PARM1_REG regs[0]
-#define __PT_PARM2_REG regs[1]
+  #define __PT_PARM1_REG regs[0]
+  #define __PT_PARM2_REG regs[1]
 #elif
   #error "Unsupported architecture"
 #endif
 
 #define PT_REGS_PARM1(x) ((x)->__PT_PARM1_REG)
 #define PT_REGS_PARM2(x) ((x)->__PT_PARM2_REG)
-
 
 #endif // OPTI_BPFDEFS_H
