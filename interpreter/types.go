@@ -7,6 +7,7 @@ import (
 	"errors"
 	"unsafe"
 
+	"github.com/cilium/ebpf"
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/lpm"
@@ -103,6 +104,8 @@ type EbpfHandler interface {
 	// DeletePidInterpreterMapping removes the element specified by pid, prefix
 	// from the eBPF map pid_page_to_mapping_info.
 	DeletePidInterpreterMapping(libpf.PID, lpm.Prefix) error
+
+	GetProgram(name string) *ebpf.Program
 
 	// If unwinder needs special behavior for coredump mode to work use this.
 	CoredumpTest() bool
