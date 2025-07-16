@@ -12,9 +12,9 @@ import (
 )
 
 type data struct {
-	probe        pfelf.USDTProbe
-	path         string
-	shim, timing link.Link
+	probe               pfelf.USDTProbe
+	path                string
+	shim, timing, graph link.Link
 }
 
 type instance struct {
@@ -27,7 +27,7 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 		return nil, err
 	}
 	// We use the existence of the .note.stapsdt section to determine if this is a
-	// process that has libparcagpu.so loaded. Its cheaper and more reliable than loading
+	// process that has libparcagpucupti.so loaded. Its cheaper and more reliable than loading
 	//  the symbol table.
 	if sec := ef.Section(".note.stapsdt"); sec != nil {
 		probes, err := pfelf.ParseUSDTProbes(sec)
@@ -35,7 +35,7 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 			return nil, err
 		}
 		for _, probe := range probes {
-			if probe.Provider == "parcagpu" && probe.Name == "kernel_launch" {
+			if probe.Provider == "parcagpu" && probe.Name == "launch_kernel" {
 				return &data{path: info.FileName(), probe: probe}, nil
 			}
 		}
@@ -66,19 +66,27 @@ func (d *data) attachUprobes(ebpf interpreter.EbpfHandler, path string) error {
 		return err
 	}
 
-	shimLink, err := x.Uprobe("shim_inner",
-		ebpf.GetProgram("cuda_launch_shim"), &link.UprobeOptions{})
+	launchLink, err := x.Uprobe("parcagpuLaunchKernel",
+		ebpf.GetProgram("cuda_launch_probe"), nil)
 	if err != nil {
 		return err
 	}
 
-	timingLink, err := x.Uprobe("launchKernelTiming",
-		ebpf.GetProgram("cuda_timing_probe"), &link.UprobeOptions{})
+	timingLink, err := x.Uprobe("parcagpuKernelExecuted",
+		ebpf.GetProgram("cuda_timing_probe"), nil)
 	if err != nil {
 		return err
 	}
-	d.shim = shimLink
+
+	graphLink, err := x.Uprobe("parcagpuGraphLaunch",
+		ebpf.GetProgram("cuda_launch_probe"), nil)
+	if err != nil {
+		return err
+	}
+
+	d.shim = launchLink
 	d.timing = timingLink
+	d.graph = graphLink
 	return nil
 }
 
@@ -91,6 +99,11 @@ func (d *data) Unload(_ interpreter.EbpfHandler) {
 	if d.timing != nil {
 		if err := d.timing.Close(); err != nil {
 			log.Errorf("Failed to close timing link: %v", err)
+		}
+	}
+	if d.graph != nil {
+		if err := d.graph.Close(); err != nil {
+			log.Errorf("Failed to close graph link: %v", err)
 		}
 	}
 	log.Debugf("[cuda] parcagpu USDT probes closed for %s", d.path)

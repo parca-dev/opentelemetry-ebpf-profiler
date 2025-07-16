@@ -688,7 +688,7 @@ func loadProbeUnwinders(coll *cebpf.CollectionSpec, ebpfProgs map[string]*cebpf.
 			enable:           true,
 		},
 		progLoaderHelper{
-			name:             "cuda_launch_shim",
+			name:             "cuda_launch_probe",
 			noTailCallTarget: true,
 			enable:           true,
 		},

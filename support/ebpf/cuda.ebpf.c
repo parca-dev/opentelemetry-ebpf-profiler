@@ -2,8 +2,8 @@
 #include "tracemgmt.h"
 #include "types.h"
 
-SEC("uprobe/cuda_launch_shim")
-int cuda_launch_shim(struct pt_regs *ctx)
+SEC("uprobe/cuda_launch_probe")
+int cuda_launch_probe(struct pt_regs *ctx)
 {
   u64 pid_tgid = bpf_get_current_pid_tgid();
   u32 pid      = pid_tgid >> 32;
@@ -15,7 +15,7 @@ int cuda_launch_shim(struct pt_regs *ctx)
 
   u64 cudaId = PT_REGS_PARM1(ctx);
 
-  DEBUG_PRINT("cuda_launch_shim: attached, func is 0x%llx", cudaId);
+  DEBUG_PRINT("cuda_launch_probe: attached to parcagpuLaunchKernel/parcagpuGraphLaunch, correlationId=%u", cudaId);
   u64 ts = bpf_ktime_get_ns();
   return collect_trace(ctx, TRACE_CUDA_LAUNCH, pid, tid, ts, 0, cudaId);
 }
@@ -23,7 +23,7 @@ int cuda_launch_shim(struct pt_regs *ctx)
 struct kernel_timing {
   u32 pid;
   u32 kernel_id;
-  u32 duration_bits; // float32 as raw bits
+  u64 duration_ns; // Duration in nanoseconds
 };
 
 bpf_map_def SEC("maps") cuda_timing_events = {
@@ -38,18 +38,18 @@ int cuda_timing_probe(struct pt_regs *ctx)
 {
   u64 pid_tgid = bpf_get_current_pid_tgid();
   u32 pid      = pid_tgid >> 32;
-  // We're now attaching to launchKernelTiming(id: u32, duration_bits: u32)
-  // Parameters: RDI = id (u32), RSI = duration_bits (u32)
+  // We're now attaching to parcagpuKernelExecuted(correlationId: u32, duration_ns: u64)
+  // Parameters: RDI = correlationId (u32), RSI = duration_ns (u64)
 
   u32 kernel_id     = PT_REGS_PARM1(ctx);
-  u32 duration_bits = PT_REGS_PARM2(ctx);
-  DEBUG_PRINT("cuda_timing_probe: kernel_id=%u, duration_bits=0x%x\n", kernel_id, duration_bits);
+  u64 duration_ns   = PT_REGS_PARM2(ctx);
+  DEBUG_PRINT("cuda_timing_probe: kernel_id=%u, duration_ns=%llu\n", kernel_id, duration_ns);
 
   // Send the actual timing data from the function parameters
   struct kernel_timing timing = {
     .pid           = pid,
     .kernel_id     = kernel_id,
-    .duration_bits = duration_bits,
+    .duration_ns   = duration_ns,
   };
 
   bpf_perf_event_output(ctx, &cuda_timing_events, BPF_F_CURRENT_CPU, &timing, sizeof(timing));

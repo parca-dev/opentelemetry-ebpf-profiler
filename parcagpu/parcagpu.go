@@ -15,36 +15,41 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/support"
 )
 
+type mapKey struct {
+	pid uint32
+	id  uint32
+}
+
 type gpuTraceFixer struct {
 	mu                  sync.Mutex
-	timesAwaitingTraces map[uint32]float32
-	tracesAwaitingTimes map[uint32]*host.Trace
+	timesAwaitingTraces map[mapKey]uint64
+	tracesAwaitingTimes map[mapKey]*host.Trace
 }
 
 func (p *gpuTraceFixer) addTrace(trace *host.Trace) *host.Trace {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	id := trace.ParcaGPUTraceID
-	millis, ok := p.timesAwaitingTraces[id]
+	key := mapKey{uint32(trace.PID), trace.ParcaGPUTraceID}
+	nanos, ok := p.timesAwaitingTraces[key]
 	if ok {
-		delete(p.timesAwaitingTraces, id)
-		trace.OffTime = int64(millis * 1000000.0)
+		delete(p.timesAwaitingTraces, key)
+		trace.OffTime = int64(nanos)
 		return trace
 	}
-	p.tracesAwaitingTimes[id] = trace
+	p.tracesAwaitingTimes[key] = trace
 	return nil
 }
 
-func (p *gpuTraceFixer) addTime(id uint32, millis float32) *host.Trace {
+func (p *gpuTraceFixer) addTime(key mapKey, nanos uint64) *host.Trace {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	trace, ok := p.tracesAwaitingTimes[id]
+	trace, ok := p.tracesAwaitingTimes[key]
 	if ok {
-		delete(p.tracesAwaitingTimes, id)
-		trace.OffTime = int64(millis * 1000000.0)
+		delete(p.tracesAwaitingTimes, key)
+		trace.OffTime = int64(nanos)
 		return trace
 	}
-	p.timesAwaitingTraces[id] = millis
+	p.timesAwaitingTraces[key] = nanos
 	return nil
 }
 
@@ -56,25 +61,25 @@ func (p *gpuTraceFixer) clear() {
 	if len(p.timesAwaitingTraces) > 100 || len(p.tracesAwaitingTimes) > 100 {
 		log.Warnf("clearing gpu trace fixer maps, too many entries: %d traces, %d times",
 			len(p.tracesAwaitingTimes), len(p.timesAwaitingTraces))
-		p.timesAwaitingTraces = map[uint32]float32{}
-		p.tracesAwaitingTimes = map[uint32]*host.Trace{}
+		p.timesAwaitingTraces = map[mapKey]uint64{}
+		p.tracesAwaitingTimes = map[mapKey]*host.Trace{}
 	}
 }
 
 // TODO: have cgo generate this
 type kernelTimingEvent struct {
-	pid    uint32
-	id     uint32
-	millis float32
+	pid        uint32
+	id         uint32
+	durationNs uint64
 }
 
 // Start starts two goroutines that filter traces coming from ebpf and match them up with timing
-// information coming from the launchKernelTiming uprobe.
+// information coming from the parcagpuKernelExecuted uprobe.
 func Start(ctx context.Context, traceInCh <-chan *host.Trace,
 	gpuTimingEvents *ebpf.Map) chan *host.Trace {
 	fixer := &gpuTraceFixer{
-		timesAwaitingTraces: map[uint32]float32{},
-		tracesAwaitingTimes: map[uint32]*host.Trace{},
+		timesAwaitingTraces: map[mapKey]uint64{},
+		tracesAwaitingTimes: map[mapKey]*host.Trace{},
 	}
 	traceOutChan := make(chan *host.Trace, 1024)
 
@@ -91,7 +96,7 @@ func Start(ctx context.Context, traceInCh <-chan *host.Trace,
 				return
 			case t := <-traceInCh:
 				if t != nil && t.Origin == support.TraceOriginCuda {
-					log.Debugf("[cuda]: got trace with id 0x%x for cuda", t.ParcaGPUTraceID)
+					log.Debugf("[cuda]: got trace with id 0x%x for cuda from pid: %d", t.ParcaGPUTraceID, t.PID)
 					if tr := fixer.addTrace(t); tr != nil {
 						log.Debugf("[cuda]: trace complete: 0x%x", tr.ParcaGPUTraceID)
 						traceOutChan <- tr
@@ -101,6 +106,7 @@ func Start(ctx context.Context, traceInCh <-chan *host.Trace,
 				}
 			}
 		}
+		log.Debugf("[cuda]: trace reader stopped, map contents %+v\n", fixer)
 	}()
 
 	eventReader, err := perf.NewReader(gpuTimingEvents, 1024 /* perCPUBufferSize */)
@@ -129,13 +135,14 @@ func Start(ctx context.Context, traceInCh <-chan *host.Trace,
 					continue
 				}
 				event := (*kernelTimingEvent)(unsafe.Pointer(&data.RawSample[0]))
-				log.Debugf("[cuda]: got timing info with id 0x%x for cuda", event.id)
-				if tr := fixer.addTime(event.id, event.millis); tr != nil {
+				log.Debugf("[cuda]: got timing info with id 0x%x for cuda from %d", event.id, event.pid)
+				if tr := fixer.addTime(mapKey{event.pid, event.id}, event.durationNs); tr != nil {
 					log.Debugf("[cuda]: trace complete: 0x%x", tr.ParcaGPUTraceID)
 					traceOutChan <- tr
 				}
 			}
 		}
+		log.Debugf("[cuda]: event reader stopped, map contents %+v\n", fixer)
 	}()
 
 	return traceOutChan
