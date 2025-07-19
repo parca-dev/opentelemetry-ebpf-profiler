@@ -1,8 +1,5 @@
 package customlabels // import "go.opentelemetry.io/ebpf-profiler/interpreter/customlabels"
 
-// #include <stdlib.h>
-// #include "../../support/ebpf/types.h"
-import "C"
 import (
 	"errors"
 	"fmt"
@@ -13,6 +10,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
+	"go.opentelemetry.io/ebpf-profiler/support"
 )
 
 const (
@@ -127,10 +125,10 @@ func (d data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID,
 		currentHmTlsOffset = rm.Uint64(bias + d.currentHmTlsAddr + 8)
 	}
 
-	procInfo := C.NativeCustomLabelsProcInfo{
-		current_set_tls_offset: C.u64(currentSetTlsOffset),
-		has_current_hm:         C.bool(d.hasCurrentHm),
-		current_hm_tls_offset:  C.u64(currentHmTlsOffset),
+	procInfo := support.NativeCustomLabelsProcInfo{
+		Current_set_tls_offset: currentSetTlsOffset,
+		Has_current_hm:         d.hasCurrentHm,
+		Current_hm_tls_offset:  currentHmTlsOffset,
 	}
 	if err := ebpf.UpdateProcData(libpf.CustomLabels, pid, unsafe.Pointer(&procInfo)); err != nil {
 		return nil, err

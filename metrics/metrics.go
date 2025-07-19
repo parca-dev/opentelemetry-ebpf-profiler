@@ -10,20 +10,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	log "github.com/sirupsen/logrus"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
 
-	"go.opentelemetry.io/ebpf-profiler/libpf"
-	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/vc"
 )
 
 var (
 	// prevTimestamp holds the timestamp of the buffered metrics
-	prevTimestamp libpf.UnixTime32
+	prevTimestamp uint32
 
 	// metricsBuffer buffers the metricsBuffer for the timestamp assigned to prevTimestamp
 	metricsBuffer = make([]Metric, IDMax)
@@ -50,10 +49,15 @@ var (
 	counters = map[MetricID]metric.Int64Counter{}
 	gauges   = map[MetricID]metric.Int64Gauge{}
 
-	reporterImpl reporter.MetricsReporter
+	reporterImpl MetricsReporter
 )
 
-func SetReporter(r reporter.MetricsReporter) {
+// MetricsReporter is the interface for reporting metrics
+type MetricsReporter interface {
+	ReportMetrics(timestamp uint32, ids []uint32, values []int64)
+}
+
+func SetReporter(r MetricsReporter) {
 	reporterImpl = r
 }
 
@@ -102,7 +106,7 @@ var report = func() {
 			ids[i] = uint32(metricsBuffer[i].ID)
 			values[i] = int64(metricsBuffer[i].Value)
 		}
-		reporterImpl.ReportMetrics(uint32(prevTimestamp), ids, values)
+		reporterImpl.ReportMetrics(prevTimestamp, ids, values)
 	}
 	for i := range nMetrics {
 		metric := metricsBuffer[i]
@@ -140,7 +144,7 @@ var report = func() {
 // This ensures that the buffered metrics from the previous timestamp are sent
 // with the correctly assigned TSMetric.Timestamp.
 func AddSlice(newMetrics []Metric) {
-	now := libpf.UnixTime32(libpf.NowAsUInt32())
+	now := uint32(time.Now().Unix())
 
 	mutex.Lock()
 	defer mutex.Unlock()
