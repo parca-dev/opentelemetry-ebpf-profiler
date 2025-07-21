@@ -227,7 +227,7 @@ func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace
 		CustomLabels: trace.CustomLabels,
 	}
 
-	for i := 0; i < traceLen; i++ {
+	for i := range traceLen {
 		frame := &trace.Frames[i]
 
 		if frame.Type.IsError() {
