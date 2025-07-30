@@ -15,10 +15,10 @@ require (
 	github.com/klauspost/compress v1.18.0
 	github.com/mdlayher/kobject v0.0.0-20200520190114-19ca17470d7d
 	github.com/minio/sha256-simd v1.0.1
-	github.com/parca-dev/oomprof v0.1.5-0.20250812211204-fcd45c49d0db
+	github.com/parca-dev/oomprof v0.1.5-0.20250916114836-5d60b5355c17
 	github.com/peterbourgon/ff/v3 v3.4.0
 	github.com/sirupsen/logrus v1.9.3
-	github.com/stretchr/testify v1.10.0
+	github.com/stretchr/testify v1.11.1
 	github.com/testcontainers/testcontainers-go v0.35.0
 	github.com/tklauser/numcpus v0.10.0
 	github.com/zeebo/xxh3 v1.0.2
@@ -36,7 +36,7 @@ require (
 	golang.org/x/exp v0.0.0-20250717185816-542afb5b7346
 	golang.org/x/mod v0.26.0
 	golang.org/x/sync v0.16.0
-	golang.org/x/sys v0.34.0
+	golang.org/x/sys v0.35.0
 	google.golang.org/grpc v1.74.1
 )
 
@@ -120,6 +120,6 @@ require (
 	golang.org/x/net v0.40.0 // indirect
 	golang.org/x/text v0.25.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250528174236-200df99c418a // indirect
-	google.golang.org/protobuf v1.36.6 // indirect
+	google.golang.org/protobuf v1.36.8 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

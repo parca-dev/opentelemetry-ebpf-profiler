@@ -33,12 +33,9 @@ import (
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
-	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/testutils"
 	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
 )
-
-type symbolMap map[libpf.FrameID]libpf.String
 
 const N_WORKERS int = 8
 
@@ -80,7 +77,7 @@ func TestIntegration(t *testing.T) {
 			enabledTracers, err := tracertypes.Parse("labels,v8")
 			require.NoError(t, err)
 
-			r := &mockReporter{symbols: make(symbolMap)}
+			r := &testutils.MockReporter{}
 			traceCh, trc := testutils.StartTracer(ctx, t, enabledTracers, r, false)
 
 			testHTTPEndpoint(ctx, t, cont)
@@ -118,10 +115,10 @@ func TestIntegration(t *testing.T) {
 						"readFileHandle",
 					}
 					hasWorkloadFrame := false
-					for i := range ct.FrameTypes {
-						if ct.FrameTypes[i] == libpf.V8Frame {
-							id := libpf.NewFrameID(ct.Files[i], ct.Linenos[i])
-							name := r.getFunctionName(id)
+
+					for i := range ct.Frames {
+						if ct.Frames[i].Value().Type == libpf.V8Frame {
+							name := ct.Frames[i].Value().FunctionName.String()
 							if slices.Contains(knownWorkloadFrames, name) {
 								hasWorkloadFrame = true
 							}
@@ -265,29 +262,4 @@ func testHTTPEndpoint(ctx context.Context, t *testing.T, cont testcontainers.Con
 
 	wg.Wait()
 	require.NoError(t, errors.Join(errs...))
-}
-
-type mockReporter struct {
-	mu      sync.Mutex
-	symbols symbolMap
-}
-
-var _ reporter.SymbolReporter = &mockReporter{}
-
-func (m *mockReporter) ExecutableMetadata(*reporter.ExecutableMetadataArgs) {
-}
-func (m *mockReporter) FrameKnown(_ libpf.FrameID) bool { return false }
-func (m *mockReporter) ExecutableKnown(libpf.FileID) bool {
-	return false
-}
-func (m *mockReporter) FrameMetadata(args *reporter.FrameMetadataArgs) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.symbols[args.FrameID] = args.FunctionName
-}
-
-func (m *mockReporter) getFunctionName(frameID libpf.FrameID) string {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.symbols[frameID].String()
 }
