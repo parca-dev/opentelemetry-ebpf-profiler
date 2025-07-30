@@ -140,7 +140,8 @@ bpf_map_def SEC("maps") cl_procs = {
   .max_entries = 128,
 };
 
-static EBPF_INLINE void *get_m_ptr_legacy(struct GoCustomLabelsOffsets *offs, UnwindState *state)
+static EBPF_INLINE void *
+get_m_ptr_legacy(struct GoCustomLabelsOffsets *offs, UNUSED UnwindState *state)
 {
   long res;
 
@@ -174,7 +175,7 @@ static EBPF_INLINE void *get_m_ptr_legacy(struct GoCustomLabelsOffsets *offs, Un
   return m_ptr_addr;
 }
 
-static EBPF_INLINE void *get_m_ptr(struct GoLabelsOffsets *offs, UnwindState *state)
+static EBPF_INLINE void *get_m_ptr(struct GoLabelsOffsets *offs, UNUSED UnwindState *state)
 {
   u64 g_addr     = 0;
   void *tls_base = NULL;
