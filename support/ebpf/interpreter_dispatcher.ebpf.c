@@ -8,6 +8,7 @@
 #include "tsd.h"
 #include "types.h"
 #include "util.h"
+/* #include "extmaps.h" */
 
 // Begin shared maps
 
@@ -269,54 +270,180 @@ static EBPF_INLINE void maybe_add_go_custom_labels(struct pt_regs *ctx, PerCPURe
   tail_call(ctx, PROG_GO_LABELS);
 }
 
-static inline __attribute__((__always_inline__)) bool
-get_native_custom_labels(PerCPURecord *record, NativeCustomLabelsProcInfo *proc)
+static EBPF_INLINE u64 addr_for_tls_symbol(u64 symbol, bool dtv)
 {
   u64 tsd_base;
   if (tsd_get_base((void **)&tsd_base) != 0) {
     increment_metric(metricID_UnwindNativeCustomLabelsErrReadTsdBase);
     DEBUG_PRINT("cl: failed to get TSD base for native custom labels");
-    return false;
+    return 0;
   }
 
   int err;
-#if defined(__aarch64__)
-  // ELF Handling For Thread-Local Storage, p.5.
-  // The thread register points to a "TCB" (Thread Control Block)
-  // whose first element is a pointer to a "DTV"  (Dynamic Thread Vector)...
-  u64 dtv_addr;
-  if ((err = bpf_probe_read_user(&dtv_addr, sizeof(void *), (void *)(tsd_base)))) {
-    increment_metric(metricID_UnwindNativeCustomLabelsErrReadData);
-    DEBUG_PRINT("Failed to read TLS DTV addr: %d", err);
-    return false;
-  }
-  // ... and at offsite 16 in the DTV, there is a pointer to the TLS block.
   u64 addr;
-  if ((err = bpf_probe_read_user(&addr, sizeof(void *), (void *)(dtv_addr + 16)))) {
-    increment_metric(metricID_UnwindNativeCustomLabelsErrReadData);
-    DEBUG_PRINT("Failed to read main TLS block addr: %d", err);
+  if (dtv) {
+    // ELF Handling For Thread-Local Storage, p.5.
+    // The thread register points to a "TCB" (Thread Control Block)
+    // whose first element is a pointer to a "DTV"  (Dynamic Thread Vector)...
+    u64 dtv_addr;
+    if ((err = bpf_probe_read_user(&dtv_addr, sizeof(void *), (void *)(tsd_base)))) {
+      increment_metric(metricID_UnwindNativeCustomLabelsErrReadData);
+      DEBUG_PRINT("Failed to read TLS DTV addr: %d", err);
+      return 0;
+    }
+    // ... and at offsite 16 in the DTV, there is a pointer to the TLS block.
+    if ((err = bpf_probe_read_user(&addr, sizeof(void *), (void *)(dtv_addr + 16)))) {
+      increment_metric(metricID_UnwindNativeCustomLabelsErrReadData);
+      DEBUG_PRINT("Failed to read main TLS block addr: %d", err);
+      return 0;
+    }
+    addr += symbol;
+  } else {
+    addr = tsd_base + symbol;
+  }
+  return addr;
+}
+
+// Converts IEEE 754 double precision floating point bits to integer value.
+// Takes the raw 64-bit representation of a double and extracts the integer value.
+// Used for extracting Node.js async IDs stored as doubles in memory (in eBPF context,
+// where we can't use the actual "double" type)
+//
+// Assumptions:
+// - Input represents a non-negative integer value in the safe range
+// stored as a double (so no negatives, nothing 2^53 or higher,
+// no NaNs, infinities, or denormals)
+static inline __attribute__((__always_inline__)) u64 integral_double_to_int(u64 bits)
+{
+  // Extract exponent (11 bits)
+  u64 exponent = (bits >> 52) & 0x7FF;
+  // Extract mantissa (52 bits)
+  u64 mantissa = bits & 0xFFFFFFFFFFFFF;
+
+  // Handle zero case
+  if (exponent == 0 && mantissa == 0) {
+    return 0;
+  }
+
+  // Add implicit leading 1
+  mantissa |= 1ULL << 52;
+
+  // Adjust exponent (bias is 1023)
+  s64 shift = exponent - 1023;
+
+  // Shift mantissa to get integer value
+  if (shift <= 52) {
+    return mantissa >> (52 - shift);
+  } else {
+    return mantissa << (shift - 52);
+  }
+}
+
+// From https://stackoverflow.com/a/12996028/242814
+// which got it from public-domain code.
+//
+// Changing this function is a breaking ABI change!
+static u64 custom_labels_hm_hash(u64 x) {
+  x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9UL;
+  x = (x ^ (x >> 27)) * 0x94d049bb133111ebUL;
+  x = x ^ (x >> 31);
+  return x;
+}
+
+static inline __attribute__((__always_inline__)) bool get_node_async_id(V8ProcInfo *proc, u64 *out)
+{
+  int err;
+
+  u64 isolate_addr = addr_for_tls_symbol(proc->isolate_addr, true);
+  DEBUG_PRINT("node custom labels: isolate_addr = 0x%llx", isolate_addr);
+  if (!isolate_addr)
+    return false;
+
+  u64 isolate;
+  if ((err = bpf_probe_read_user(&isolate, sizeof(void *), (void *)(isolate_addr)))) {
+    DEBUG_PRINT("Failed to read node custom labels current set pointer: %d", err);
     return false;
   }
-  addr += proc->tls_offset;
-#else
-  u64 addr = tsd_base + proc->tls_offset;
-#endif
 
-  DEBUG_PRINT("cl: native custom labels data at 0x%llx", addr);
+  u64 context_handle_ptr = isolate + 0x150;
+  DEBUG_PRINT("node custom labels: context_handle_ptr = 0x%llx", context_handle_ptr);
 
-  NativeCustomLabelsSet *p_current_set;
-  if ((err = bpf_probe_read_user(&p_current_set, sizeof(void *), (void *)(addr)))) {
-    increment_metric(metricID_UnwindNativeCustomLabelsErrReadData);
-    DEBUG_PRINT("Failed to read custom labels current set pointer: %d", err);
+  u64 context_handle;
+  if ((err = bpf_probe_read_user(&context_handle, sizeof(void *), (void *)(context_handle_ptr)))) {
+    // TODO - implement this metric
+    /* increment_metric(metricID_UnwindNodeCustomLabelsErrReadData); */
+    DEBUG_PRINT("Failed to read node custom labels current set pointer: %d", err);
     return false;
   }
+  DEBUG_PRINT("node custom labels: context_handle = 0x%llx", context_handle);
 
-  if (!p_current_set) {
-    DEBUG_PRINT("Null labelset");
-    record->trace.custom_labels.len = 0;
-    return true;
+  u64 context_ptr = context_handle - 1;
+  DEBUG_PRINT("node custom labels: context_ptr = 0x%llx", context_ptr);
+
+  u64 real_context_handle;
+  if ((err = bpf_probe_read_user(&real_context_handle, sizeof(void *), (void *)(context_ptr)))) {
+    DEBUG_PRINT("Failed to read real context handle: %d", err);
+    return false;
   }
+  DEBUG_PRINT("node custom labels: real_context_handle = 0x%llx", real_context_handle);
 
+  u64 native_context_ptr = real_context_handle + 0x1f;
+  DEBUG_PRINT("node custom labels: native_context_ptr = 0x%llx", native_context_ptr);
+
+  u64 native_context;
+  if ((err = bpf_probe_read_user(&native_context, sizeof(void *), (void *)(native_context_ptr)))) {
+    DEBUG_PRINT("Failed to read native context: %d", err);
+    return false;
+  }
+  DEBUG_PRINT("node custom labels: native_context = 0x%llx", native_context);
+
+  u64 embedder_data_ptr = native_context + 0x2f;
+  DEBUG_PRINT("node custom labels: embedder_data_ptr = 0x%llx", embedder_data_ptr);
+
+  u64 embedder_data;
+  if ((err = bpf_probe_read_user(&embedder_data, sizeof(void *), (void *)(embedder_data_ptr)))) {
+    DEBUG_PRINT("Failed to read embedder data: %d", err);
+    return false;
+  }
+  DEBUG_PRINT("node custom labels: embedder_data = 0x%llx", embedder_data);
+
+  u64 env_ptr_ptr = embedder_data + 0x10f;
+  DEBUG_PRINT("node custom labels: env_ptr_ptr = 0x%llx", env_ptr_ptr);
+
+  u64 env_ptr;
+  if ((err = bpf_probe_read_user(&env_ptr, sizeof(void *), (void *)(env_ptr_ptr)))) {
+    DEBUG_PRINT("Failed to read id field: %d", err);
+    return false;
+  }
+  DEBUG_PRINT("node custom labels: env_ptr = 0x%llx", env_ptr);
+
+  u64 id_field_ptr = env_ptr + 0x488;
+  DEBUG_PRINT("node custom labels: id_field_ptr = 0x%llx", id_field_ptr);
+
+  u64 id_field;
+  if ((err = bpf_probe_read_user(&id_field, sizeof(void *), (void *)(id_field_ptr)))) {
+    DEBUG_PRINT("Failed to read id field: %d", err);
+    return false;
+  }
+  DEBUG_PRINT("node custom labels: id_field = 0x%llx", id_field);
+
+  u64 bits;
+  if ((err = bpf_probe_read_user(&bits, sizeof(u64), (void *)(id_field)))) {
+    DEBUG_PRINT("Failed to read id double: %d", err);
+    return false;
+  }
+  u64 id = integral_double_to_int(bits);
+  DEBUG_PRINT("node custom labels: id = %lld", id);
+  *out = id;
+
+  return true;
+}
+
+static inline __attribute__((__always_inline__)) bool
+read_labelset_into_trace(PerCPURecord *record, NativeCustomLabelsSet *p_current_set)
+{
+  int err;
+  
   NativeCustomLabelsSet current_set;
   if ((err = bpf_probe_read_user(&current_set, sizeof(current_set), p_current_set))) {
     increment_metric(metricID_UnwindNativeCustomLabelsErrReadData);
@@ -364,6 +491,44 @@ exit:
   return true;
 }
 
+static inline __attribute__((__always_inline__)) bool
+get_native_custom_labels(PerCPURecord *record, NativeCustomLabelsProcInfo *proc)
+{
+  int err;
+  bool is_aarch64 =
+#if defined(__aarch64__)
+    true
+#else
+    false
+#endif
+    ;
+  u64 addr = addr_for_tls_symbol(proc->current_set_tls_offset, is_aarch64);
+  if (!addr)
+    return false;
+
+  DEBUG_PRINT("cl: native custom labels data at 0x%llx", addr);
+
+  if (proc->has_current_hm) {
+    u64 hm_addr = addr_for_tls_symbol(proc->current_hm_tls_offset, false);
+    DEBUG_PRINT("[btv] hm-based cl: 0x%llx", hm_addr);
+  }
+
+  NativeCustomLabelsSet *p_current_set;
+  if ((err = bpf_probe_read_user(&p_current_set, sizeof(void *), (void *)(addr)))) {
+    increment_metric(metricID_UnwindNativeCustomLabelsErrReadData);
+    DEBUG_PRINT("Failed to read custom labels current set pointer: %d", err);
+    return false;
+  }
+
+  if (!p_current_set) {
+    DEBUG_PRINT("Null labelset");
+    record->trace.custom_labels.len = 0;
+    return true;
+  }
+
+  return read_labelset_into_trace(record, p_current_set);
+}
+
 static inline __attribute__((__always_inline__)) void
 maybe_add_native_custom_labels(PerCPURecord *record)
 {
@@ -379,6 +544,88 @@ maybe_add_native_custom_labels(PerCPURecord *record)
     increment_metric(metricID_UnwindNativeCustomLabelsAddSuccesses);
   else
     increment_metric(metricID_UnwindNativeCustomLabelsAddErrors);
+}
+
+static inline __attribute__((__always_inline__)) u64
+get_labelset_for_async_id(u64 hm_addr, u64 id)
+{
+  u64 h = custom_labels_hm_hash(id);
+  
+  NativeCustomLabelsHm hm;
+  if (bpf_probe_read_user(&hm, sizeof(hm), (void *)hm_addr)) {
+    increment_metric(metricID_UnwindNodeClFailedReadHmStruct);
+    DEBUG_PRINT("Failed to read hashmap structure");
+    return 0;
+  }
+  
+  u64 capacity = 1ULL << hm.log2_capacity;
+
+  u64 labelset_rc_addr = 0;
+  for (int i = 0; i < 16; ++i) {
+    int pos = (h + i) % capacity;
+    NativeCustomLabelsHmBucket bucket;
+    if (bpf_probe_read_user(&bucket, sizeof(bucket), (void *)((u64)hm.buckets + pos * sizeof(NativeCustomLabelsHmBucket)))) {
+      increment_metric(metricID_UnwindNodeClFailedReadBucket);
+      DEBUG_PRINT("Failed to read bucket at position %d", pos);
+      return 0;
+    }
+    
+    if (!bucket.value || bucket.key == id) {
+      labelset_rc_addr = (u64)bucket.value;
+      break;
+    }
+  }
+  if (!labelset_rc_addr) {
+    increment_metric(metricID_UnwindNodeClFailedTooManyBuckets);
+    DEBUG_PRINT("Spun for 16 buckets");
+    return 0;
+  }
+  u64 labelset_addr;
+  if (bpf_probe_read_user(&labelset_addr, sizeof(labelset_addr), (void *)labelset_rc_addr)) {
+    increment_metric(metricID_UnwindNodeClFailedReadLsAddr);
+    DEBUG_PRINT("Failed to read labelset addr");
+    return 0;
+  }
+  return labelset_addr;
+}
+
+// TODO - combine with native?
+static inline __attribute__((__always_inline__)) void
+maybe_add_node_custom_labels(PerCPURecord *record)
+{
+  u32 pid             = record->trace.pid;
+  V8ProcInfo *v8_proc = bpf_map_lookup_elem(&v8_procs, &pid);
+  NativeCustomLabelsProcInfo *proc = bpf_map_lookup_elem(&cl_procs, &pid);
+  if (!v8_proc || !proc || !proc->has_current_hm) {
+    DEBUG_PRINT("cl: %d does not support node custom labels", pid);
+    return;
+  }
+  u64 hm_ptr_addr = addr_for_tls_symbol(proc->current_hm_tls_offset, false);
+  DEBUG_PRINT("[btv] hm pointer addr: 0x%llx", hm_ptr_addr);
+
+  u64 hm_addr;
+  if (bpf_probe_read_user(&hm_addr, sizeof(hm_addr), (void *)hm_ptr_addr)) {
+    increment_metric(metricID_UnwindNodeClFailedReadHmPointer);
+    DEBUG_PRINT("Failed to read hm pointer");
+    return;
+  }
+  DEBUG_PRINT("[btv] hm addr: 0x%llx", hm_addr);
+
+  u64 id;
+  bool success = get_node_async_id(v8_proc, &id);
+  // TODO: increment success or faillure metric
+  if (success) {
+    u64 labelset_addr = get_labelset_for_async_id(hm_addr, id);
+    labelset_addr = (u64)labelset_addr;
+    if (labelset_addr) {
+      DEBUG_PRINT("cl: labelset addr is 0x%llx", labelset_addr);
+      read_labelset_into_trace(record, (NativeCustomLabelsSet *)labelset_addr);
+    } else {
+      increment_metric(metricID_UnwindNodeClFailedNoLsInHm);
+      DEBUG_PRINT("cl: No labelset found in hashmap for async id %lld", id);
+    }
+  } else {
+  }
 }
 
 static inline __attribute__((__always_inline__)) void maybe_add_apm_info(Trace *trace)
@@ -441,9 +688,12 @@ static EBPF_INLINE int unwind_stop(struct pt_regs *ctx)
 
   // Do Go first since we might tail call out and back again.
   // Try legacy Go custom labels first, then new Go labels implementation
+  // TODO: maybe instead of adding a per-language call here, we
+  // should have "path to CLs" be a standard part of some per-pid map?
   maybe_add_go_custom_labels_legacy(ctx, record);
   maybe_add_go_custom_labels(ctx, record);
   maybe_add_native_custom_labels(record);
+  maybe_add_node_custom_labels(record);
   maybe_add_apm_info(trace);
 
   // If the stack is otherwise empty, push an error for that: we should

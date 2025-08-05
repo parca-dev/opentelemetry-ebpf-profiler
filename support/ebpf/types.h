@@ -346,6 +346,13 @@ enum {
   // number of failures to read Go labels (upstream)
   metricID_UnwindGoLabelsFailures,
 
+  metricID_UnwindNodeClFailedReadHmPointer,
+  metricID_UnwindNodeClFailedNoLsInHm,
+  metricID_UnwindNodeClFailedReadHmStruct,
+  metricID_UnwindNodeClFailedReadBucket,
+  metricID_UnwindNodeClFailedReadLsAddr,
+  metricID_UnwindNodeClFailedTooManyBuckets,
+
   //
   // Metric IDs above are for counters (cumulative values)
   //
@@ -538,6 +545,8 @@ typedef struct V8ProcInfo {
   u8 off_Code_instruction_start, off_Code_instruction_size, off_Code_flags;
   u8 fp_marker, fp_function, fp_bytecode_offset;
   u8 codekind_shift, codekind_mask, codekind_baseline;
+  // todo - rename to isolate_sym ?
+  u64 isolate_addr;
 } V8ProcInfo;
 
 typedef struct LuaJITProcInfo {
@@ -606,6 +615,16 @@ typedef struct NativeCustomLabelsThreadLocalData {
   size_t count;
   size_t capacity;
 } NativeCustomLabelsSet;
+
+typedef struct {
+  u64 key;
+  void *value;
+} NativeCustomLabelsHmBucket;
+
+typedef struct {
+  NativeCustomLabelsHmBucket *buckets;
+  u64 log2_capacity;
+} NativeCustomLabelsHm;
 
 #define MAX_CUSTOM_LABELS 10
 
@@ -1064,7 +1083,9 @@ typedef struct ApmIntProcInfo {
 } ApmIntProcInfo;
 
 typedef struct NativeCustomLabelsProcInfo {
-  u64 tls_offset;
+  u64 current_set_tls_offset;
+  bool has_current_hm;
+  u64 current_hm_tls_offset;
 } NativeCustomLabelsProcInfo;
 
 typedef struct GoCustomLabelsOffsets {

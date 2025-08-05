@@ -2092,5 +2092,47 @@
     "name": "UnwindLuaJITErrNoProcInfo",
     "field": "bpf.luajit.errors.no_proc_info",
     "id": 290
+  },
+  {
+    "description": "Number of failures to read Node.js custom labels hashmap pointer",
+    "type": "counter",
+    "name": "UnwindNodeClFailedReadHmPointer",
+    "field": "bpf.nodejs_custom_labels.errors.read_hm_pointer",
+    "id": 291
+  },
+  {
+    "description": "Number of failures when no Labelset found in Node.js custom labels hashmap",
+    "type": "counter",
+    "name": "UnwindNodeClFailedNoLsInHm",
+    "field": "bpf.nodejs_custom_labels.errors.no_ls_in_hm",
+    "id": 292
+  },
+  {
+    "description": "Number of failures to read Node.js custom labels hashmap structure",
+    "type": "counter",
+    "name": "UnwindNodeClFailedReadHmStruct",
+    "field": "bpf.nodejs_custom_labels.errors.read_hm_struct",
+    "id": 293
+  },
+  {
+    "description": "Number of failures to read Node.js custom labels bucket",
+    "type": "counter",
+    "name": "UnwindNodeClFailedReadBucket",
+    "field": "bpf.nodejs_custom_labels.errors.read_bucket",
+    "id": 294
+  },
+  {
+    "description": "Number of failures to read Node.js custom labels Labelset address",
+    "type": "counter",
+    "name": "UnwindNodeClFailedReadLsAddr",
+    "field": "bpf.nodejs_custom_labels.errors.read_ls_addr",
+    "id": 295
+  },
+  {
+    "description": "Number of times too many buckets encountered in Node.js custom labels hashmap",
+    "type": "counter",
+    "name": "UnwindNodeClFailedTooManyBuckets",
+    "field": "bpf.nodejs_custom_labels.errors.too_many_buckets",
+    "id": 296
   }
 ]

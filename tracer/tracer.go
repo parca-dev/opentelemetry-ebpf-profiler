@@ -1077,6 +1077,12 @@ func (t *Tracer) StartMapMonitors(ctx context.Context, traceOutChan chan<- *host
 		C.metricID_UnwindDotnetErrCodeTooLarge:                metrics.IDUnwindDotnetErrCodeTooLarge,
 		C.metricID_UnwindLuaJITAttempts:                       metrics.IDUnwindLuaJITAttempts,
 		C.metricID_UnwindLuaJITErrNoProcInfo:                  metrics.IDUnwindLuaJITErrNoProcInfo,
+		C.metricID_UnwindNodeClFailedReadHmPointer:            metrics.IDUnwindNodeClFailedReadHmPointer,
+		C.metricID_UnwindNodeClFailedNoLsInHm:                 metrics.IDUnwindNodeClFailedNoLsInHm,
+		C.metricID_UnwindNodeClFailedReadHmStruct:             metrics.IDUnwindNodeClFailedReadHmStruct,
+		C.metricID_UnwindNodeClFailedReadBucket:               metrics.IDUnwindNodeClFailedReadBucket,
+		C.metricID_UnwindNodeClFailedReadLsAddr:               metrics.IDUnwindNodeClFailedReadLsAddr,
+		C.metricID_UnwindNodeClFailedTooManyBuckets:           metrics.IDUnwindNodeClFailedTooManyBuckets,
 	}
 
 	// previousMetricValue stores the previously retrieved metric values to

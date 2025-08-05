@@ -680,6 +680,24 @@ const (
 	// Number of times we didn't find an entry for this process in the LuaJIT process info array
 	IDUnwindLuaJITErrNoProcInfo = 290
 
+	// Number of failures to read Node.js custom labels hashmap pointer
+	IDUnwindNodeClFailedReadHmPointer = 291
+
+	// Number of failures when no Labelset found in Node.js custom labels hashmap
+	IDUnwindNodeClFailedNoLsInHm = 292
+
+	// Number of failures to read Node.js custom labels hashmap structure
+	IDUnwindNodeClFailedReadHmStruct = 293
+
+	// Number of failures to read Node.js custom labels bucket
+	IDUnwindNodeClFailedReadBucket = 294
+
+	// Number of failures to read Node.js custom labels Labelset address
+	IDUnwindNodeClFailedReadLsAddr = 295
+
+	// Number of times too many buckets encountered in Node.js custom labels hashmap
+	IDUnwindNodeClFailedTooManyBuckets = 296
+
 	// max number of ID values, keep this as *last entry*
-	IDMax = 291
+	IDMax = 297
 )

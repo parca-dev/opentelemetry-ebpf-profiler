@@ -495,6 +495,9 @@ type v8Data struct {
 
 	// frametypeToID caches frametype's to a hash used as its identifier
 	frametypeToID [MaxFrameType]libpf.AddressOrLineno
+
+	// XXX
+	isolateAddr libpf.Address
 }
 
 type v8Instance struct {
@@ -1837,6 +1840,8 @@ func (d *v8Data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Add
 		codekind_shift:    C.u8(vms.CodeKind.FieldShift),
 		codekind_mask:     C.u8(vms.CodeKind.FieldMask),
 		codekind_baseline: C.u8(vms.CodeKind.Baseline),
+
+		isolate_addr: C.u64(d.isolateAddr),
 	}
 	if err := ebpf.UpdateProcData(libpf.V8, pid, unsafe.Pointer(&data)); err != nil {
 		return nil, err
@@ -2157,7 +2162,9 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 	}
 
 	version := vers[0]*0x1000000 + vers[1]*0x10000 + vers[2]
-	log.Debugf("V8 version %v.%v.%v", vers[0], vers[1], vers[2])
+	fmt.Printf("V8 version %v.%v.%v\n", vers[0], vers[1], vers[2])
+	fmt.Println("[btv] " + info.FileName())
+
 	if vers[0] > 0xff || vers[1] > 0xff || vers[2] > 0xffff || version < 0x080100 {
 		return nil, fmt.Errorf("version %v.%v.%v of V8 is not supported (minimum is 8.1.0)",
 			vers[0], vers[1], vers[2])
@@ -2166,6 +2173,13 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 	d := &v8Data{
 		version: version,
 	}
+
+	offset, err := ef.LookupTLSSymbolOffset("_ZN2v88internal18g_current_isolate_E")
+	if err != nil {
+		panic(err)
+	}
+	d.isolateAddr = libpf.Address(offset)
+	fmt.Printf("[btv] %v %v\n", d.isolateAddr, offset)
 
 	addr, err := ef.LookupSymbolAddress("_ZN2v88internal8Snapshot19DefaultSnapshotBlobEv")
 	if err == nil {
