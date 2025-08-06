@@ -47,7 +47,7 @@ func StartTracer(ctx context.Context, t *testing.T, et tracertypes.IncludedTrace
 		ProbabilisticInterval:  100,
 		ProbabilisticThreshold: 100,
 		OffCPUThreshold:        uint32(math.MaxUint32 / 100),
-		DebugTracer:            true,
+		VerboseMode:            true,
 	})
 	require.NoError(t, err)
 
