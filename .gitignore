@@ -7,3 +7,4 @@ ebpf-profiler
 ci-kernels
 # Ignore target directory
 target/*
+interpreter/nodev8/node_offsets_generated.go

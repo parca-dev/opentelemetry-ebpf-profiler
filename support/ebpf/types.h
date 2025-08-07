@@ -352,6 +352,17 @@ enum {
   metricID_UnwindNodeClFailedReadBucket,
   metricID_UnwindNodeClFailedReadLsAddr,
   metricID_UnwindNodeClFailedTooManyBuckets,
+  metricID_UnwindNodeClFailedGettingId,
+  metricID_UnwindNodeClWarnIdZero,
+  metricID_UnwindNodeAsyncIdErrGetTlsSymbol,
+  metricID_UnwindNodeAsyncIdErrReadIsolate,
+  metricID_UnwindNodeAsyncIdErrReadContextHandle,
+  metricID_UnwindNodeAsyncIdErrReadRealContextHandle,
+  metricID_UnwindNodeAsyncIdErrReadNativeContext,
+  metricID_UnwindNodeAsyncIdErrReadEmbedderData,
+  metricID_UnwindNodeAsyncIdErrReadEnvPtr,
+  metricID_UnwindNodeAsyncIdErrReadIdField,
+  metricID_UnwindNodeAsyncIdErrReadIdDouble,
 
   //
   // Metric IDs above are for counters (cumulative values)
@@ -539,6 +550,12 @@ typedef struct RubyProcInfo {
 // V8ProcInfo is a container for the data needed to build a stack trace for a V8 process.
 typedef struct V8ProcInfo {
   u32 version;
+  // Node.js environment offsets from complete_offsets.csv
+  u32 context_handle_offset;
+  u32 native_context_offset;
+  u32 embedder_data_offset;
+  u32 environment_pointer_offset;
+  u32 execution_async_id_offset;
   // Introspection data
   u16 type_JSFunction_first, type_JSFunction_last, type_Code, type_SharedFunctionInfo;
   u8 off_HeapObject_map, off_Map_instancetype, off_JSFunction_code, off_JSFunction_shared;

@@ -350,28 +350,40 @@ static u64 custom_labels_hm_hash(u64 x) {
   return x;
 }
 
-static inline __attribute__((__always_inline__)) bool get_node_async_id(V8ProcInfo *proc, u64 *out)
+// Extracts the Node.js environment pointer from V8 isolate by traversing
+// through V8 internal structures: isolate -> context_handle -> real_context_handle
+// -> native_context -> embedder_data -> env_ptr
+static inline __attribute__((__always_inline__)) bool get_node_env_ptr(V8ProcInfo *proc, u64 *env_ptr_out)
 {
   int err;
 
+  // DEBUG_PRINT the new Node.js environment offsets
+  DEBUG_PRINT("[btv] context_handle_offset=0x%x", proc->context_handle_offset);
+  DEBUG_PRINT("[btv] native_context_offset=0x%x", proc->native_context_offset);
+  DEBUG_PRINT("[btv] embedder_data_offset=0x%x", proc->embedder_data_offset);
+  DEBUG_PRINT("[btv] environment_pointer_offset=0x%x", proc->environment_pointer_offset);
+  DEBUG_PRINT("[btv] execution_async_id_offset=0x%x", proc->execution_async_id_offset);
+
   u64 isolate_addr = addr_for_tls_symbol(proc->isolate_addr, true);
   DEBUG_PRINT("node custom labels: isolate_addr = 0x%llx", isolate_addr);
-  if (!isolate_addr)
+  if (!isolate_addr) {
+    increment_metric(metricID_UnwindNodeAsyncIdErrGetTlsSymbol);
     return false;
+  }
 
   u64 isolate;
   if ((err = bpf_probe_read_user(&isolate, sizeof(void *), (void *)(isolate_addr)))) {
+    increment_metric(metricID_UnwindNodeAsyncIdErrReadIsolate);
     DEBUG_PRINT("Failed to read node custom labels current set pointer: %d", err);
     return false;
   }
 
-  u64 context_handle_ptr = isolate + 0x150;
+  u64 context_handle_ptr = isolate + proc->context_handle_offset;
   DEBUG_PRINT("node custom labels: context_handle_ptr = 0x%llx", context_handle_ptr);
 
   u64 context_handle;
   if ((err = bpf_probe_read_user(&context_handle, sizeof(void *), (void *)(context_handle_ptr)))) {
-    // TODO - implement this metric
-    /* increment_metric(metricID_UnwindNodeCustomLabelsErrReadData); */
+    increment_metric(metricID_UnwindNodeAsyncIdErrReadContextHandle);
     DEBUG_PRINT("Failed to read node custom labels current set pointer: %d", err);
     return false;
   }
@@ -382,46 +394,78 @@ static inline __attribute__((__always_inline__)) bool get_node_async_id(V8ProcIn
 
   u64 real_context_handle;
   if ((err = bpf_probe_read_user(&real_context_handle, sizeof(void *), (void *)(context_ptr)))) {
+    increment_metric(metricID_UnwindNodeAsyncIdErrReadRealContextHandle);
     DEBUG_PRINT("Failed to read real context handle: %d", err);
     return false;
   }
   DEBUG_PRINT("node custom labels: real_context_handle = 0x%llx", real_context_handle);
 
-  u64 native_context_ptr = real_context_handle + 0x1f;
+  u64 native_context_ptr = real_context_handle + proc->native_context_offset;
   DEBUG_PRINT("node custom labels: native_context_ptr = 0x%llx", native_context_ptr);
 
   u64 native_context;
   if ((err = bpf_probe_read_user(&native_context, sizeof(void *), (void *)(native_context_ptr)))) {
+    increment_metric(metricID_UnwindNodeAsyncIdErrReadNativeContext);
     DEBUG_PRINT("Failed to read native context: %d", err);
     return false;
   }
   DEBUG_PRINT("node custom labels: native_context = 0x%llx", native_context);
 
-  u64 embedder_data_ptr = native_context + 0x2f;
+  u64 embedder_data_ptr = native_context + proc->embedder_data_offset;
   DEBUG_PRINT("node custom labels: embedder_data_ptr = 0x%llx", embedder_data_ptr);
 
   u64 embedder_data;
   if ((err = bpf_probe_read_user(&embedder_data, sizeof(void *), (void *)(embedder_data_ptr)))) {
+    increment_metric(metricID_UnwindNodeAsyncIdErrReadEmbedderData);
     DEBUG_PRINT("Failed to read embedder data: %d", err);
     return false;
   }
   DEBUG_PRINT("node custom labels: embedder_data = 0x%llx", embedder_data);
 
-  u64 env_ptr_ptr = embedder_data + 0x10f;
+  u64 env_ptr_ptr = embedder_data + proc->environment_pointer_offset;
   DEBUG_PRINT("node custom labels: env_ptr_ptr = 0x%llx", env_ptr_ptr);
 
   u64 env_ptr;
   if ((err = bpf_probe_read_user(&env_ptr, sizeof(void *), (void *)(env_ptr_ptr)))) {
+    increment_metric(metricID_UnwindNodeAsyncIdErrReadEnvPtr);
     DEBUG_PRINT("Failed to read id field: %d", err);
     return false;
   }
   DEBUG_PRINT("node custom labels: env_ptr = 0x%llx", env_ptr);
 
-  u64 id_field_ptr = env_ptr + 0x488;
+  *env_ptr_out = env_ptr;
+  return true;
+}
+
+static inline __attribute__((__always_inline__)) bool get_node_async_id(V8ProcInfo *proc, u32 tid, u64 *out)
+{
+  int err;
+
+  u64 env_ptr;
+  // Try to get fresh env_ptr
+  if (get_node_env_ptr(proc, &env_ptr)) {
+    bpf_map_update_elem(&v8_cached_env_ptrs, &tid, &env_ptr, BPF_ANY);
+  } else {
+    // Fallback to cached value from previous successful extraction
+    u64 *cached_env_ptr = bpf_map_lookup_elem(&v8_cached_env_ptrs, &tid);
+    if (cached_env_ptr && *cached_env_ptr != 0) {
+      // TODO[btv] -- Figure out why the environment is sometimes null.
+      // It doesn't seem to matter in practice, since the environment rarely (never?)
+      // changes, so using the cached version is fine, but it's worth understanding anyway...
+      DEBUG_PRINT("node custom labels: using cached env_ptr = 0x%llx", *cached_env_ptr);
+      env_ptr = *cached_env_ptr;
+    } else {
+      DEBUG_PRINT("node custom labels: no cached env_ptr available");
+      return false;
+    }
+  }
+
+  u64 id_field_ptr = env_ptr + proc->execution_async_id_offset;
   DEBUG_PRINT("node custom labels: id_field_ptr = 0x%llx", id_field_ptr);
 
   u64 id_field;
   if ((err = bpf_probe_read_user(&id_field, sizeof(void *), (void *)(id_field_ptr)))) {
+    increment_metric(metricID_UnwindNodeAsyncIdErrReadIdField);
     DEBUG_PRINT("Failed to read id field: %d", err);
     return false;
   }
@@ -429,6 +473,7 @@ static inline __attribute__((__always_inline__)) bool get_node_async_id(V8ProcIn
 
   u64 bits;
   if ((err = bpf_probe_read_user(&bits, sizeof(u64), (void *)(id_field)))) {
+    increment_metric(metricID_UnwindNodeAsyncIdErrReadIdDouble);
     DEBUG_PRINT("Failed to read id double: %d", err);
     return false;
   }
@@ -561,7 +606,9 @@ get_labelset_for_async_id(u64 hm_addr, u64 id)
   u64 capacity = 1ULL << hm.log2_capacity;
 
   u64 labelset_rc_addr = 0;
-  for (int i = 0; i < 16; ++i) {
+  int i;
+  const int MAX_BUCKETS = 32;
+  for (i = 0; i < MAX_BUCKETS; ++i) {
     int pos = (h + i) % capacity;
     NativeCustomLabelsHmBucket bucket;
     if (bpf_probe_read_user(&bucket, sizeof(bucket), (void *)((u64)hm.buckets + pos * sizeof(NativeCustomLabelsHmBucket)))) {
@@ -576,8 +623,8 @@ get_labelset_for_async_id(u64 hm_addr, u64 id)
     }
   }
   if (!labelset_rc_addr) {
-    increment_metric(metricID_UnwindNodeClFailedTooManyBuckets);
-    DEBUG_PRINT("Spun for 16 buckets");
+    if (i == MAX_BUCKETS)
+          increment_metric(metricID_UnwindNodeClFailedTooManyBuckets);
     return 0;
   }
   u64 labelset_addr;
@@ -612,9 +659,12 @@ maybe_add_node_custom_labels(PerCPURecord *record)
   DEBUG_PRINT("[btv] hm addr: 0x%llx", hm_addr);
 
   u64 id;
-  bool success = get_node_async_id(v8_proc, &id);
+  bool success = get_node_async_id(v8_proc, record->trace.tid, &id);
   // TODO: increment success or faillure metric
   if (success) {
+    if (id == 0) {
+      increment_metric(metricID_UnwindNodeClWarnIdZero);
+    }
     u64 labelset_addr = get_labelset_for_async_id(hm_addr, id);
     labelset_addr = (u64)labelset_addr;
     if (labelset_addr) {
@@ -625,6 +675,7 @@ maybe_add_node_custom_labels(PerCPURecord *record)
       DEBUG_PRINT("cl: No labelset found in hashmap for async id %lld", id);
     }
   } else {
+    increment_metric(metricID_UnwindNodeClFailedGettingId);
   }
 }
 

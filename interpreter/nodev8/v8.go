@@ -1,3 +1,5 @@
+//go:generate go run ../../cmd/csv2go/main.go ../../complete_offsets.csv node_offsets_generated.go
+
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
@@ -154,6 +156,7 @@ package nodev8 // import "go.opentelemetry.io/ebpf-profiler/interpreter/nodev8"
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -486,6 +489,13 @@ type v8Data struct {
 
 	// version contains the V8 version
 	version uint32
+
+	// Node.js environment offsets
+	contextHandleOffset      uint32
+	nativeContextOffset      uint32
+	embedderDataOffset       uint32
+	environmentPointerOffset uint32
+	executionAsyncIdOffset   uint32
 
 	// bytecodeSizes contains the V8 bytecode length data
 	bytecodeSizes []byte
@@ -1819,6 +1829,12 @@ func (d *v8Data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Add
 	data := C.V8ProcInfo{
 		version: C.uint(d.version),
 
+		context_handle_offset:      C.uint(d.contextHandleOffset),
+		native_context_offset:      C.uint(d.nativeContextOffset),
+		embedder_data_offset:       C.uint(d.embedderDataOffset),
+		environment_pointer_offset: C.uint(d.environmentPointerOffset),
+		execution_async_id_offset:  C.uint(d.executionAsyncIdOffset),
+
 		fp_marker:          mapFramePointerOffset(vms.FramePointer.Context),
 		fp_function:        mapFramePointerOffset(vms.FramePointer.Function),
 		fp_bytecode_offset: mapFramePointerOffset(vms.FramePointer.BytecodeOffset),
@@ -2213,6 +2229,35 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 				d.bytecodeCount = 0
 				break
 			}
+		}
+	}
+
+	syms, err := ef.ReadSymbols()
+	if err != nil {
+		panic(err)
+	}
+	sym, err = syms.LookupSymbol("_ZZ21napi_get_node_versionE7version")
+	fmt.Printf("[btv] %v\n", sym)
+	if sym != nil && sym.Size >= 12 {
+		versBuf := make([]byte, 12)
+		if _, err = ef.ReadVirtualMemory(versBuf, int64(sym.Address)); err != nil {
+			panic("XXX")
+		}
+		fmt.Printf("[btv] %v\n", versBuf)
+		major := binary.LittleEndian.Uint32(versBuf[0:4])
+		minor := binary.LittleEndian.Uint32(versBuf[4:8])
+		patch := binary.LittleEndian.Uint32(versBuf[9:12])
+		
+		// Construct version string and look up Node.js environment offsets
+		nodeVersion := fmt.Sprintf("v%d.%d.%d", major, minor, patch)
+		if offsets, found := nodeOffsetTable[nodeVersion]; found {
+			d.contextHandleOffset = offsets.contextHandle
+			d.nativeContextOffset = offsets.nativeContext
+			d.embedderDataOffset = offsets.embedderData
+			d.environmentPointerOffset = offsets.environmentPointer
+			d.executionAsyncIdOffset = offsets.executionAsyncId
+		} else {
+			fmt.Printf("[btv] No offsets found for Node.js version %s\n", nodeVersion)
 		}
 	}
 
