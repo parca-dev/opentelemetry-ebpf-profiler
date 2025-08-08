@@ -228,7 +228,7 @@ const (
 
 var (
 	// regex for the interpreter executable or shared library
-	v8Regex = regexp.MustCompile(`^(?:.*/)?(?:node|nsolid)(\d+)?$|^(?:.*/)libnode\.so(\.\d+)?$`)
+	v8Regex = regexp.MustCompile(`^(?:.*/)?(?:node|nsolid)(-v\d+\.\d+\.\d+)?(\d+)?$|^(?:.*/)libnode\.so(\.\d+)?$`)
 
 	// The FileID used for V8 stub frames
 	v8StubsFileID = libpf.NewStubFileID(libpf.V8Frame)
@@ -2247,7 +2247,7 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		major := binary.LittleEndian.Uint32(versBuf[0:4])
 		minor := binary.LittleEndian.Uint32(versBuf[4:8])
 		patch := binary.LittleEndian.Uint32(versBuf[8:12])
-		
+
 		// Construct version string and look up Node.js environment offsets
 		nodeVersion := fmt.Sprintf("v%d.%d.%d", major, minor, patch)
 		if offsets, found := nodeOffsetTable[nodeVersion]; found {
