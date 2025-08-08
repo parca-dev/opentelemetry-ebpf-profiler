@@ -78,7 +78,7 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 		}
 		if isNodeExtension {
 			currentHmTlsAddr, hasCurrentHm = tlsDescs[currentHmTlsExport]
-			fmt.Printf("btv %x\n", currentHmTlsAddr)
+			fmt.Printf("[btv_v8_dbg] %x\n", currentHmTlsAddr)
 		}
 	} else {
 		offset, err := ef.LookupTLSSymbolOffset(currentSetTlsExport)

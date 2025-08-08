@@ -358,11 +358,11 @@ static inline __attribute__((__always_inline__)) bool get_node_env_ptr(V8ProcInf
   int err;
 
   // DEBUG_PRINT the new Node.js environment offsets
-  DEBUG_PRINT("[btv] context_handle_offset=0x%x", proc->context_handle_offset);
-  DEBUG_PRINT("[btv] native_context_offset=0x%x", proc->native_context_offset);
-  DEBUG_PRINT("[btv] embedder_data_offset=0x%x", proc->embedder_data_offset);
-  DEBUG_PRINT("[btv] environment_pointer_offset=0x%x", proc->environment_pointer_offset);
-  DEBUG_PRINT("[btv] execution_async_id_offset=0x%x", proc->execution_async_id_offset);
+  DEBUG_PRINT("[btv_v8_dbg] context_handle_offset=0x%x", proc->context_handle_offset);
+  DEBUG_PRINT("[btv_v8_dbg] native_context_offset=0x%x", proc->native_context_offset);
+  DEBUG_PRINT("[btv_v8_dbg] embedder_data_offset=0x%x", proc->embedder_data_offset);
+  DEBUG_PRINT("[btv_v8_dbg] environment_pointer_offset=0x%x", proc->environment_pointer_offset);
+  DEBUG_PRINT("[btv_v8_dbg] execution_async_id_offset=0x%x", proc->execution_async_id_offset);
 
   u64 isolate_addr = addr_for_tls_symbol(proc->isolate_addr, true);
   DEBUG_PRINT("node custom labels: isolate_addr = 0x%llx", isolate_addr);
@@ -644,11 +644,13 @@ maybe_add_node_custom_labels(PerCPURecord *record)
   V8ProcInfo *v8_proc = bpf_map_lookup_elem(&v8_procs, &pid);
   NativeCustomLabelsProcInfo *proc = bpf_map_lookup_elem(&cl_procs, &pid);
   if (!v8_proc || !proc || !proc->has_current_hm) {
-    DEBUG_PRINT("cl: %d does not support node custom labels", pid);
+    DEBUG_PRINT("cl: %d does not support node custom labels ", pid);
+    DEBUG_PRINT("[btv_v8_dbg]: proc: %p, v8_proc: %p, proc->has_current_hm: %s", proc, v8_proc,
+                proc ? (proc->has_current_hm ? "true" : "false") : "N/A");
     return;
   }
   u64 hm_ptr_addr = addr_for_tls_symbol(proc->current_hm_tls_offset, false);
-  DEBUG_PRINT("[btv] hm pointer addr: 0x%llx", hm_ptr_addr);
+  DEBUG_PRINT("[btv_v8_dbg] hm pointer addr: 0x%llx", hm_ptr_addr);
 
   u64 hm_addr;
   if (bpf_probe_read_user(&hm_addr, sizeof(hm_addr), (void *)hm_ptr_addr)) {
@@ -656,7 +658,7 @@ maybe_add_node_custom_labels(PerCPURecord *record)
     DEBUG_PRINT("Failed to read hm pointer");
     return;
   }
-  DEBUG_PRINT("[btv] hm addr: 0x%llx", hm_addr);
+  DEBUG_PRINT("[btv_v8_dbg] hm addr: 0x%llx", hm_addr);
 
   u64 id;
   bool success = get_node_async_id(v8_proc, record->trace.tid, &id);

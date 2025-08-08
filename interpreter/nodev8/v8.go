@@ -2237,7 +2237,7 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		panic(err)
 	}
 	sym, err = syms.LookupSymbol("_ZZ21napi_get_node_versionE7version")
-	fmt.Printf("[btv] %v\n", sym)
+	fmt.Printf("[btv_v8_dbg] %v\n", sym)
 	if sym != nil && sym.Size >= 12 {
 		versBuf := make([]byte, 12)
 		if _, err = ef.ReadVirtualMemory(versBuf, int64(sym.Address)); err != nil {
@@ -2246,7 +2246,7 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		fmt.Printf("[btv] %v\n", versBuf)
 		major := binary.LittleEndian.Uint32(versBuf[0:4])
 		minor := binary.LittleEndian.Uint32(versBuf[4:8])
-		patch := binary.LittleEndian.Uint32(versBuf[9:12])
+		patch := binary.LittleEndian.Uint32(versBuf[8:12])
 		
 		// Construct version string and look up Node.js environment offsets
 		nodeVersion := fmt.Sprintf("v%d.%d.%d", major, minor, patch)
