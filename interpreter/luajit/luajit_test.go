@@ -194,7 +194,7 @@ outer:
 			for ; j >= 0; j-- {
 				frameID := luajit.CreateFrameID(&frames[j])
 				sym := r.getFunctionName(frameID)
-				if sym == s {
+				if sym.String() == s {
 					continue outer
 				}
 			}
@@ -282,7 +282,7 @@ func makeRequests(ctx context.Context, t *testing.T, wg *sync.WaitGroup,
 	}()
 }
 
-type symbolMap map[libpf.FrameID]string
+type symbolMap map[libpf.FrameID]libpf.String
 
 type mockReporter struct {
 	mu      sync.Mutex
@@ -303,7 +303,7 @@ func (m *mockReporter) FrameMetadata(args *reporter.FrameMetadataArgs) {
 	m.symbols[args.FrameID] = args.FunctionName
 }
 
-func (m *mockReporter) getFunctionName(frameID libpf.FrameID) string {
+func (m *mockReporter) getFunctionName(frameID libpf.FrameID) libpf.String {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.symbols[frameID]

@@ -38,7 +38,7 @@ import (
 	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
 )
 
-type symbolMap map[libpf.FrameID]string
+type symbolMap map[libpf.FrameID]libpf.String
 
 const N_WORKERS int = 8
 
@@ -289,5 +289,5 @@ func (m *mockReporter) FrameMetadata(args *reporter.FrameMetadataArgs) {
 func (m *mockReporter) getFunctionName(frameID libpf.FrameID) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.symbols[frameID]
+	return m.symbols[frameID].String()
 }
