@@ -21,7 +21,8 @@ import (
 func extractTLSGOffset(f *pfelf.File) (int32, error) {
 	pclntab, err := elfunwindinfo.NewGopclntab(f)
 	if err != nil {
-		return 0, err
+		log.Debugf("Failed to find symbols (%v) using default TLSG offset", err)
+		return -8, nil
 	}
 	defer pclntab.Close()
 
