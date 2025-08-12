@@ -9,6 +9,7 @@
   "author": "The Parca Authors",
   "license": "Apache-2.0",
   "dependencies": {
-    "@polarsignals/custom-labels": "github:polarsignals/custom-labels#node-cl-wip"
+    "@polarsignals/custom-labels": "github:polarsignals/custom-labels#node-cl-wip",
+    "marked": "^16.1.2"
   }
 }

@@ -1,7 +1,12 @@
 const { parentPort, workerData } = require('worker_threads');
 const fs = require('fs/promises');
-const marked = require('marked');
 const cl = require('@polarsignals/custom-labels');
+
+let marked;
+(async () => {
+  const markedModule = await import('marked');
+  marked = markedModule.marked;
+})();
 
 const workerId = workerData.workerId;
 
@@ -18,32 +23,38 @@ function myrand(min, max) {
 parentPort.on('message', async ({ filePath, requestId }) => {
   try {
     await cl.withLabels(async () => {
-      const data = await fs.readFile(filePath);
+      let data;
+      try {
+        data = await fs.readFile(filePath);
+      } catch (error) {
+        if (error.code === 'ENOENT') {
+          parentPort.postMessage({
+            requestId,
+            success: false,
+            error: 'File not found'
+          });
+          return;
+        }
+        throw error;
+      }
       
       const dur = myrand(0, 1000);
       await cl.withLabels(() => mysleep(dur), "sleepDur", "" + dur);
 
-      let contents = [];
       const md = filePath.endsWith(".md");
-      const n = 1;
       
-      for (let i = 0; i < n; ++i) {
-        cl.withLabels(() => {
-          let content;
-          if (md) {
-            content = marked.parse(data.toString());
-          } else {
-            content = data.toString();
-          }
-          contents[i] = content;
-        }, "i", `${i}`);
+      let content;
+      if (md) {
+          content = marked.parse(data.toString());
+      } else {
+          content = data.toString();
       }
 
       const htmlResponse = `
         <html>
           <head><title>${filePath}</title></head>
           <body>
-${contents[Math.floor(Math.random() * n)]}
+${content}
           </body>
         </html>
       `;
