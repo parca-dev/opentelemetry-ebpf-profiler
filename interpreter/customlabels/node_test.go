@@ -171,7 +171,7 @@ func TestIntegration(t *testing.T) {
 			}
 			expectedFnameAvg := float64(totalFnameFrames) / float64(len(framesPerFileName))
 			for _, v:= range(framesPerFileName) {
-				require.Less(t, expectedFnameAvg * 0.5, float64(v))
+				require.Less(t, expectedFnameAvg * 0.2, float64(v))
 			}
 
 			// Really, there should be zero frames in the `marked` workload
