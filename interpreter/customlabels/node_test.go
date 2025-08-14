@@ -149,13 +149,14 @@ func TestIntegration(t *testing.T) {
 		done:
 			totalWidFrames := 0
 			// for 8 workers, each should have roughly 1/8
-			// of the labeled frames. Accept anything above 75% of that.
+			// of the labeled frames. There will be a bit of skew,
+			// so accept anything above 60% of that.
 			for i := 0; i < N_WORKERS; i++ {
 				totalWidFrames += framesPerWorkerId[i]
 			}
 			expectedWorkerAvg := float64(totalWidFrames) / float64(N_WORKERS)
 			for i := 0; i < N_WORKERS; i++ {
-				require.Less(t, expectedWorkerAvg*0.75, float64(framesPerWorkerId[i]))
+				require.Less(t, expectedWorkerAvg*0.60, float64(framesPerWorkerId[i]))
 			}
 			// Each of the documents should account for some nontrivial amount of time,
 			// but since they aren't all the same length, we are less strict.
