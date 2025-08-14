@@ -42,9 +42,9 @@ type testLogConsumer struct {
 	t *testing.T
 }
 
-func (tlc *testLogConsumer) Accept(l testcontainers.Log) {
-	tlc.t.Logf("[%s] %s", l.LogType, string(l.Content))
-}
+// func (tlc *testLogConsumer) Accept(l testcontainers.Log) {
+// 	tlc.t.Logf("[%s] %s", l.LogType, string(l.Content))
+// }
 
 const N_WORKERS int = 8
 
@@ -82,7 +82,7 @@ func TestIntegration(t *testing.T) {
 			require.NoError(t, err)
 
 			r := &mockReporter{symbols: make(symbolMap)}
-			traceCh, trc := testutils.StartTracer(ctx, t, enabledTracers, r)
+			traceCh, trc := testutils.StartTracer(ctx, t, enabledTracers, r, false)
 
 			testHTTPEndpoint(ctx, t, cont)
 			framesPerWorkerId := make(map[int]int)
@@ -194,9 +194,9 @@ func startContainer(ctx context.Context, t *testing.T, nodeVersion string) testc
 				},
 			},
 			ExposedPorts: []string{"80/tcp"},
-			LogConsumerCfg: &testcontainers.LogConsumerConfig{
-				Consumers: []testcontainers.LogConsumer{&testLogConsumer{t: t}},
-			},
+			// LogConsumerCfg: &testcontainers.LogConsumerConfig{
+			// 	Consumers: []testcontainers.LogConsumer{&testLogConsumer{t: t}},
+			// },
 			WaitingFor: wait.ForHTTP("/docs/AUTHORS.md"),
 		},
 		Started: true,

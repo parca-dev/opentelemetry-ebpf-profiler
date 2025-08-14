@@ -49,22 +49,38 @@ for (let i = 0; i < WORKER_COUNT; i++) {
   workers.push(worker);
 }
 
-function processWithWorker(filePath, res) {
+function generateRandomString() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let result = '';
+  for (let i = 0; i < 10; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
+}
+
+function processWithWorker(filePath, res, randomLabels) {
   const requestId = ++requestIdCounter;
   pendingRequests.set(requestId, { res });
   
   const worker = workers[currentWorker];
   currentWorker = (currentWorker + 1) % WORKER_COUNT;
-  worker.postMessage({ filePath, requestId });
+  worker.postMessage({ filePath, requestId, randomLabels });
 }
 
 function startServer() {
   const server = http.createServer((req, res) => {
       const filePath = path.join(__dirname, req.url);
       
+      const randomLabels = {};
+      for (let i = 1; i <= 8; i++) {
+        randomLabels[`r${i}`] = generateRandomString();
+      }
+      
+      const labelArgs = Array.from({length: 8}, (_, i) => [`r${i+1}`, randomLabels[`r${i+1}`]]).flat();
+      
       cl.withLabels(() => {
-          processWithWorker(filePath, res);
-      }, "filePath", filePath);
+          processWithWorker(filePath, res, randomLabels);
+      }, "filePath", filePath, ...labelArgs);
   });
 
   server.listen(PORT, () => {

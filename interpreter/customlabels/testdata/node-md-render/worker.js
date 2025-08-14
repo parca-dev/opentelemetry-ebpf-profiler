@@ -20,7 +20,7 @@ function myrand(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
-parentPort.on('message', async ({ filePath, requestId }) => {
+parentPort.on('message', async ({ filePath, requestId, randomLabels }) => {
   try {
     await cl.withLabels(async () => {
       let data;
@@ -64,7 +64,7 @@ ${content}
         success: true,
         html: htmlResponse
       });
-    }, "workerId", `${workerId}`, "filePath", filePath);
+    }, "workerId", `${workerId}`, "filePath", filePath, ...Object.entries(randomLabels || {}).flat());
   } catch (error) {
     parentPort.postMessage({
       requestId,
