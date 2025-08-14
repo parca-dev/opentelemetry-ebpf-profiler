@@ -13,9 +13,11 @@ package customlabels_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
+	"net"
 	"net/http"
 	"path"
 	"path/filepath"
@@ -37,14 +39,6 @@ import (
 )
 
 type symbolMap map[libpf.FrameID]string
-
-type testLogConsumer struct {
-	t *testing.T
-}
-
-// func (tlc *testLogConsumer) Accept(l testcontainers.Log) {
-// 	tlc.t.Logf("[%s] %s", l.LogType, string(l.Content))
-// }
 
 const N_WORKERS int = 8
 
@@ -69,7 +63,7 @@ func TestIntegration(t *testing.T) {
 		"22.18.0",
 		"20.19.4",
 	} {
-		name := fmt.Sprintf("node-v%s", nodeVersion)
+		name := "node-v" + nodeVersion
 		t.Run(name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			t.Cleanup(cancel)
@@ -174,16 +168,21 @@ func TestIntegration(t *testing.T) {
 				require.Less(t, expectedFnameAvg*0.2, float64(v))
 			}
 
-			// Really, there should be zero frames in the `marked` workload
-			// that aren't under labels, but accept a 1% slop because the unwinder isn't perfect (e.g. it might
-			// interrupt the process when the Node environment is in an undefined state)
+			// Really, there should be zero frames in the
+			// `marked` workload that aren't under labels,
+			// but accept a 1% slop because the unwinder
+			// isn't perfect (e.g. it might interrupt the
+			// process when the Node environment is in an
+			// undefined state)
 			require.Less(t, 100*unlabeledWorkloadFrames, totalWorkloadFrames)
 		})
 	}
 }
 
-func startContainer(ctx context.Context, t *testing.T, nodeVersion string) testcontainers.Container {
+func startContainer(ctx context.Context, t *testing.T,
+	nodeVersion string) testcontainers.Container {
 	t.Log("starting container for node version", nodeVersion)
+	//nolint:dogsled
 	_, path, _, _ := runtime.Caller(0)
 	cont, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -194,10 +193,7 @@ func startContainer(ctx context.Context, t *testing.T, nodeVersion string) testc
 				},
 			},
 			ExposedPorts: []string{"80/tcp"},
-			// LogConsumerCfg: &testcontainers.LogConsumerConfig{
-			// 	Consumers: []testcontainers.LogConsumer{&testLogConsumer{t: t}},
-			// },
-			WaitingFor: wait.ForHTTP("/docs/AUTHORS.md"),
+			WaitingFor:   wait.ForHTTP("/docs/AUTHORS.md"),
 		},
 		Started: true,
 	})
@@ -215,34 +211,54 @@ func testHTTPEndpoint(ctx context.Context, t *testing.T, cont testcontainers.Con
 	port, err := cont.MappedPort(ctx, "80")
 	require.NoError(t, err)
 
-	baseURL := fmt.Sprintf("http://%s:%s", host, port.Port())
+	baseURL := "http://" + net.JoinHostPort(host, port.Port())
 
 	var wg sync.WaitGroup
 
+	var errs []error
 	for i := 0; i < numGoroutines; i++ {
 		wg.Add(1)
+		errs = append(errs, nil)
 		go func() {
 			defer wg.Done()
 
 			for j := 0; j < requestsPerGoroutine; j++ {
+				//nolint:gosec
 				file := files[rand.Intn(len(files))]
+
 				url := fmt.Sprintf("%s/docs/%s", baseURL, file)
 
+				//nolint:gosec
 				resp, err := http.Get(url)
-				require.NoError(t, err)
+				if err != nil {
+					errs[i] = err
+					return
+				}
+
 				// if we don't read body to completion, the http library will kill the connection
 				// instead of reusing it, and we might run out of ports.
 				_, err = io.ReadAll(resp.Body)
-				require.NoError(t, err)
-				err = resp.Body.Close()
-				require.NoError(t, err)
+				if err != nil {
+					errs[i] = err
+					return
+				}
 
-				require.Equal(t, http.StatusOK, resp.StatusCode, "Expected status 200 for %s", file)
+				err = resp.Body.Close()
+				if err != nil {
+					errs[i] = err
+					return
+				}
+
+				if http.StatusOK != resp.StatusCode {
+					errs[i] = fmt.Errorf("Expected status 200 for %s", file)
+					return
+				}
 			}
 		}()
 	}
 
 	wg.Wait()
+	require.NoError(t, errors.Join(errs...))
 }
 
 type mockReporter struct {

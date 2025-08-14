@@ -10,6 +10,7 @@ import (
 	"text/template"
 )
 
+//nolint:lll
 const templateStr = `// Code generated from complete_offsets.csv; DO NOT EDIT.
 
 package nodev8
@@ -56,7 +57,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error opening input file: %v\n", err)
 		os.Exit(1)
 	}
-	defer file.Close()
 
 	reader := csv.NewReader(file)
 	records, err := reader.ReadAll()
@@ -75,35 +75,40 @@ func main() {
 	for i := 1; i < len(records); i++ {
 		record := records[i]
 		if len(record) != 6 {
-			fmt.Fprintf(os.Stderr, "Invalid record at line %d: expected 6 columns, got %d\n", i+1, len(record))
+			fmt.Fprintf(os.Stderr,
+				"Invalid record at line %d: expected 6 columns, got %d\n",
+				i+1, len(record))
 			continue
 		}
 
-		contextHandle, err := strconv.ParseUint(strings.TrimSpace(record[1]), 10, 32)
+		var contextHandle, nativeContext, embedderData, environmentPointer, executionAsyncId uint64
+		contextHandle, err = strconv.ParseUint(strings.TrimSpace(record[1]), 10, 32)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error parsing contextHandle at line %d: %v\n", i+1, err)
 			continue
 		}
 
-		nativeContext, err := strconv.ParseUint(strings.TrimSpace(record[2]), 10, 32)
+		nativeContext, err = strconv.ParseUint(strings.TrimSpace(record[2]), 10, 32)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error parsing nativeContext at line %d: %v\n", i+1, err)
+			fmt.Fprintf(os.Stderr,
+				"Error parsing nativeContext at line %d: %v\n",
+				i+1, err)
 			continue
 		}
 
-		embedderData, err := strconv.ParseUint(strings.TrimSpace(record[3]), 10, 32)
+		embedderData, err = strconv.ParseUint(strings.TrimSpace(record[3]), 10, 32)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error parsing embedderData at line %d: %v\n", i+1, err)
 			continue
 		}
 
-		environmentPointer, err := strconv.ParseUint(strings.TrimSpace(record[4]), 10, 32)
+		environmentPointer, err = strconv.ParseUint(strings.TrimSpace(record[4]), 10, 32)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error parsing environmentPointer at line %d: %v\n", i+1, err)
 			continue
 		}
 
-		executionAsyncId, err := strconv.ParseUint(strings.TrimSpace(record[5]), 10, 32)
+		executionAsyncId, err = strconv.ParseUint(strings.TrimSpace(record[5]), 10, 32)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error parsing executionAsyncId at line %d: %v\n", i+1, err)
 			continue
@@ -120,26 +125,27 @@ func main() {
 	}
 
 	// Create output directory if needed
-	if err := os.MkdirAll(filepath.Dir(outputFile), 0755); err != nil {
+	if err = os.MkdirAll(filepath.Dir(outputFile), 0o755); err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating output directory: %v\n", err)
 		os.Exit(1)
 	}
 
 	// Generate Go file
-	tmpl, err := template.New("offsets").Parse(templateStr)
+	var tmpl *template.Template
+	tmpl, err = template.New("offsets").Parse(templateStr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error parsing template: %v\n", err)
 		os.Exit(1)
 	}
 
-	outFile, err := os.Create(outputFile)
+	var outFile *os.File
+	outFile, err = os.Create(outputFile)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating output file: %v\n", err)
 		os.Exit(1)
 	}
-	defer outFile.Close()
 
-	if err := tmpl.Execute(outFile, data); err != nil {
+	if err = tmpl.Execute(outFile, data); err != nil {
 		fmt.Fprintf(os.Stderr, "Error executing template: %v\n", err)
 		os.Exit(1)
 	}

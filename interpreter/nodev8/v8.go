@@ -228,7 +228,7 @@ const (
 
 var (
 	// regex for the interpreter executable or shared library
-	v8Regex = regexp.MustCompile(`^(?:.*/)?(?:node|nsolid)(-v\d+\.\d+\.\d+)?(\d+)?$|^(?:.*/)libnode\.so(\.\d+)?$`)
+	v8Regex = regexp.MustCompile(`^(?:.*/)?(?:node|nsolid)(\d+)?$|^(?:.*/)libnode\.so(\.\d+)?$`)
 
 	// The FileID used for V8 stub frames
 	v8StubsFileID = libpf.NewStubFileID(libpf.V8Frame)
@@ -2174,7 +2174,7 @@ func (d *v8Data) loadNodeClData(ef *pfelf.File) error {
 	}
 
 	if sym == nil {
-		return fmt.Errorf("Node version symbol not found")
+		return errors.New("Node version symbol not found")
 	}
 
 	if sym.Size < 12 {
@@ -2273,7 +2273,7 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		}
 	}
 
-	if err := d.loadNodeClData(ef); err != nil {
+	if err = d.loadNodeClData(ef); err != nil {
 		log.Warnf("Failed to load extra data for Node.js custom labels handling: %v", err)
 	}
 
