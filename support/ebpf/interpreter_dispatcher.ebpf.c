@@ -342,7 +342,8 @@ static inline __attribute__((__always_inline__)) u64 integral_double_to_int(u64 
 // which got it from public-domain code.
 //
 // Changing this function is a breaking ABI change!
-static u64 custom_labels_hm_hash(u64 x) {
+static u64 custom_labels_hm_hash(u64 x)
+{
   x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9UL;
   x = (x ^ (x >> 27)) * 0x94d049bb133111ebUL;
   x = x ^ (x >> 31);
@@ -352,7 +353,8 @@ static u64 custom_labels_hm_hash(u64 x) {
 // Extracts the Node.js environment pointer from V8 isolate by traversing
 // through V8 internal structures: isolate -> context_handle -> real_context_handle
 // -> native_context -> embedder_data -> env_ptr
-static inline __attribute__((__always_inline__)) bool get_node_env_ptr(V8ProcInfo *proc, u64 *env_ptr_out)
+static inline __attribute__((__always_inline__)) bool
+get_node_env_ptr(V8ProcInfo *proc, u64 *env_ptr_out)
 {
   int err;
 
@@ -435,7 +437,8 @@ static inline __attribute__((__always_inline__)) bool get_node_env_ptr(V8ProcInf
   return true;
 }
 
-static inline __attribute__((__always_inline__)) bool get_node_async_id(V8ProcInfo *proc, u32 tid, u64 *out)
+static inline __attribute__((__always_inline__)) bool
+get_node_async_id(V8ProcInfo *proc, u32 tid, u64 *out)
 {
   int err;
 
@@ -486,7 +489,7 @@ static inline __attribute__((__always_inline__)) bool
 read_labelset_into_trace(PerCPURecord *record, NativeCustomLabelsSet *p_current_set)
 {
   int err;
-  
+
   NativeCustomLabelsSet current_set;
   if ((err = bpf_probe_read_user(&current_set, sizeof(current_set), p_current_set))) {
     increment_metric(metricID_UnwindNativeCustomLabelsErrReadData);
@@ -584,18 +587,17 @@ maybe_add_native_custom_labels(PerCPURecord *record)
     increment_metric(metricID_UnwindNativeCustomLabelsAddErrors);
 }
 
-static inline __attribute__((__always_inline__)) u64
-get_labelset_for_async_id(u64 hm_addr, u64 id)
+static inline __attribute__((__always_inline__)) u64 get_labelset_for_async_id(u64 hm_addr, u64 id)
 {
   u64 h = custom_labels_hm_hash(id);
-  
+
   NativeCustomLabelsHm hm;
   if (bpf_probe_read_user(&hm, sizeof(hm), (void *)hm_addr)) {
     increment_metric(metricID_UnwindNodeClFailedReadHmStruct);
     DEBUG_PRINT("Failed to read hashmap structure");
     return 0;
   }
-  
+
   u64 capacity = 1ULL << hm.log2_capacity;
 
   u64 labelset_rc_addr = 0;
@@ -604,12 +606,15 @@ get_labelset_for_async_id(u64 hm_addr, u64 id)
   for (i = 0; i < MAX_BUCKETS; ++i) {
     int pos = (h + i) % capacity;
     NativeCustomLabelsHmBucket bucket;
-    if (bpf_probe_read_user(&bucket, sizeof(bucket), (void *)((u64)hm.buckets + pos * sizeof(NativeCustomLabelsHmBucket)))) {
+    if (bpf_probe_read_user(
+          &bucket,
+          sizeof(bucket),
+          (void *)((u64)hm.buckets + pos * sizeof(NativeCustomLabelsHmBucket)))) {
       increment_metric(metricID_UnwindNodeClFailedReadBucket);
       DEBUG_PRINT("Failed to read bucket at position %d", pos);
       return 0;
     }
-    
+
     if (!bucket.value || bucket.key == id) {
       labelset_rc_addr = (u64)bucket.value;
       break;
@@ -617,7 +622,7 @@ get_labelset_for_async_id(u64 hm_addr, u64 id)
   }
   if (!labelset_rc_addr) {
     if (i == MAX_BUCKETS)
-          increment_metric(metricID_UnwindNodeClFailedTooManyBuckets);
+      increment_metric(metricID_UnwindNodeClFailedTooManyBuckets);
     return 0;
   }
   u64 labelset_addr;
@@ -633,8 +638,8 @@ get_labelset_for_async_id(u64 hm_addr, u64 id)
 static inline __attribute__((__always_inline__)) void
 maybe_add_node_custom_labels(PerCPURecord *record)
 {
-  u32 pid             = record->trace.pid;
-  V8ProcInfo *v8_proc = bpf_map_lookup_elem(&v8_procs, &pid);
+  u32 pid                          = record->trace.pid;
+  V8ProcInfo *v8_proc              = bpf_map_lookup_elem(&v8_procs, &pid);
   NativeCustomLabelsProcInfo *proc = bpf_map_lookup_elem(&cl_procs, &pid);
   if (!v8_proc || !proc || !proc->has_current_hm) {
     DEBUG_PRINT("cl: %d does not support node custom labels ", pid);
@@ -657,7 +662,7 @@ maybe_add_node_custom_labels(PerCPURecord *record)
       increment_metric(metricID_UnwindNodeClWarnIdZero);
     }
     u64 labelset_addr = get_labelset_for_async_id(hm_addr, id);
-    labelset_addr = (u64)labelset_addr;
+    labelset_addr     = (u64)labelset_addr;
     if (labelset_addr) {
       DEBUG_PRINT("cl: labelset addr is 0x%llx", labelset_addr);
       read_labelset_into_trace(record, (NativeCustomLabelsSet *)labelset_addr);
