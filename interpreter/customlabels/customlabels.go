@@ -129,8 +129,8 @@ func (d data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID,
 
 	procInfo := C.NativeCustomLabelsProcInfo{
 		current_set_tls_offset: C.u64(currentSetTlsOffset),
-		has_current_hm: C.bool(d.hasCurrentHm),
-		current_hm_tls_offset: C.u64(currentHmTlsOffset),
+		has_current_hm:         C.bool(d.hasCurrentHm),
+		current_hm_tls_offset:  C.u64(currentHmTlsOffset),
 	}
 	if err := ebpf.UpdateProcData(libpf.CustomLabels, pid, unsafe.Pointer(&procInfo)); err != nil {
 		return nil, err

@@ -119,7 +119,7 @@ func TestIntegration(t *testing.T) {
 						"readFileHandle",
 					}
 					hasWorkloadFrame := false
-					for i, _ := range ct.FrameTypes {
+					for i := range ct.FrameTypes {
 						if ct.FrameTypes[i] == libpf.V8Frame {
 							id := libpf.NewFrameID(ct.Files[i], ct.Linenos[i])
 							name := r.getFunctionName(id)
@@ -159,25 +159,25 @@ func TestIntegration(t *testing.T) {
 			for i := 0; i < N_WORKERS; i++ {
 				totalWidFrames += framesPerWorkerId[i]
 			}
-			expectedWorkerAvg := float64(totalWidFrames)/float64(N_WORKERS)
+			expectedWorkerAvg := float64(totalWidFrames) / float64(N_WORKERS)
 			for i := 0; i < N_WORKERS; i++ {
-				require.Less(t, expectedWorkerAvg * 0.75, float64(framesPerWorkerId[i]))
+				require.Less(t, expectedWorkerAvg*0.75, float64(framesPerWorkerId[i]))
 			}
 			// Each of the documents should account for some nontrivial amount of time,
 			// but since they aren't all the same length, we are less strict.
 			totalFnameFrames := 0
-			for _, v := range(framesPerFileName) {
+			for _, v := range framesPerFileName {
 				totalFnameFrames += v
 			}
 			expectedFnameAvg := float64(totalFnameFrames) / float64(len(framesPerFileName))
-			for _, v:= range(framesPerFileName) {
-				require.Less(t, expectedFnameAvg * 0.2, float64(v))
+			for _, v := range framesPerFileName {
+				require.Less(t, expectedFnameAvg*0.2, float64(v))
 			}
 
 			// Really, there should be zero frames in the `marked` workload
 			// that aren't under labels, but accept a 1% slop because the unwinder isn't perfect (e.g. it might
 			// interrupt the process when the Node environment is in an undefined state)
-			require.Less(t, 100 * unlabeledWorkloadFrames, totalWorkloadFrames)
+			require.Less(t, 100*unlabeledWorkloadFrames, totalWorkloadFrames)
 		})
 	}
 }
