@@ -59,7 +59,7 @@ func TestIntegration(t *testing.T) {
 	}
 
 	for _, nodeVersion := range []string{
-		// As of today, node:latest is v24.4.0 (v24.5.0).
+		// As of today, node:latest is v24.6.0
 		// Eventually, it will be something where the offsets have changed,
 		// and start failing. At that point, update the list of offsets
 		// so this passes, and also add a test for the latest v24 if latest
