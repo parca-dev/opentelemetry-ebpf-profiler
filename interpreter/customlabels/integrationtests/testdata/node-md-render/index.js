@@ -72,11 +72,11 @@ function startServer() {
       const filePath = path.join(__dirname, req.url);
       
       const randomLabels = {};
-      for (let i = 1; i <= 8; i++) {
+      for (let i = 1; i <= 7; i++) {
         randomLabels[`r${i}`] = generateRandomString();
       }
       
-      const labelArgs = Array.from({length: 8}, (_, i) => [`r${i+1}`, randomLabels[`r${i+1}`]]).flat();
+      const labelArgs = Array.from({length: 7}, (_, i) => [`r${i+1}`, randomLabels[`r${i+1}`]]).flat();
       
       cl.withLabels(() => {
           processWithWorker(filePath, res, randomLabels);

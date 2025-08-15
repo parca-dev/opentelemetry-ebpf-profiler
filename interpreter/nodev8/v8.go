@@ -1,4 +1,4 @@
-//go:generate go run ../../cmd/csv2go/main.go ../../complete_offsets.csv node_offsets_generated.go
+//go:generate go run ../../tools/csv2go.go ../../tools/complete_offsets.csv node_offsets_generated.go
 
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0

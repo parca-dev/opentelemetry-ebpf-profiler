@@ -20,6 +20,30 @@ function myrand(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
+function f(data) {
+    return cl.withLabels(() => marked.parse(data.toString()), "i", "6");
+}
+
+function e(data) {
+    return cl.withLabels(() => f(data), "i", "5");
+}
+
+function d(data) {
+    return cl.withLabels(() => e(data), "i", "4");
+}
+
+function c(data) {
+    return cl.withLabels(() => d(data), "i", "3");
+}
+
+function b(data) {
+    return cl.withLabels(() => c(data), "i", "2");
+}
+
+function a(data) {
+    return cl.withLabels(() => b(data), "i", "1");
+}
+
 parentPort.on('message', async ({ filePath, requestId, randomLabels }) => {
   try {
     await cl.withLabels(async () => {
@@ -45,7 +69,8 @@ parentPort.on('message', async ({ filePath, requestId, randomLabels }) => {
       
       let content;
       if (md) {
-          content = marked.parse(data.toString());
+          content =
+              cl.withLabels(() => a(data), "i", "0");
       } else {
           content = data.toString();
       }

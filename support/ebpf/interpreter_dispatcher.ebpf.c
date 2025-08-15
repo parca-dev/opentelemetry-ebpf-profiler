@@ -147,7 +147,7 @@ bpf_map_def SEC("maps") cl_procs = {
   .max_entries = 128,
 };
 
-static inline __attribute__((__always_inline__)) void *
+static EBPF_INLINE void *
 get_m_ptr_legacy(struct GoCustomLabelsOffsets *offs, UnwindState *state)
 {
   long res;
@@ -220,7 +220,7 @@ static EBPF_INLINE void *get_m_ptr(struct GoLabelsOffsets *offs, UnwindState *st
   return m_ptr_addr;
 }
 
-static inline __attribute__((__always_inline__)) void
+static EBPF_INLINE void
 maybe_add_go_custom_labels_legacy(struct pt_regs *ctx, PerCPURecord *record)
 {
   u32 pid = record->trace.pid;
@@ -312,7 +312,7 @@ static EBPF_INLINE u64 addr_for_tls_symbol(u64 symbol, bool dtv)
 // - Input represents a non-negative integer value in the safe range
 // stored as a double (so no negatives, nothing 2^53 or higher,
 // no NaNs, infinities, or denormals)
-static inline __attribute__((__always_inline__)) u64 integral_double_to_int(u64 bits)
+static EBPF_INLINE u64 integral_double_to_int(u64 bits)
 {
   // Extract exponent (11 bits)
   u64 exponent = (bits >> 52) & 0x7FF;
@@ -353,7 +353,7 @@ static u64 custom_labels_hm_hash(u64 x)
 // Extracts the Node.js environment pointer from V8 isolate by traversing
 // through V8 internal structures: isolate -> context_handle -> real_context_handle
 // -> native_context -> embedder_data -> env_ptr
-static inline __attribute__((__always_inline__)) bool
+static EBPF_INLINE bool
 get_node_env_ptr(V8ProcInfo *proc, u64 *env_ptr_out)
 {
   int err;
@@ -437,7 +437,7 @@ get_node_env_ptr(V8ProcInfo *proc, u64 *env_ptr_out)
   return true;
 }
 
-static inline __attribute__((__always_inline__)) bool
+static EBPF_INLINE bool
 get_node_async_id(V8ProcInfo *proc, u32 tid, u64 *out)
 {
   int err;
@@ -485,7 +485,7 @@ get_node_async_id(V8ProcInfo *proc, u32 tid, u64 *out)
   return true;
 }
 
-static inline __attribute__((__always_inline__)) bool
+static EBPF_INLINE bool
 read_labelset_into_trace(PerCPURecord *record, NativeCustomLabelsSet *p_current_set)
 {
   int err;
@@ -537,7 +537,7 @@ exit:
   return true;
 }
 
-static inline __attribute__((__always_inline__)) bool
+static EBPF_INLINE bool
 get_native_custom_labels(PerCPURecord *record, NativeCustomLabelsProcInfo *proc)
 {
   int err;
@@ -570,7 +570,7 @@ get_native_custom_labels(PerCPURecord *record, NativeCustomLabelsProcInfo *proc)
   return read_labelset_into_trace(record, p_current_set);
 }
 
-static inline __attribute__((__always_inline__)) void
+static EBPF_INLINE void
 maybe_add_native_custom_labels(PerCPURecord *record)
 {
   u32 pid                          = record->trace.pid;
@@ -587,7 +587,7 @@ maybe_add_native_custom_labels(PerCPURecord *record)
     increment_metric(metricID_UnwindNativeCustomLabelsAddErrors);
 }
 
-static inline __attribute__((__always_inline__)) u64 get_labelset_for_async_id(u64 hm_addr, u64 id)
+static EBPF_INLINE u64 get_labelset_for_async_id(u64 hm_addr, u64 id)
 {
   u64 h = custom_labels_hm_hash(id);
 
@@ -635,7 +635,7 @@ static inline __attribute__((__always_inline__)) u64 get_labelset_for_async_id(u
 }
 
 // TODO - combine with native?
-static inline __attribute__((__always_inline__)) void
+static EBPF_INLINE void
 maybe_add_node_custom_labels(PerCPURecord *record)
 {
   u32 pid                          = record->trace.pid;
@@ -675,7 +675,7 @@ maybe_add_node_custom_labels(PerCPURecord *record)
   }
 }
 
-static inline __attribute__((__always_inline__)) void maybe_add_apm_info(Trace *trace)
+static EBPF_INLINE void maybe_add_apm_info(Trace *trace)
 {
   u32 pid              = trace->pid; // verifier needs this to be on stack on 4.15 kernel
   ApmIntProcInfo *proc = bpf_map_lookup_elem(&apm_int_procs, &pid);
