@@ -147,8 +147,7 @@ bpf_map_def SEC("maps") cl_procs = {
   .max_entries = 128,
 };
 
-static EBPF_INLINE void *
-get_m_ptr_legacy(struct GoCustomLabelsOffsets *offs, UnwindState *state)
+static EBPF_INLINE void *get_m_ptr_legacy(struct GoCustomLabelsOffsets *offs, UnwindState *state)
 {
   long res;
 
@@ -220,8 +219,7 @@ static EBPF_INLINE void *get_m_ptr(struct GoLabelsOffsets *offs, UnwindState *st
   return m_ptr_addr;
 }
 
-static EBPF_INLINE void
-maybe_add_go_custom_labels_legacy(struct pt_regs *ctx, PerCPURecord *record)
+static EBPF_INLINE void maybe_add_go_custom_labels_legacy(struct pt_regs *ctx, PerCPURecord *record)
 {
   u32 pid = record->trace.pid;
   // The Go label extraction code is too big to fit in this program, so we need to
@@ -353,8 +351,7 @@ static u64 custom_labels_hm_hash(u64 x)
 // Extracts the Node.js environment pointer from V8 isolate by traversing
 // through V8 internal structures: isolate -> context_handle -> real_context_handle
 // -> native_context -> embedder_data -> env_ptr
-static EBPF_INLINE bool
-get_node_env_ptr(V8ProcInfo *proc, u64 *env_ptr_out)
+static EBPF_INLINE bool get_node_env_ptr(V8ProcInfo *proc, u64 *env_ptr_out)
 {
   int err;
 
@@ -437,8 +434,7 @@ get_node_env_ptr(V8ProcInfo *proc, u64 *env_ptr_out)
   return true;
 }
 
-static EBPF_INLINE bool
-get_node_async_id(V8ProcInfo *proc, u32 tid, u64 *out)
+static EBPF_INLINE bool get_node_async_id(V8ProcInfo *proc, u32 tid, u64 *out)
 {
   int err;
 
@@ -570,8 +566,7 @@ get_native_custom_labels(PerCPURecord *record, NativeCustomLabelsProcInfo *proc)
   return read_labelset_into_trace(record, p_current_set);
 }
 
-static EBPF_INLINE void
-maybe_add_native_custom_labels(PerCPURecord *record)
+static EBPF_INLINE void maybe_add_native_custom_labels(PerCPURecord *record)
 {
   u32 pid                          = record->trace.pid;
   NativeCustomLabelsProcInfo *proc = bpf_map_lookup_elem(&cl_procs, &pid);
@@ -635,8 +630,7 @@ static EBPF_INLINE u64 get_labelset_for_async_id(u64 hm_addr, u64 id)
 }
 
 // TODO - combine with native?
-static EBPF_INLINE void
-maybe_add_node_custom_labels(PerCPURecord *record)
+static EBPF_INLINE void maybe_add_node_custom_labels(PerCPURecord *record)
 {
   u32 pid                          = record->trace.pid;
   V8ProcInfo *v8_proc              = bpf_map_lookup_elem(&v8_procs, &pid);
