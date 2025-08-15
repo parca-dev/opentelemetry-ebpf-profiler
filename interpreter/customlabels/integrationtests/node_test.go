@@ -59,11 +59,16 @@ func TestIntegration(t *testing.T) {
 	}
 
 	for _, nodeVersion := range []string{
-		"24.5.0",
-		"22.18.0",
-		"20.19.4",
+		// As of today, node:latest is v24.4.0 (v24.5.0).
+		// Eventually, it will be something where the offsets have changed,
+		// and start failing. At that point, update the list of offsets
+		// so this passes, and also add a test for the latest v24 if latest
+		// is on v25 by then.
+		"latest",
+		"v22.18.0",
+		"v20.19.4",
 	} {
-		name := "node-v" + nodeVersion
+		name := "node-" + nodeVersion
 		t.Run(name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			t.Cleanup(cancel)
