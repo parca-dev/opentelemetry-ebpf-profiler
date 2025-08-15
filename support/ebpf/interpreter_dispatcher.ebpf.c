@@ -498,7 +498,6 @@ read_labelset_into_trace(PerCPURecord *record, NativeCustomLabelsSet *p_current_
   unsigned ct            = 0;
   CustomLabelsArray *out = &record->trace.custom_labels;
 
-#pragma unroll
   for (int i = 0; i < MAX_CUSTOM_LABELS; i++) {
     if (i >= current_set.count)
       break;
