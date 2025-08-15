@@ -3,9 +3,9 @@ name = "custom-labels-example"
 edition = "2021"
 # Once we have the Rust workspace stuff from upstream, set these to true.
 # 
-# version.workspace = true
-# rust-version.workspace = true
-# license.workspace = true
+version.workspace = true
+rust-version.workspace = true
+license.workspace = true
 
 [dependencies]
 custom-labels = "0.4.0"
