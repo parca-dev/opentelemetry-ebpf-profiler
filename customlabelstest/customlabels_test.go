@@ -19,7 +19,7 @@ func TestNativeCustomLabels(t *testing.T) {
 
 	r := &testutils.MockReporter{}
 	enabledTracers, _ := tracertypes.Parse("all")
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	traceCh, _ := testutils.StartTracer(ctx, t, enabledTracers, r, false)

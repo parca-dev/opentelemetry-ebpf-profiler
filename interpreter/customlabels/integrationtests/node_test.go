@@ -67,7 +67,7 @@ func TestIntegration(t *testing.T) {
 	} {
 		name := "node-" + nodeVersion
 		t.Run(name, func(t *testing.T) {
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			t.Cleanup(cancel)
 
 			defer cancel()

@@ -91,22 +91,10 @@ func TestIntegration(t *testing.T) {
 			} {
 				t.Run(tag, func(t *testing.T) {
 					image := "openresty/openresty:" + tag
-					ctx, cancel := context.WithCancel(context.Background())
-					t.Cleanup(cancel)
-
+					ctx, cancel := context.WithCancel(t.Context())
 					defer cancel()
 
 					cont := startContainer(ctx, t, image)
-
-					t.Cleanup(func() {
-						ctx2, canc := context.WithTimeout(context.Background(), time.Second)
-						defer canc()
-
-						err := cont.Terminate(ctx2)
-						if err != nil {
-							require.ErrorIs(t, err, context.DeadlineExceeded)
-						}
-					})
 
 					h, err := cont.Host(ctx)
 					require.NoError(t, err)
