@@ -123,10 +123,3 @@ require (
 	google.golang.org/protobuf v1.36.6 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-retract (
-	v0.0.202532
-	v0.0.202531
-	v0.0.202529
-	v0.0.202527
-)
