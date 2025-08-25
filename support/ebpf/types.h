@@ -403,6 +403,7 @@ typedef enum TraceOrigin {
   TRACE_SAMPLING,
   TRACE_OFF_CPU,
   TRACE_MEMORY,
+  TRACE_CUDA_LAUNCH,
 } TraceOrigin;
 
 // MAX_FRAME_UNWINDS defines the maximum number of frames per
@@ -663,6 +664,7 @@ typedef struct Trace {
   ApmSpanID apm_transaction_id;
   // APM trace ID or all-zero if not present.
   ApmTraceID apm_trace_id;
+  u32 parca_gpu_trace_id;
   // Custom Labels
   CustomLabelsArray custom_labels;
   // The kernel stack ID.
@@ -700,6 +702,11 @@ typedef struct UnwindState {
   // Current register values for named registers
   u64 lr, r7, r22, r28;
 #endif
+
+  // The first argument to a function in the calling convention.
+  // (Only actually guaranteed to still contain that argument
+  //  if we are at the beginning of a native function).
+  u64 first_arg;
 
   // The executable ID/hash associated with PC
   u64 text_section_id;

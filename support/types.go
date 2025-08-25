@@ -86,6 +86,7 @@ const (
 	TraceOriginSampling = 0x1
 	TraceOriginOffCPU   = 0x2
 	TraceOriginMemory   = 0x3
+	TraceOriginCuda     = 0x4
 )
 
 type ApmIntProcInfo struct {

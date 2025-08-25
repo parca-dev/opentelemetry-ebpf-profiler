@@ -120,6 +120,8 @@ type ebpfMapsImpl struct {
 	hasLPMTrieBatchOperations bool
 
 	updateWorkers *asyncMapUpdaterPool
+
+	progs map[string]*cebpf.Program
 }
 
 var outerMapsName = [...]string{
@@ -149,8 +151,9 @@ var _ EbpfHandler = &ebpfMapsImpl{}
 //
 // It further spawns background workers for deferred map updates; the given
 // context can be used to terminate them on shutdown.
-func LoadMaps(ctx context.Context, maps map[string]*cebpf.Map) (EbpfHandler, error) {
-	impl := &ebpfMapsImpl{}
+func LoadMaps(ctx context.Context, maps map[string]*cebpf.Map,
+	progs map[string]*cebpf.Program) (EbpfHandler, error) {
+	impl := &ebpfMapsImpl{progs: progs}
 	impl.errCounter = make(map[metrics.MetricID]int64)
 
 	interpreterOffsets, ok := maps["interpreter_offsets"]
@@ -463,6 +466,10 @@ func (impl *ebpfMapsImpl) CollectMetrics() []metrics.Metric {
 	}
 
 	return counts
+}
+
+func (impl *ebpfMapsImpl) GetProgram(name string) *cebpf.Program {
+	return impl.progs[name]
 }
 
 // poolPIDPage caches reusable heap-allocated C.PIDPage instances
