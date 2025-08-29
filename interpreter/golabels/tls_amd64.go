@@ -8,6 +8,7 @@ package golabels // import "go.opentelemetry.io/ebpf-profiler/interpreter/golabe
 import (
 	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
+	"go.opentelemetry.io/ebpf-profiler/nativeunwind/elfunwindinfo"
 	"golang.org/x/arch/x86/x86asm"
 )
 
@@ -15,19 +16,19 @@ import (
 // storing the current g but "static" binaries it ends up as -80. There
 // may be dynamic relocating going on so just read it from a known
 // symbol if possible.
-func extractTLSGOffset(f *pfelf.File, path string) (int32, error) {
-	syms, err := f.ReadSymbols()
+func extractTLSGOffset(f *pfelf.File) (int32, error) {
+	pclntab, err := elfunwindinfo.NewGopclntab(f)
 	if err != nil {
 		log.Debugf("Failed to find symbols (%v) using default TLSG offset", err)
 		return -8, nil
 	}
+	defer pclntab.Close()
+
 	// Dump of assembler code for function runtime.stackcheck:
 	// 0x0000000000470080 <+0>:     mov    %fs:0xfffffffffffffff8,%rax
-	sym, err := syms.LookupSymbol("runtime.stackcheck.abi0")
+	sym, err := pclntab.LookupSymbol("runtime.stackcheck")
 	if err != nil {
-		// Binary must be stripped, hope default is correct and warn.
-		log.Warnf("Failed to find stackcheck symbol, Go labels might not work: %v (%s)", err, path)
-		return -8, nil
+		return 0, err
 	}
 	b, err := f.VirtualMemory(int64(sym.Address), 16, 16)
 	if err != nil {
