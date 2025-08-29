@@ -235,7 +235,7 @@ func (l *luajitInstance) addTrace(ebpf interpreter.EbpfHandler, pid libpf.PID, t
 }
 
 func (l *luajitInstance) SynchronizeMappings(ebpf interpreter.EbpfHandler,
-	_ reporter.SymbolReporter, pr process.Process, mappings []process.Mapping) error {
+	_ reporter.ExecutableReporter, pr process.Process, mappings []process.Mapping) error {
 	return l.synchronizeMappings(ebpf, pr.PID(), mappings)
 }
 

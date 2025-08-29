@@ -105,8 +105,7 @@ func TestIntegration(t *testing.T) {
 					enabledTracers, err := tracertypes.Parse("luajit")
 					require.NoError(t, err)
 					enabledTracers.Enable(tracertypes.LuaJITTracer)
-					r := &testutils.MockReporter{}
-					traceCh, trc := testutils.StartTracer(ctx, t, enabledTracers, r, false)
+					traceCh, trc := testutils.StartTracer(ctx, t, enabledTracers, false)
 
 					var waitGroup sync.WaitGroup
 					defer waitGroup.Wait()
