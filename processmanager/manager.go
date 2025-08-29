@@ -65,7 +65,7 @@ var (
 // fileIDMapper and symbolReporter. Specify nil for fileIDMapper to use the default
 // implementation.
 func New(ctx context.Context, includeTracers types.IncludedTracers, monitorInterval time.Duration,
-	ebpf pmebpf.EbpfHandler, fileIDMapper FileIDMapper, symbolReporter reporter.SymbolReporter,
+	ebpf pmebpf.EbpfHandler, fileIDMapper FileIDMapper, exeReporter reporter.ExecutableReporter,
 	sdp nativeunwind.StackDeltaProvider, filterErrorFrames bool,
 	includeEnvVars libpf.Set[string]) (*ProcessManager, error) {
 	if fileIDMapper == nil {
@@ -74,6 +74,9 @@ func New(ctx context.Context, includeTracers types.IncludedTracers, monitorInter
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize file ID mapping: %v", err)
 		}
+	}
+	if exeReporter == nil {
+		exeReporter = executableReporterStub{}
 	}
 
 	elfInfoCache, err := lru.New[util.OnDiskFileIdentifier, elfInfo](elfInfoCacheSize,
@@ -99,7 +102,7 @@ func New(ctx context.Context, includeTracers types.IncludedTracers, monitorInter
 		ebpf:                     ebpf,
 		FileIDMapper:             fileIDMapper,
 		elfInfoCache:             elfInfoCache,
-		reporter:                 symbolReporter,
+		exeReporter:              exeReporter,
 		metricsAddSlice:          metrics.AddSlice,
 		filterErrorFrames:        filterErrorFrames,
 		includeEnvVars:           includeEnvVars,
@@ -227,7 +230,10 @@ func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace
 
 		if frame.Type.IsError() {
 			if !pm.filterErrorFrames {
-				newTrace.AppendFrame(frame.Type, libpf.UnsymbolizedFileID, frame.Lineno)
+				newTrace.Frames.Append(&libpf.Frame{
+					Type:            frame.Type,
+					AddressOrLineno: frame.Lineno,
+				})
 			}
 			continue
 		}
@@ -273,19 +279,40 @@ func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace
 				continue
 			}
 
-			fileID, ok := pm.FileIDMapper.Get(frame.File)
+			mappingFile, ok := pm.FileIDMapper.Get(frame.File)
 			if !ok {
 				log.Debugf(
 					"file ID lookup failed for PID %d, frame %d/%d, frame type %d",
 					trace.PID, i, traceLen, frame.Type)
 
-				newTrace.AppendFrameFull(frame.Type, libpf.UnsymbolizedFileID,
-					libpf.AddressOrLineno(0), mappingStart, mappingEnd, fileOffset)
+				newTrace.Frames.Append(&libpf.Frame{
+					Type:              frame.Type,
+					MappingStart:      mappingStart,
+					MappingEnd:        mappingEnd,
+					MappingFileOffset: fileOffset,
+				})
 				continue
 			}
 
-			newTrace.AppendFrameFull(frame.Type, fileID,
-				relativeRIP, mappingStart, mappingEnd, fileOffset)
+			newTrace.Frames.Append(&libpf.Frame{
+				Type:              frame.Type,
+				AddressOrLineno:   relativeRIP,
+				MappingStart:      mappingStart,
+				MappingEnd:        mappingEnd,
+				MappingFileOffset: fileOffset,
+				MappingFile:       mappingFile,
+			})
+		case libpf.CUDA:
+			name := trace.CustomLabels["_temp_cuda_kernel"]
+			if name == "" {
+				panic("cuda_kernel frame without _temp_cuda_kernel label")
+			}
+			// remove the label
+			delete(trace.CustomLabels, "_temp_cuda_kernel")
+			newTrace.Frames.Append(&libpf.Frame{
+				Type:         frame.Type,
+				FunctionName: libpf.Intern(name),
+			})
 		default:
 			err := pm.symbolizeFrame(i, trace, &newTrace.Frames)
 			if err != nil {
@@ -296,7 +323,9 @@ func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace
 					"symbolization failed for PID %d, frame %d/%d, frame type %d: %v",
 					trace.PID, i, traceLen, frame.Type, err)
 
-				newTrace.AppendFrame(frame.Type, libpf.UnsymbolizedFileID, libpf.AddressOrLineno(0))
+				newTrace.Frames.Append(&libpf.Frame{
+					Type: frame.Type,
+				})
 			}
 		}
 	}

@@ -16,7 +16,6 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
-	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
 	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
 )
@@ -33,13 +32,9 @@ func (f MockReporter) ExecutableKnown(_ libpf.FileID) bool {
 	return true
 }
 
-func (f MockReporter) ExecutableMetadata(_ *reporter.ExecutableMetadataArgs) {
-}
-
 func StartTracer(ctx context.Context, t *testing.T, et tracertypes.IncludedTracers,
-	r reporter.SymbolReporter, printBpfLogs bool) (chan *host.Trace, *tracer.Tracer) {
+	printBpfLogs bool) (chan *host.Trace, *tracer.Tracer) {
 	trc, err := tracer.NewTracer(ctx, &tracer.Config{
-		Reporter:               r,
 		Intervals:              &MockIntervals{},
 		IncludeTracers:         et,
 		SamplesPerSecond:       20,

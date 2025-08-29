@@ -35,7 +35,6 @@ func TestIntegration(t *testing.T) {
 	// Start the tracer with all tracers enabled
 	traceCh, trc := testutils.StartTracer(ctx, t,
 		tracertypes.AllTracers(),
-		&testutils.MockReporter{},
 		false)
 	defer trc.Close()
 
@@ -98,7 +97,6 @@ func TestIntegrationSingleShot(t *testing.T) {
 	// Start the tracer with all tracers enabled
 	traceCh, trc := testutils.StartTracer(ctx, t,
 		tracertypes.AllTracers(),
-		&testutils.MockReporter{},
 		false)
 	defer trc.Close()
 
