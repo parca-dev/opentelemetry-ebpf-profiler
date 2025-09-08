@@ -114,10 +114,11 @@ func (m *MultiInstance) UpdateTSDInfo(ebpf EbpfHandler, pid libpf.PID, info tpba
 }
 
 // Symbolize tries to symbolize the frame with each interpreter instance until one succeeds.
-func (m *MultiInstance) Symbolize(ebpfFrame *host.Frame, frames *libpf.Frames) error {
+func (m *MultiInstance) Symbolize(symbolReporter reporter.SymbolReporter, frame *host.Frame,
+	trace *libpf.Trace) error {
 	// Try each interpreter in order
 	for _, instance := range m.instances {
-		err := instance.Symbolize(ebpfFrame, frames)
+		err := instance.Symbolize(symbolReporter, frame, trace)
 		if err != ErrMismatchInterpreterType {
 			return err
 		}

@@ -25,6 +25,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter/hotspot"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/luajit"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/nodev8"
+	"go.opentelemetry.io/ebpf-profiler/interpreter/oomwatcher"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/perl"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/php"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/python"
@@ -136,6 +137,7 @@ func NewExecutableInfoManager(
 		interpreterLoaders = append(interpreterLoaders, luajit.Loader)
 	}
 
+	interpreterLoaders = append(interpreterLoaders, oomwatcher.Loader)
 	interpreterLoaders = append(interpreterLoaders, apmint.Loader)
 	if includeTracers.Has(types.Labels) {
 		interpreterLoaders = append(interpreterLoaders, golabels.Loader)
