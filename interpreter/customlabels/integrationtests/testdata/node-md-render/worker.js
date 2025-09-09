@@ -61,8 +61,8 @@ parentPort.on('message', async ({ filePath, requestId, randomLabels }) => {
         }
         throw error;
       }
-      
-      const dur = myrand(0, 1000);
+
+      const dur = myrand(0, 1);
       await cl.withLabels(() => mysleep(dur), "sleepDur", "" + dur);
 
       const md = filePath.endsWith(".md");
