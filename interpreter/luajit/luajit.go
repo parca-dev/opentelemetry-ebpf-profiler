@@ -396,8 +396,8 @@ func (l *luajitInstance) symbolizeFrame(symbolReporter reporter.SymbolReporter,
 	if !symbolReporter.FrameKnown(frameID) {
 		symbolReporter.FrameMetadata(&reporter.FrameMetadataArgs{
 			FrameID:        frameID,
-			FunctionName:   funcName,
-			SourceFile:     fileName,
+			FunctionName:   libpf.Intern(funcName),
+			SourceFile:     libpf.Intern(fileName),
 			SourceLine:     libpf.SourceLineno(line),
 			FunctionOffset: pc,
 		})
