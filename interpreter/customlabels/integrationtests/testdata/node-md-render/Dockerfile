@@ -25,5 +25,5 @@ COPY *.js ./
 # Expose ports for app and gdbserver
 EXPOSE 80
 
-# Start the application with gdbserver
+# Start the application
 CMD ["node", "index.js"]
