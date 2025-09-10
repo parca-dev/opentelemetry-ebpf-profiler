@@ -1,9 +1,0 @@
-[
-	{
-		"Dependency": "luajit",
-		"Version": "2.1.0",
-		"Licence": "MIT",
-		"URL": "https://luajit.org/",
-		"LicenceFile": "https://raw.githubusercontent.com/LuaJIT/LuaJIT/v2.1/COPYRIGHT"
-	}
-]
