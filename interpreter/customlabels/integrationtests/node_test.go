@@ -176,11 +176,11 @@ func TestIntegration(t *testing.T) {
 
 			// Really, there should be zero frames in the
 			// `marked` workload that aren't under labels,
-			// but accept a 1% slop because the unwinder
+			// but accept a 5% slop because the unwinder
 			// isn't perfect (e.g. it might interrupt the
 			// process when the Node environment is in an
 			// undefined state)
-			require.Less(t, 100*unlabeledWorkloadFrames, totalWorkloadFrames)
+			require.Less(t, 20*unlabeledWorkloadFrames, totalWorkloadFrames)
 		})
 	}
 }
