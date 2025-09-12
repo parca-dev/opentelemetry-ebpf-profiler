@@ -393,7 +393,7 @@ walk_luajit_stack(PerCPURecord *record, const LuaJITProcInfo *info, int *next_un
   LJState *L        = &record->luajitUnwindScratch.L;
   TValue *prevframe = record->luajitUnwindState.prevframe;
   TValue *bot       = L->stack + 1;
-#pragma unroll
+
   for (int i = 0; i < FRAMES_PER_WALK_LUAJIT_STACK; i++) {
     TValue *frame = (TValue *)(record->luajitUnwindState.frame);
     if (frame <= bot) {
@@ -582,7 +582,7 @@ static inline __attribute__((__always_inline__)) int unwind_luajit(struct pt_reg
     return -1;
 
   UnwindState *state   = &record->state;
-  int unwinder         = get_next_unwinder_after_interpreter(record);
+  int unwinder         = get_next_unwinder_after_interpreter();
   ErrorCode error      = ERR_OK;
   u32 pid              = record->trace.pid;
   LuaJITProcInfo *info = bpf_map_lookup_elem(&luajit_procs, &pid);
