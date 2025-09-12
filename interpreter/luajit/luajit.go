@@ -34,12 +34,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
-// #include "../../support/ebpf/types.h"
-// #include "../../support/ebpf/luajit.h"
-import "C"
-
-const LuaJITFFIFunc = C.LUAJIT_FFI_FUNC
-
 // Records all the "global" pointers we've seen.
 type vmMap map[libpf.Address]struct{}
 
@@ -92,10 +86,10 @@ var (
 
 func (d *luajitData) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Address,
 	rm remotememory.RemoteMemory) (interpreter.Instance, error) {
-	cdata := C.LuaJITProcInfo{
-		g2dispatch:      C.u16(d.g2Dispatch),
-		cur_L_offset:    C.u16(d.currentLOffset),
-		cframe_size_jit: C.u16(cframeSizeJIT),
+	cdata := support.LuaJITProcInfo{
+		G2dispatch:      d.g2Dispatch,
+		Cur_L_offset:    d.currentLOffset,
+		Cframe_size_jit: uint16(cframeSizeJIT),
 	}
 	if err := ebpf.UpdateProcData(libpf.LuaJIT, pid, unsafe.Pointer(&cdata)); err != nil {
 		return nil, err
@@ -210,7 +204,7 @@ func (l *luajitInstance) addJITRegion(ebpf interpreter.EbpfHandler, pid libpf.PI
 	logf("lj: add JIT region pid(%v) %#x:%#x", pid, start, end)
 	for _, prefix := range prefixes {
 		// TODO: fix these: WARN[0267] Failed to lookup file ID 0x2a00000000
-		fileID := uint64(C.LUAJIT_JIT_FILE_ID) << 32
+		fileID := support.LJFileId << 32
 		if err := ebpf.UpdatePidInterpreterMapping(pid, prefix, support.ProgUnwindLuaJIT,
 			host.FileID(fileID), 0); err != nil {
 			return err
@@ -231,7 +225,7 @@ func (l *luajitInstance) addTrace(ebpf interpreter.EbpfHandler, pid libpf.PID, t
 	}
 	logf("lj: add trace mapping for pid(%v) %x:%x", pid, start, end)
 	for _, prefix := range prefixes {
-		fileID := uint64(C.LUAJIT_JIT_FILE_ID)<<32 | spadjust
+		fileID := support.LJFileId<<32 | spadjust
 		if err := ebpf.UpdatePidInterpreterMapping(pid, prefix, support.ProgUnwindLuaJIT,
 			host.FileID(fileID), g); err != nil {
 			return nil, err
@@ -383,7 +377,7 @@ func (l *luajitInstance) symbolizeFrame(symbolReporter reporter.SymbolReporter,
 	frameID libpf.FrameID) error {
 	var line uint32
 	var fileName string
-	if ptAddr != C.LUAJIT_FFI_FUNC {
+	if ptAddr != support.LJFFIFunc {
 		pt, err := l.getGCproto(ptAddr)
 		if err != nil {
 			return err
@@ -438,7 +432,7 @@ func (l *luajitInstance) Symbolize(symbolReporter reporter.SymbolReporter, frame
 	}
 
 	var funcName string
-	if frame.File == C.LUAJIT_FFI_FUNC {
+	if frame.File == support.LJFFIFunc {
 		switch frame.Lineno & 7 {
 		case 0:
 			funcName = "lua-frame"
