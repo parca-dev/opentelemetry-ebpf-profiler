@@ -14,10 +14,7 @@ import (
 
 	log "github.com/sirupsen/logrus"
 
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
-
-	"go.opentelemetry.io/ebpf-profiler/vc"
 )
 
 var (
@@ -44,8 +41,6 @@ var (
 	metricTypes map[MetricID]MetricType
 
 	// OTel metric instrumentation
-	meter = otel.Meter("go.opentelemetry.io/ebpf-profiler",
-		metric.WithInstrumentationVersion(vc.Version()))
 	counters = map[MetricID]metric.Int64Counter{}
 	gauges   = map[MetricID]metric.Int64Gauge{}
 
@@ -61,7 +56,7 @@ func SetReporter(r MetricsReporter) {
 	reporterImpl = r
 }
 
-func init() {
+func Start(meter metric.Meter) {
 	defs := GetDefinitions()
 	metricTypes = make(map[MetricID]MetricType, len(defs))
 	for _, md := range defs {
