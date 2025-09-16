@@ -39,7 +39,6 @@ FLAGS=$(TARGET_FLAGS) -g \
 	-Wall -Wextra -Werror \
 	-Wno-address-of-packed-member \
 	-Wno-unused-label \
-	-Wno-unused-parameter \
 	-Wno-sign-compare \
 	-fno-stack-protector \
 	-D__SOURCE_DATE_EPOCH__=0 \
@@ -48,6 +47,7 @@ FLAGS=$(TARGET_FLAGS) -g \
 
 SRCS := $(wildcard *.ebpf.c)
 OBJS := $(SRCS:.c=.$(TARGET_ARCH).o)
+DEPS := $(OBJS:.o=.d)
 
 .DEFAULT_GOAL := all
 
@@ -62,10 +62,8 @@ arm64:
 errors.h: ../../tools/errors-codegen/errors.json
 	go run ../../tools/errors-codegen/main.go bpf $@
 
-%.ebpf.c: errors.h ;
-
-%.ebpf.$(TARGET_ARCH).o: %.ebpf.c
-	$(BPF_CLANG) $(FLAGS) -o $@
+%.ebpf.$(TARGET_ARCH).o: %.ebpf.c errors.h
+	$(BPF_CLANG) $(FLAGS) -MMD -MP -o $@
 
 $(TRACER_NAME): $(OBJS)
 	$(BPF_LINK) $^ -o - | $(LLC) -march=bpf -mcpu=v2 -filetype=obj -o $@
@@ -82,10 +80,12 @@ bloatcheck: $(TRACER_NAME)
 	python3 bloat-o-meter $(TRACER_NAME).baseline $(TRACER_NAME)
 
 lint:
-	$(CLANG_FORMAT) -Werror --dry-run -style=file *.[ch]
+	$(CLANG_FORMAT) -Werror --dry-run -style=file *.[ch] ../../tools/coredump/*.[ch]
 
 format:
 	$(CLANG_FORMAT) -i -style=file *.[ch]
 
 clean:
-	rm -f *.o
+	rm -f *.o *.d
+
+-include $(DEPS)

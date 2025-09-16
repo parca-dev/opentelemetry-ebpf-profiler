@@ -126,13 +126,6 @@ bpf_map_def SEC("maps") apm_int_procs = {
   .max_entries = 128,
 };
 
-bpf_map_def SEC("maps") go_procs = {
-  .type        = BPF_MAP_TYPE_HASH,
-  .key_size    = sizeof(pid_t),
-  .value_size  = sizeof(GoCustomLabelsOffsets),
-  .max_entries = 128,
-};
-
 bpf_map_def SEC("maps") go_labels_procs = {
   .type        = BPF_MAP_TYPE_HASH,
   .key_size    = sizeof(pid_t),
@@ -147,7 +140,8 @@ bpf_map_def SEC("maps") cl_procs = {
   .max_entries = 128,
 };
 
-static EBPF_INLINE void *get_m_ptr_legacy(struct GoCustomLabelsOffsets *offs, UnwindState *state)
+static EBPF_INLINE void *
+get_m_ptr_legacy(struct GoCustomLabelsOffsets *offs, UNUSED UnwindState *state)
 {
   long res;
 
@@ -181,7 +175,7 @@ static EBPF_INLINE void *get_m_ptr_legacy(struct GoCustomLabelsOffsets *offs, Un
   return m_ptr_addr;
 }
 
-static EBPF_INLINE void *get_m_ptr(struct GoLabelsOffsets *offs, UnwindState *state)
+static EBPF_INLINE void *get_m_ptr(struct GoLabelsOffsets *offs, UNUSED UnwindState *state)
 {
   u64 g_addr     = 0;
   void *tls_base = NULL;
@@ -226,7 +220,7 @@ static EBPF_INLINE void maybe_add_go_custom_labels_legacy(struct pt_regs *ctx, P
   // tail call it, in order to keep the hashing and clearing code in this program it
   // will tail call back to us with this bool set.
   if (!record->state.processed_go_labels) {
-    GoCustomLabelsOffsets *offsets = bpf_map_lookup_elem(&go_procs, &pid);
+    GoCustomLabelsOffsets *offsets = bpf_map_lookup_elem(&go_labels_procs, &pid);
     if (!offsets) {
       DEBUG_PRINT("cl: no offsets, %d not recognized as a go binary", pid);
       return;
