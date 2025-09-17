@@ -27,9 +27,7 @@ import (
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 	"go.opentelemetry.io/ebpf-profiler/host"
-	"go.opentelemetry.io/ebpf-profiler/interpreter/luajit"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
-	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/testutils"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
 	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
@@ -119,7 +117,7 @@ func TestIntegration(t *testing.T) {
 					enabledTracers, err := tracertypes.Parse("luajit")
 					require.NoError(t, err)
 					enabledTracers.Enable(tracertypes.LuaJITTracer)
-					r := &mockReporter{symbols: make(symbolMap)}
+					r := &testutils.MockReporter{}
 					traceCh, trc := testutils.StartTracer(ctx, t, enabledTracers, r, false)
 
 					var waitGroup sync.WaitGroup
@@ -144,7 +142,7 @@ func TestIntegration(t *testing.T) {
 								continue
 							}
 							traces++
-							if validateTrace(t, trc, trace, tc.structure, r) {
+							if validateTrace(t, trc, trace, tc.structure) {
 								passes++
 							} else {
 								fails++
@@ -165,17 +163,16 @@ func TestIntegration(t *testing.T) {
 
 // Find lua traces and test that they are good
 func validateTrace(t *testing.T, trc *tracer.Tracer, trace *host.Trace,
-	st []string, r *mockReporter) bool {
+	st []string) bool {
 	// Finally convert it to flex all the proto parsing/remote code
 	ct, err := trc.TraceProcessor().ConvertTrace(trace)
 	require.NotNil(t, ct)
 	require.NoError(t, err)
 
-	return validateFrames(t, removeSentinel(trace.Frames), st, r)
+	return validateFrames(t, ct.Frames, st)
 }
 
-func validateFrames(t *testing.T, frames []host.Frame, st []string,
-	r *mockReporter) bool {
+func validateFrames(t *testing.T, frames libpf.Frames, st []string) bool {
 	j := len(frames) - 1
 outer:
 	for _, s := range st {
@@ -184,17 +181,16 @@ outer:
 			require.NoError(t, err)
 			addr := libpf.AddressOrLineno(uint64(a))
 			for ; j >= 0; j-- {
-				if frames[j].Type == libpf.NativeFrame {
-					if frames[j].Lineno == addr {
+				if frames[j].Value().Type == libpf.NativeFrame {
+					if frames[j].Value().AddressOrLineno == addr {
 						continue outer
 					}
 				}
 			}
 		} else {
 			for ; j >= 0; j-- {
-				frameID := luajit.CreateFrameID(&frames[j])
-				sym := r.getFunctionName(frameID)
-				if sym.String() == s {
+				sym := frames[j].Value().FunctionName.String()
+				if sym == s {
 					continue outer
 				}
 			}
@@ -280,40 +276,4 @@ func makeRequests(ctx context.Context, t *testing.T, wg *sync.WaitGroup,
 			numRequests++
 		}
 	}()
-}
-
-type symbolMap map[libpf.FrameID]libpf.String
-
-type mockReporter struct {
-	mu      sync.Mutex
-	symbols symbolMap
-}
-
-var _ reporter.SymbolReporter = &mockReporter{}
-
-func (m *mockReporter) ExecutableMetadata(*reporter.ExecutableMetadataArgs) {
-}
-func (m *mockReporter) FrameKnown(_ libpf.FrameID) bool { return false }
-func (m *mockReporter) ExecutableKnown(libpf.FileID) bool {
-	return false
-}
-func (m *mockReporter) FrameMetadata(args *reporter.FrameMetadataArgs) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.symbols[args.FrameID] = args.FunctionName
-}
-
-func (m *mockReporter) getFunctionName(frameID libpf.FrameID) libpf.String {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.symbols[frameID]
-}
-
-func removeSentinel(frames []host.Frame) []host.Frame {
-	for i, f := range frames {
-		if f.File == 0 {
-			return append(frames[:i], frames[i+1:]...)
-		}
-	}
-	return frames
 }

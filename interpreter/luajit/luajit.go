@@ -372,9 +372,8 @@ func (l *luajitInstance) getGCproto(pt libpf.Address) (*proto, error) {
 }
 
 // symbolizeFrame symbolizes the previous (up the stack)
-func (l *luajitInstance) symbolizeFrame(symbolReporter reporter.SymbolReporter,
-	funcName string, trace *libpf.Trace, ptAddr libpf.Address, pc uint32,
-	frameID libpf.FrameID) error {
+func (l *luajitInstance) symbolizeFrame(funcName string, ptAddr libpf.Address,
+	pc uint32, frames *libpf.Frames) error {
 	var line uint32
 	var fileName string
 	if ptAddr != support.LJFFIFunc {
@@ -386,16 +385,13 @@ func (l *luajitInstance) symbolizeFrame(symbolReporter reporter.SymbolReporter,
 		fileName = pt.getName()
 	}
 	logf("lj: [%x] %v+%v at %v:%v", ptAddr, funcName, pc, fileName, line)
-	trace.AppendFrameID(libpf.LuaJITFrame, frameID)
-	if !symbolReporter.FrameKnown(frameID) {
-		symbolReporter.FrameMetadata(&reporter.FrameMetadataArgs{
-			FrameID:        frameID,
-			FunctionName:   libpf.Intern(funcName),
-			SourceFile:     libpf.Intern(fileName),
-			SourceLine:     libpf.SourceLineno(line),
-			FunctionOffset: pc,
-		})
-	}
+	frames.Append(&libpf.Frame{
+		Type:           libpf.LuaJITFrame,
+		FunctionOffset: pc,
+		FunctionName:   libpf.Intern(funcName),
+		SourceFile:     libpf.Intern(fileName),
+		SourceLine:     libpf.SourceLineno(line),
+	})
 	return nil
 }
 
@@ -408,8 +404,8 @@ func (l *luajitInstance) addVM(g libpf.Address) bool {
 	}
 	return !ok
 }
-func (l *luajitInstance) Symbolize(symbolReporter reporter.SymbolReporter, frame *host.Frame,
-	trace *libpf.Trace) error {
+
+func (l *luajitInstance) Symbolize(frame *host.Frame, frames *libpf.Frames) error {
 	if !frame.Type.IsInterpType(libpf.LuaJIT) {
 		return interpreter.ErrMismatchInterpreterType
 	}
@@ -461,19 +457,12 @@ func (l *luajitInstance) Symbolize(symbolReporter reporter.SymbolReporter, frame
 	}
 
 	calleePT := libpf.Address(frame.File)
-	frameID := CreateFrameID(frame)
-	if err := l.symbolizeFrame(symbolReporter, funcName, trace, calleePT,
-		frame.LJCalleePC, frameID); err != nil {
+	if err := l.symbolizeFrame(funcName, calleePT,
+		frame.LJCalleePC, frames); err != nil {
 		return err
 	}
 
 	return nil
-}
-
-func CreateFrameID(frame *host.Frame) libpf.FrameID {
-	fileID := libpf.NewFileID(uint64(frame.File), uint64(frame.Lineno))
-	lineno := uint64(frame.LJCalleePC)<<32 + uint64(frame.LJCallerPC)
-	return libpf.NewFrameID(fileID, libpf.AddressOrLineno(lineno))
 }
 
 func (l *luajitInstance) GetAndResetMetrics() ([]metrics.Metric, error) {

@@ -40,6 +40,6 @@ type InstanceStubs struct {
 	ObserverStubs
 }
 
-func (is *InstanceStubs) Symbolize(reporter.SymbolReporter, *host.Frame, *libpf.Trace) error {
+func (is *InstanceStubs) Symbolize(*host.Frame, *libpf.Frames) error {
 	return ErrMismatchInterpreterType
 }
