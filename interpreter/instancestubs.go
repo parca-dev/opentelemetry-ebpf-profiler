@@ -81,3 +81,7 @@ func (mockup *EbpfHandlerStubs) AttachUprobe(
 	libpf.PID, string, uint64, string) (LinkCloser, error) {
 	return nil, nil
 }
+
+func (is *InstanceStubs) ReleaseResources() error {
+	return nil
+}

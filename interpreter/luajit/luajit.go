@@ -56,6 +56,7 @@ type luajitData struct {
 }
 
 type luajitInstance struct {
+	interpreter.InstanceStubs
 	rm         remotememory.RemoteMemory
 	protos     map[libpf.Address]*proto
 	jitRegions regionMap
