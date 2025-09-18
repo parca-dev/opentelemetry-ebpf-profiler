@@ -295,184 +295,33 @@ static EBPF_INLINE u64 addr_for_tls_symbol(u64 symbol, bool dtv)
   return addr;
 }
 
-// Converts IEEE 754 double precision floating point bits to integer value.
-// Takes the raw 64-bit representation of a double and extracts the integer value.
-// Used for extracting Node.js async IDs stored as doubles in memory (in eBPF context,
-// where we can't use the actual "double" type)
-//
-// Assumptions:
-// - Input represents a non-negative integer value in the safe range
-// stored as a double (so no negatives, nothing 2^53 or higher,
-// no NaNs, infinities, or denormals)
-static EBPF_INLINE u64 integral_double_to_int(u64 bits)
+static EBPF_INLINE u64 get_v8_cped_address(V8ProcInfo *proc)
 {
-  // Extract exponent (11 bits)
-  u64 exponent = (bits >> 52) & 0x7FF;
-  // Extract mantissa (52 bits)
-  u64 mantissa = bits & 0xFFFFFFFFFFFFF;
+  int err;
 
-  // Handle zero case
-  if (exponent == 0 && mantissa == 0) {
+  DEBUG_PRINT("node cl: cped_offset=0x%x", proc->cped_offset);
+
+  u64 isolate_ptr_ptr = addr_for_tls_symbol(proc->isolate_sym, true);
+  DEBUG_PRINT("node cl: isolate_addr = 0x%llx", isolate_ptr_ptr);
+  if (!isolate_ptr_ptr) {
     return 0;
   }
 
-  // Add implicit leading 1
-  mantissa |= 1ULL << 52;
-
-  // Adjust exponent (bias is 1023)
-  s64 shift = exponent - 1023;
-
-  // Shift mantissa to get integer value
-  if (shift <= 52) {
-    return mantissa >> (52 - shift);
-  } else {
-    return mantissa << (shift - 52);
-  }
-}
-
-// From https://stackoverflow.com/a/12996028/242814
-// which got it from public-domain code.
-//
-// Changing this function is a breaking ABI change!
-static u64 custom_labels_hm_hash(u64 x)
-{
-  x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9UL;
-  x = (x ^ (x >> 27)) * 0x94d049bb133111ebUL;
-  x = x ^ (x >> 31);
-  return x;
-}
-
-// Extracts the Node.js environment pointer from V8 isolate by traversing
-// through V8 internal structures: isolate -> context_handle -> real_context_handle
-// -> native_context -> embedder_data -> env_ptr
-static EBPF_INLINE bool get_node_env_ptr(V8ProcInfo *proc, u64 *env_ptr_out)
-{
-  int err;
-
-  DEBUG_PRINT("context_handle_offset=0x%x", proc->context_handle_offset);
-  DEBUG_PRINT("native_context_offset=0x%x", proc->native_context_offset);
-  DEBUG_PRINT("embedder_data_offset=0x%x", proc->embedder_data_offset);
-  DEBUG_PRINT("environment_pointer_offset=0x%x", proc->environment_pointer_offset);
-  DEBUG_PRINT("execution_async_id_offset=0x%x", proc->execution_async_id_offset);
-
-  u64 isolate_addr = addr_for_tls_symbol(proc->isolate_sym, true);
-  DEBUG_PRINT("node custom labels: isolate_addr = 0x%llx", isolate_addr);
-  if (!isolate_addr) {
-    increment_metric(metricID_UnwindNodeAsyncIdErrGetTlsSymbol);
-    return false;
+  u64 isolate_ptr;
+  if ((err = bpf_probe_read_user(&isolate_ptr, sizeof(void *), (void *)(isolate_ptr_ptr)))) {
+    DEBUG_PRINT("node cl: failed to read node custom labels current set pointer: %d", err);
+    return 0;
   }
 
-  u64 isolate;
-  if ((err = bpf_probe_read_user(&isolate, sizeof(void *), (void *)(isolate_addr)))) {
-    increment_metric(metricID_UnwindNodeAsyncIdErrReadIsolate);
-    DEBUG_PRINT("Failed to read node custom labels current set pointer: %d", err);
-    return false;
+  u64 cped_addr_ptr = isolate_ptr + proc->cped_offset;
+  u64 cped_handle;
+
+  if ((err = bpf_probe_read_user(&cped_handle, sizeof(void *), (void *)(cped_addr_ptr)))) {
+    DEBUG_PRINT("node cl: failed to read node custom labels current set pointer: %d", err);
+    return 0;
   }
 
-  u64 context_handle_ptr = isolate + proc->context_handle_offset;
-  DEBUG_PRINT("node custom labels: context_handle_ptr = 0x%llx", context_handle_ptr);
-
-  u64 context_handle;
-  if ((err = bpf_probe_read_user(&context_handle, sizeof(void *), (void *)(context_handle_ptr)))) {
-    increment_metric(metricID_UnwindNodeAsyncIdErrReadContextHandle);
-    DEBUG_PRINT("Failed to read node custom labels current set pointer: %d", err);
-    return false;
-  }
-  DEBUG_PRINT("node custom labels: context_handle = 0x%llx", context_handle);
-
-  u64 context_ptr = context_handle - 1;
-  DEBUG_PRINT("node custom labels: context_ptr = 0x%llx", context_ptr);
-
-  u64 real_context_handle;
-  if ((err = bpf_probe_read_user(&real_context_handle, sizeof(void *), (void *)(context_ptr)))) {
-    increment_metric(metricID_UnwindNodeAsyncIdErrReadRealContextHandle);
-    DEBUG_PRINT("Failed to read real context handle: %d", err);
-    return false;
-  }
-  DEBUG_PRINT("node custom labels: real_context_handle = 0x%llx", real_context_handle);
-
-  u64 native_context_ptr = real_context_handle + proc->native_context_offset;
-  DEBUG_PRINT("node custom labels: native_context_ptr = 0x%llx", native_context_ptr);
-
-  u64 native_context;
-  if ((err = bpf_probe_read_user(&native_context, sizeof(void *), (void *)(native_context_ptr)))) {
-    increment_metric(metricID_UnwindNodeAsyncIdErrReadNativeContext);
-    DEBUG_PRINT("Failed to read native context: %d", err);
-    return false;
-  }
-  DEBUG_PRINT("node custom labels: native_context = 0x%llx", native_context);
-
-  u64 embedder_data_ptr = native_context + proc->embedder_data_offset;
-  DEBUG_PRINT("node custom labels: embedder_data_ptr = 0x%llx", embedder_data_ptr);
-
-  u64 embedder_data;
-  if ((err = bpf_probe_read_user(&embedder_data, sizeof(void *), (void *)(embedder_data_ptr)))) {
-    increment_metric(metricID_UnwindNodeAsyncIdErrReadEmbedderData);
-    DEBUG_PRINT("Failed to read embedder data: %d", err);
-    return false;
-  }
-  DEBUG_PRINT("node custom labels: embedder_data = 0x%llx", embedder_data);
-
-  u64 env_ptr_ptr = embedder_data + proc->environment_pointer_offset;
-  DEBUG_PRINT("node custom labels: env_ptr_ptr = 0x%llx", env_ptr_ptr);
-
-  u64 env_ptr;
-  if ((err = bpf_probe_read_user(&env_ptr, sizeof(void *), (void *)(env_ptr_ptr)))) {
-    increment_metric(metricID_UnwindNodeAsyncIdErrReadEnvPtr);
-    DEBUG_PRINT("Failed to read id field: %d", err);
-    return false;
-  }
-  DEBUG_PRINT("node custom labels: env_ptr = 0x%llx", env_ptr);
-
-  *env_ptr_out = env_ptr;
-  return true;
-}
-
-static EBPF_INLINE bool get_node_async_id(V8ProcInfo *proc, u64 pid_tgid, u64 *out)
-{
-  int err;
-
-  u64 env_ptr;
-  // Try to get fresh env_ptr
-  if (get_node_env_ptr(proc, &env_ptr)) {
-    bpf_map_update_elem(&v8_cached_env_ptrs, &pid_tgid, &env_ptr, BPF_ANY);
-  } else {
-    // Fallback to cached value from previous successful extraction
-    u64 *cached_env_ptr = bpf_map_lookup_elem(&v8_cached_env_ptrs, &pid_tgid);
-    if (cached_env_ptr && *cached_env_ptr != 0) {
-      // TODO[btv] -- Figure out why the environment is sometimes null.
-      // It doesn't seem to matter in practice, since the environment rarely (never?)
-      // changes, so using the cached version is fine, but it's worth understanding anyway...
-      DEBUG_PRINT("node custom labels: using cached env_ptr = 0x%llx", *cached_env_ptr);
-      env_ptr = *cached_env_ptr;
-    } else {
-      DEBUG_PRINT("node custom labels: no cached env_ptr available");
-      return false;
-    }
-  }
-
-  u64 id_field_ptr = env_ptr + proc->execution_async_id_offset;
-  DEBUG_PRINT("node custom labels: id_field_ptr = 0x%llx", id_field_ptr);
-
-  u64 id_field;
-  if ((err = bpf_probe_read_user(&id_field, sizeof(void *), (void *)(id_field_ptr)))) {
-    increment_metric(metricID_UnwindNodeAsyncIdErrReadIdField);
-    DEBUG_PRINT("Failed to read id field: %d", err);
-    return false;
-  }
-  DEBUG_PRINT("node custom labels: id_field = 0x%llx", id_field);
-
-  u64 bits;
-  if ((err = bpf_probe_read_user(&bits, sizeof(u64), (void *)(id_field)))) {
-    increment_metric(metricID_UnwindNodeAsyncIdErrReadIdDouble);
-    DEBUG_PRINT("Failed to read id double: %d", err);
-    return false;
-  }
-  u64 id = integral_double_to_int(bits);
-  DEBUG_PRINT("node custom labels: id = %lld", id);
-  *out = id;
-
-  return true;
+  return cped_handle;
 }
 
 static EBPF_INLINE bool
@@ -575,91 +424,254 @@ static EBPF_INLINE void maybe_add_native_custom_labels(PerCPURecord *record)
     increment_metric(metricID_UnwindNativeCustomLabelsAddErrors);
 }
 
-static EBPF_INLINE u64 get_labelset_for_async_id(u64 hm_addr, u64 id)
-{
-  u64 h = custom_labels_hm_hash(id);
-
-  NativeCustomLabelsHm hm;
-  if (bpf_probe_read_user(&hm, sizeof(hm), (void *)hm_addr)) {
-    increment_metric(metricID_UnwindNodeClFailedReadHmStruct);
-    DEBUG_PRINT("Failed to read hashmap structure");
-    return 0;
-  }
-
-  u64 capacity = 1ULL << hm.log2_capacity;
-
-  u64 labelset_rc_addr = 0;
-  int i;
-  const int MAX_BUCKETS = 32;
-  for (i = 0; i < MAX_BUCKETS; ++i) {
-    int pos = (h + i) % capacity;
-    NativeCustomLabelsHmBucket bucket;
-    if (bpf_probe_read_user(
-          &bucket,
-          sizeof(bucket),
-          (void *)((u64)hm.buckets + pos * sizeof(NativeCustomLabelsHmBucket)))) {
-      increment_metric(metricID_UnwindNodeClFailedReadBucket);
-      DEBUG_PRINT("Failed to read bucket at position %d", pos);
-      return 0;
-    }
-
-    if (!bucket.value || bucket.key == id) {
-      labelset_rc_addr = (u64)bucket.value;
-      break;
-    }
-  }
-  if (!labelset_rc_addr) {
-    if (i == MAX_BUCKETS)
-      increment_metric(metricID_UnwindNodeClFailedTooManyBuckets);
-    return 0;
-  }
-  u64 labelset_addr;
-  if (bpf_probe_read_user(&labelset_addr, sizeof(labelset_addr), (void *)labelset_rc_addr)) {
-    increment_metric(metricID_UnwindNodeClFailedReadLsAddr);
-    DEBUG_PRINT("Failed to read labelset addr");
-    return 0;
-  }
-  return labelset_addr;
+bool EBPF_INLINE is_smi(u64 x) {
+  return !(x & 0xFFFFFFFF);
 }
 
-// TODO - combine with native?
-static EBPF_INLINE void maybe_add_node_custom_labels(PerCPURecord *record)
+#define MAX_V8_HM_TRIES 16
+// V8 internals basics:
+//
+// Note: the information here is valid only for v8
+// as embedded in Node on 64-bit machines. Other embedders turn on different
+// sets of flags that cause data to be represented differently.
+//
+// v8 objects are represented by the "Address" type, which is either
+// a tagged pointer to a heap object (tagged by setting the LSB to 1)
+// or a SMI (short for "small integer") -- a 32-bit signed integer stored in the most significant
+// half of a 64-bit value, with the least significant bits set to zero.
+//
+// So to read a SMI, we do addr >> 32, and to read an object, we do addr - 1.
+//
+// Since objects can be moved by the GC, they are not usually referenced by the GC, but
+// rather by "handles" that introduce another layer of indirection: that is,
+// a handle usually holds an Address *, rather than an Address.
+//
+// There are various types of handle: Local, Persistent, Global, but the
+// distinction between these does not really matter for our purposes.
+//
+// Custom labels are based on Node's async context frame feature,
+// which is available starting in v22 (requiring to launch Node with a custom flag),
+// and on by default starting in v24. When this feature is on,
+// all AsyncLocalStorage instances (https://nodejs.org/api/async_context.html#class-asynclocalstorage)
+// are stored in v8's ContinuationPreservedEmbedderData (CPED) and in most cases
+// propagation is handled by v8 itself.
+//
+// When this feature is enabled,
+// Node installs in the CPED a map (that is, the JavaScript Map type)
+// from the AsyncLocalStorage's identity hash to the
+// AsyncLocalStorage itself.
+//
+// JavaScript maps in v8 have the following structure:
+// (TODO: are the offsets true for all versions?)
+// JS Map object -> Handle to C++ OrderedHashMap (at 0x18)
+//
+// The handle points to an object
+// with a 0x10-byte object header, followed by the OrderedHashMap proper,
+// whose layout is as follows:
+//
+// 0x0: element count
+// 0x8: deleted element count
+// 0x10: bucket count -- 8-byte SMI
+// 0x18 ... (one for each bucket): bucket entry indices -- each is an 8-byte SMI.
+// Data table (immediately following the bucket indices):
+//   Each entry is 0x18 bytes: key, value, next-index.
+//   key/value are tagged object handles; next-index is the next index
+//   to try if the key doesn't match (also an 8-byte SMI).
+//
+// So the lookup procedure is as follows:
+// 1. Get the hash (as returned by Object::GetIdentityHash)
+// 2. Get the bucket index (hash % n_buckets) -- note,
+//    this doesn't require an actual mod, because n_buckets is always a
+//    power of 2.
+// 3. Get the entry index for the bucket (in the data immediately following
+//    the bucket count).
+// 4. Get the entry. If its key is the same object as what we are looking for
+//    (by object identity), we are done. Otherwise, read the next-entry.
+//    If it is -1, we have failed, otherwise iterate.
+//
+// So, our native Node extension does the following:
+//
+// 1. On first use, create an AsyncLocalStorage, which we will use for
+//    storing labelsets. Store both the hash of this ALS and a handle to it
+//    at well-known symbols. (The handle is one of the indirect handles described
+//    above, so it will be updated by the GC to contain the correct object address
+//    even if it moves).
+// 2. When withLabels is called, create a new labelset with the required labels and
+//    forward it to the ALS's `run` method.
+//
+// Actually, it's slightly more complicated: we can't just store a labelset directly;
+// we need to store something that fits in v8's object hierarchy and which can be
+// tracked/finalized by the GC. v8 provides the `ObjectWrap` class for exactly this purpose, so
+// we have a C++ type `ClWrap` which inherits from `ObjectWrap` and itself stores a labelset.
+// `ClWrap` also stores a fixed u64 token, currently 0xEC9EB507FB5D7903. This
+// lets us identify that an object at runtime is actually of that type (as opposed to,
+// for example, "undefined").
+static EBPF_INLINE bool maybe_add_node_custom_labels(PerCPURecord *record)
 {
   u32 pid                          = record->trace.pid;
   V8ProcInfo *v8_proc              = bpf_map_lookup_elem(&v8_procs, &pid);
   NativeCustomLabelsProcInfo *proc = bpf_map_lookup_elem(&cl_procs, &pid);
-  if (!v8_proc || !proc || !proc->has_current_hm) {
-    DEBUG_PRINT("cl: %d does not support node custom labels ", pid);
-    return;
+  if (!v8_proc || !proc || !proc->has_als_data) {
+    DEBUG_PRINT("node cl: pid %d does not support node custom labels", pid);
+    return true;
   }
-  u64 hm_ptr_addr = addr_for_tls_symbol(proc->current_hm_tls_offset, false);
-  DEBUG_PRINT("hm pointer addr: 0x%llx", hm_ptr_addr);
+  increment_metric(metricID_UnwindNodeCustomLabelsAttempts);
 
-  u64 hm_addr;
-  if (bpf_probe_read_user(&hm_addr, sizeof(hm_addr), (void *)hm_ptr_addr)) {
-    increment_metric(metricID_UnwindNodeClFailedReadHmPointer);
-    DEBUG_PRINT("Failed to read hm pointer");
-    return;
+  int err;
+  u64 cped_addr = get_v8_cped_address(v8_proc);
+
+  if (!cped_addr) {
+    DEBUG_PRINT("node cl: failed to get v8 CPED address");
+    return false;
+  }
+  
+  DEBUG_PRINT("node cl: CPED address is 0x%llx", cped_addr);
+  u64 cped_table_ptr = cped_addr + 0x17;
+  u64 cped_table_addr;
+  if ((err = bpf_probe_read_user(&cped_table_addr, sizeof(void *), (void *)(cped_table_ptr)))) {
+    DEBUG_PRINT("node cl: failed to read cped table addr: %d", err);
+    return false;
   }
 
-  u64 id;
-  u64 pid_tgid = (u64)record->trace.pid << 32 | record->trace.tid;
-  bool success = get_node_async_id(v8_proc, pid_tgid, &id);
-  if (success) {
-    if (id == 0) {
-      increment_metric(metricID_UnwindNodeClWarnIdZero);
+  u64 n_buckets_ptr = cped_table_addr - 1 + 0x10 + 2 * 8;
+  u64 first_bucket_ptr = n_buckets_ptr + 8;
+
+  u64 n_buckets_smi;
+
+  if ((err = bpf_probe_read_user(&n_buckets_smi, sizeof(void *), (void *)(n_buckets_ptr)))) {
+    DEBUG_PRINT("node cl: failed to read n buckets: %d", err);
+    return false;
+  }
+  if (!is_smi(n_buckets_smi)) {
+    DEBUG_PRINT("node cl: N buckets is not a smi: 0x%llx", n_buckets_smi);
+    return false;
+  }
+  s32 n_buckets = n_buckets_smi >> 32;    
+  DEBUG_PRINT("node cl: N buckets: %d", n_buckets);
+
+  if (n_buckets & (n_buckets - 1)) {
+    DEBUG_PRINT("node cl: N buckets is not a power of two: %d", n_buckets);
+    return false;
+  }
+
+  DEBUG_PRINT("node cl: id hash off: 0x%llx, handle offset: 0x%llx",
+              proc->als_identity_hash_tls_offset, proc->als_handle_tls_offset);
+
+  u64 als_id_hash_ptr = addr_for_tls_symbol(proc->als_identity_hash_tls_offset, false);
+  u64 als_handle_ptr = addr_for_tls_symbol(proc->als_handle_tls_offset, false);
+
+  int als_id_hash;
+
+  if ((err = bpf_probe_read_user(&als_id_hash, sizeof (int), (void *)als_id_hash_ptr))) {
+    DEBUG_PRINT("node cl: failed to read hash: %d", err);
+    return false;
+  }
+
+  u64 als_handle;
+  if ((err = bpf_probe_read_user(&als_handle, sizeof(void *), (void *)als_handle_ptr))) {
+    DEBUG_PRINT("node cl: failed to read als handle pointer: %d\n", err);
+    return false;
+  }
+
+  u64 als_identity;
+  if ((err = bpf_probe_read_user(&als_identity, sizeof(void *), (void *)als_handle))) {
+    DEBUG_PRINT("node cl: failed to read als identity: %d\n", err);
+    return false;
+  }
+
+  DEBUG_PRINT("node cl: als identity: 0x%llx; hash: 0x%x", als_identity, als_id_hash);
+
+  int bucket = als_id_hash & (n_buckets - 1);
+
+  u64 entry_idx_ptr = first_bucket_ptr + 8 * bucket;
+
+  int tries;
+
+  u64 value;
+  for (tries = 0; tries < MAX_V8_HM_TRIES; ++tries) {
+    u64 entry_idx_smi;
+    if ((err = bpf_probe_read_user(&entry_idx_smi, sizeof(void *), (void *)entry_idx_ptr))) {
+      DEBUG_PRINT("node cl: failed to read next entry index: %d\n", err);
+      return false;
     }
-    u64 labelset_addr = get_labelset_for_async_id(hm_addr, id);
-    labelset_addr     = (u64)labelset_addr;
-    if (labelset_addr) {
-      DEBUG_PRINT("cl: labelset addr is 0x%llx", labelset_addr);
-      read_labelset_into_trace(record, (NativeCustomLabelsSet *)labelset_addr);
+    if (!is_smi(entry_idx_smi)) {
+      DEBUG_PRINT("node cl: entry index is not a smi: 0x%llx", entry_idx_smi);
+      return false;
+    }
+    s32 entry_idx = entry_idx_smi >> 32;
+
+    if (entry_idx < 0) {
+      DEBUG_PRINT("node cl: ALS not found in map.");
+      return false;
+    }
+
+    DEBUG_PRINT("node cl: entry idx: %d\n", entry_idx);
+
+    struct Entry {
+      u64 key;
+      u64 value;
+      u64 next_index;
+    };
+
+    struct Entry e;
+    struct Entry *entry_ptr = (struct Entry *)(first_bucket_ptr + 8 * n_buckets + sizeof(struct Entry) * entry_idx);
+    if ((err = bpf_probe_read_user(&e, sizeof(e), (void *)entry_ptr))) {
+      DEBUG_PRINT("node cl: failed to read entry: %d\n", err);
+      return false;
+    }
+
+    DEBUG_PRINT("node cl: successfully read entry: key: 0x%llx, val: 0x%llx, next: 0x%llx", e.key, e.value, e.next_index);
+
+    if (e.key == als_identity) {
+      DEBUG_PRINT("node cl: key matches.");
+      value = e.value;
+      break;
+    }
+    DEBUG_PRINT("node cl: key doesn't match; continuing");
+    entry_idx_ptr = (u64)(&entry_ptr->next_index);
+  }
+
+  if (tries < MAX_V8_HM_TRIES) {
+    u64 cl_wrap_ptr_ptr = value - 1 + v8_proc->wrapped_object_offset;
+    u64 cl_wrap_ptr;
+
+    if ((err = bpf_probe_read_user(&cl_wrap_ptr, sizeof(u64), (void *)cl_wrap_ptr_ptr))) {
+      DEBUG_PRINT("node cl: failed to find ClWrap: %d\n", err);
+      return false;
+    }
+
+    DEBUG_PRINT("node cl: ClWrap at 0x%llx", cl_wrap_ptr);
+
+    u64 cl_ptr_ptr = cl_wrap_ptr + 24;
+    u64 token_ptr = cl_ptr_ptr + 8;
+    u64 token;
+    if ((err = bpf_probe_read_user(&token, sizeof(u64), (void *)token_ptr))) {
+      DEBUG_PRINT("node cl: failed reading token: %d\n", err);
+      return false;
+    }
+    if (token != 0xEC9EB507FB5D7903) {
+      DEBUG_PRINT("node cl: not a labelset");
+      return true; // this isn't a failure!
+    }
+    u64 cl_ptr;
+    if ((err = bpf_probe_read_user(&cl_ptr, sizeof(u64), (void *)cl_ptr_ptr))) {
+      DEBUG_PRINT("node cl: failed reading cl ptr: %d\n", err);
+      return false;
+    }
+      
+    bool success = read_labelset_into_trace(record, (NativeCustomLabelsSet *)cl_ptr);
+
+    if (success) {
+      DEBUG_PRINT("node cl: succeeded reading ls into trace");
+      increment_metric(metricID_UnwindNodeCustomLabelsSuccesses);
+      return true;
     } else {
-      increment_metric(metricID_UnwindNodeClFailedNoLsInHm);
-      DEBUG_PRINT("cl: No labelset found in hashmap for async id %lld", id);
+      DEBUG_PRINT("node cl: failed to read labelset into trace");
+      return false;
     }
   } else {
-    increment_metric(metricID_UnwindNodeClFailedGettingId);
+    DEBUG_PRINT("node cl: couldn't find ls after searching max buckets");
+    return false;
   }
 }
 
@@ -728,7 +740,8 @@ static EBPF_INLINE int unwind_stop(struct pt_regs *ctx)
   maybe_add_go_custom_labels_legacy(ctx, record);
   maybe_add_go_custom_labels(ctx, record);
   maybe_add_native_custom_labels(record);
-  maybe_add_node_custom_labels(record);
+  if (!maybe_add_node_custom_labels(record))
+    increment_metric(metricID_UnwindNodeCustomLabelsFailures);
   maybe_add_apm_info(trace);
 
   // If the stack is otherwise empty, push an error for that: we should

@@ -1,5 +1,3 @@
-//go:generate go run ../../tools/csv2go.go ../../tools/complete_offsets.csv node_offsets_generated.go
-
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
@@ -475,13 +473,6 @@ type v8Data struct {
 	// version contains the V8 version
 	version uint32
 
-	// Node.js environment offsets
-	contextHandleOffset      uint32
-	nativeContextOffset      uint32
-	embedderDataOffset       uint32
-	environmentPointerOffset uint32
-	executionAsyncIdOffset   uint32
-
 	// bytecodeSizes contains the V8 bytecode length data
 	bytecodeSizes []byte
 
@@ -493,6 +484,14 @@ type v8Data struct {
 
 	// isolateSym is the symbol of the v8 thread-local current isolate
 	isolateSym libpf.Address
+
+	// cpedOffset is the offset of continuation_preserved_embedder_data_ in
+	// the isolate data.
+	cpedOffset uint32
+
+	// wrappedObjectOffset is the offset of a wrapped (via ObjectWrap) C++ object
+	// in the corresponding JS object.
+	wrappedObjectOffset uint32
 }
 
 type v8Instance struct {
@@ -1774,12 +1773,6 @@ func (d *v8Data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Add
 	data := support.V8ProcInfo{
 		Version: d.version,
 
-		Context_handle_offset:      d.contextHandleOffset,
-		Native_context_offset:      d.nativeContextOffset,
-		Embedder_data_offset:       d.embedderDataOffset,
-		Environment_pointer_offset: d.environmentPointerOffset,
-		Execution_async_id_offset:  d.executionAsyncIdOffset,
-
 		Fp_marker:          mapFramePointerOffset(vms.FramePointer.Context),
 		Fp_function:        mapFramePointerOffset(vms.FramePointer.Function),
 		Fp_bytecode_offset: mapFramePointerOffset(vms.FramePointer.BytecodeOffset),
@@ -1802,6 +1795,8 @@ func (d *v8Data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Add
 		Codekind_mask:     uint8(vms.CodeKind.FieldMask),
 		Codekind_baseline: vms.CodeKind.Baseline,
 		Isolate_sym:       uint64(d.isolateSym),
+		Cped_offset:       d.cpedOffset,
+		Wrapped_object_offset: d.wrappedObjectOffset,
 	}
 	if err := ebpf.UpdateProcData(libpf.V8, pid, unsafe.Pointer(&data)); err != nil {
 		return nil, err
@@ -2131,21 +2126,18 @@ func (d *v8Data) loadNodeClData(ef *pfelf.File) error {
 	}
 
 	major := binary.LittleEndian.Uint32(versBuf[0:4])
-	minor := binary.LittleEndian.Uint32(versBuf[4:8])
-	patch := binary.LittleEndian.Uint32(versBuf[8:12])
+	// minor := binary.LittleEndian.Uint32(versBuf[4:8])
+	// patch := binary.LittleEndian.Uint32(versBuf[8:12])
 
-	// Construct version string and look up Node.js environment offsets
-	nodeVersion := fmt.Sprintf("v%d.%d.%d", major, minor, patch)
-	if offsets, found := nodeOffsetTable[nodeVersion]; found {
-		d.contextHandleOffset = offsets.contextHandle
-		d.nativeContextOffset = offsets.nativeContext
-		d.embedderDataOffset = offsets.embedderData
-		d.environmentPointerOffset = offsets.environmentPointer
-		d.executionAsyncIdOffset = offsets.executionAsyncId
-	} else {
-		return fmt.Errorf("no offsets found for Node.js version %s", nodeVersion)
+	if major >= 22 {
+		if major < 24 {
+			d.cpedOffset = 576
+			d.wrappedObjectOffset = 24
+		} else {
+			d.cpedOffset = 632
+			d.wrappedObjectOffset = 32
+		}
 	}
-
 	return nil
 }
 
