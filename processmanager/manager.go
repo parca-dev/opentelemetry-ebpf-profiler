@@ -221,19 +221,11 @@ func (pm *ProcessManager) symbolizeFrame(frame int, trace *host.Trace, frames *l
 func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace, err error) {
 	traceLen := len(trace.Frames)
 	kernelFramesLen := len(trace.KernelFrames)
-	log.Debugf("ConvertTrace: traceLen=%d, kernelFramesLen=%d", traceLen, kernelFramesLen)
 
 	newTrace = &libpf.Trace{
 		Frames:       make(libpf.Frames, kernelFramesLen, kernelFramesLen+traceLen),
 		CustomLabels: trace.CustomLabels,
 	}
-
-	// Debug kernel frames
-	for i, kf := range trace.KernelFrames {
-		frame := kf.Value()
-		log.Debugf("ConvertTrace: KernelFrame[%d] type=%d fileID=%x", i, frame.Type, frame.FileID)
-	}
-
 	copy(newTrace.Frames, trace.KernelFrames)
 
 	for i := range traceLen {
@@ -314,14 +306,6 @@ func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace
 			}
 		}
 	}
-
-	// Debug final trace before hashing
-	log.Debugf("ConvertTrace: Final trace has %d frames", len(newTrace.Frames))
-	for i, frameHandle := range newTrace.Frames {
-		frame := frameHandle.Value()
-		log.Debugf("ConvertTrace: Final Frame[%d] type=%d fileID=%x", i, frame.Type, frame.FileID)
-	}
-
 	newTrace.Hash = traceutil.HashTrace(newTrace)
 	return newTrace, nil
 }

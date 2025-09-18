@@ -1,6 +1,7 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
+// Package tracer contains functionality for populating tracers.
 package tracer // import "go.opentelemetry.io/ebpf-profiler/tracer"
 
 import (
