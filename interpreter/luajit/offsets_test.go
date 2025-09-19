@@ -142,7 +142,7 @@ func extractStackDeltas(target string, ef *pfelf.File) (sdtypes.IntervalData, in
 }
 
 func getLibFromImage(t *testing.T, name, platform, fullPath, target string) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 
 	image, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
