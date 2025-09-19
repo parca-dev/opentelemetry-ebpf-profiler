@@ -19,6 +19,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
@@ -319,7 +320,7 @@ func (o *offsetData) findTraceInfoFromLuaOpen() (*libpf.Symbol, error) {
 	//   };
 	const traceInfoIndex = 4
 	funcAddrs := make([]uint64, 12)
-	_, err = o.f.ReadAt(libpf.SliceFrom(funcAddrs), libJitFunctionAddresses)
+	_, err = o.f.ReadAt(pfunsafe.FromSlice(funcAddrs), libJitFunctionAddresses)
 	if err != nil {
 		return nil, err
 	}
