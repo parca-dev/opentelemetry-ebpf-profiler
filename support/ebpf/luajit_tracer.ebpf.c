@@ -41,8 +41,6 @@ bpf_map_def SEC("maps") luajit_procs = {
     __val;                                                                                         \
   })
 
-typedef signed long long intptr_t;
-
 #define L_PART_OFFSET   0x10
 #define CFRAME_SIZE_JIT 0x60
 // (gdb) p/x sizeof(GCproto)
@@ -110,9 +108,9 @@ enum { LJ_CONT_TAILCALL, LJ_CONT_FFI_CALLBACK }; /* Special continuations. */
 
 #define CFRAME_RESUME        1
 #define CFRAME_UNWIND_FF     2 /* Only used in unwinder. */
-#define CFRAME_RAWMASK       (~(intptr_t)(CFRAME_RESUME | CFRAME_UNWIND_FF))
+#define CFRAME_RAWMASK       (~(s64)(CFRAME_RESUME | CFRAME_UNWIND_FF))
 #define cframe_nres_addr(cf) (s32 *)(((char *)(cf)) + CFRAME_OFS_NRES)
-#define cframe_raw(cf)       ((void *)((intptr_t)(cf) & CFRAME_RAWMASK))
+#define cframe_raw(cf)       ((void *)((s64)(cf) & CFRAME_RAWMASK))
 #define cframe_pc_addr(cf)   (void *)(((char *)(cf)) + CFRAME_OFS_PC)
 #define cframe_L_addr(cf)    (void *)(((char *)(cf)) + CFRAME_OFS_L)
 #define cframe_prev(cf)      deref((void **)(((char *)(cf)) + CFRAME_OFS_PREV))

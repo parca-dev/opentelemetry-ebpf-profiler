@@ -13,8 +13,6 @@ import (
 	lru "github.com/elastic/go-freelru"
 	log "github.com/sirupsen/logrus"
 
-	"go.opentelemetry.io/ebpf-profiler/tracer/types"
-
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/apmint"
@@ -22,12 +20,12 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/lpm"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/nativeunwind"
-	sdtypes "go.opentelemetry.io/ebpf-profiler/nativeunwind/stackdeltatypes"
 	"go.opentelemetry.io/ebpf-profiler/periodiccaller"
-	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpf"
+	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpfapi"
 	eim "go.opentelemetry.io/ebpf-profiler/processmanager/execinfomanager"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/times"
+	"go.opentelemetry.io/ebpf-profiler/tracer/types"
 	"go.opentelemetry.io/ebpf-profiler/traceutil"
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
@@ -123,20 +121,18 @@ func metricSummaryToSlice(summary metrics.Summary) []metrics.Metric {
 	return result
 }
 
-// updateMetricSummary gets the metrics from the provided interpreter instance and updaates the
+// updateMetricSummary gets the metrics from the provided interpreter instance and updates the
 // provided summary by aggregating the new metrics into the summary.
 // The caller is responsible to hold the lock on the interpreter.Instance to avoid race conditions.
 func updateMetricSummary(ii interpreter.Instance, summary metrics.Summary) error {
 	instanceMetrics, err := ii.GetAndResetMetrics()
-	if err != nil {
-		return err
-	}
-
+	// Update metrics even if there was an error, because it's possible ii is a MultiInstance
+	// and some of the instances may have returned metrics.
 	for _, metric := range instanceMetrics {
 		summary[metric.ID] += metric.Value
 	}
 
-	return nil
+	return err
 }
 
 // collectInterpreterMetrics starts a goroutine that periodically fetches and reports interpreter
@@ -150,8 +146,8 @@ func collectInterpreterMetrics(ctx context.Context, pm *ProcessManager,
 		summary := make(map[metrics.MetricID]metrics.MetricValue)
 
 		for pid := range pm.interpreters {
-			for addr := range pm.interpreters[pid] {
-				if err := updateMetricSummary(pm.interpreters[pid][addr], summary); err != nil {
+			for addr, ii := range pm.interpreters[pid] {
+				if err := updateMetricSummary(ii, summary); err != nil {
 					log.Errorf("Failed to get/reset metrics for PID %d at 0x%x: %v",
 						pid, addr, err)
 				}
@@ -337,14 +333,4 @@ func (pm *ProcessManager) MaybeNotifyAPMAgent(
 	}
 
 	return serviceName
-}
-
-// AddSynthIntervalData adds synthetic stack deltas to the manager. This is useful for cases where
-// populating the information via the stack delta provider isn't viable, for example because the
-// `.eh_frame` section for a binary is broken. If `AddSynthIntervalData` was called for a given
-// file ID, the stack delta provider will not be consulted and the manually added stack deltas take
-// precedence.
-func (pm *ProcessManager) AddSynthIntervalData(fileID host.FileID,
-	data sdtypes.IntervalData) error {
-	return pm.eim.AddSynthIntervalData(fileID, data)
 }
