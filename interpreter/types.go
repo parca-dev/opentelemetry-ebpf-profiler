@@ -136,16 +136,14 @@ type Data interface {
 	Unload(ebpf EbpfHandler)
 }
 
-// Observer is the base interface for observing per-PID data without symbolization.
-// This interface is useful for components that need to observe processes without
-// providing frame symbolization capabilities.
-type Observer interface {
+// Instance is the interface to operate on per-PID data.
+type Instance interface {
 	// Detach removes any information from the ebpf maps. The pid is given as argument so
-	// simple observers can use the global Data also as the Observer implementation.
+	// simple interpreters can use the global Data also as the Instance implementation.
 	Detach(ebpf EbpfHandler, pid libpf.PID) error
 
 	// SynchronizeMappings is called when the processmanager has reread process memory
-	// mappings. Observers not needing to process these events can simply ignore them
+	// mappings. Interpreters not needing to process these events can simply ignore them
 	// by just returning a nil.
 	SynchronizeMappings(ebpf EbpfHandler, symbolReporter reporter.SymbolReporter,
 		pr process.Process, mappings []process.Mapping) error
@@ -153,16 +151,6 @@ type Observer interface {
 	// UpdateTSDInfo is called when the process C-library Thread Specific Data related
 	// introspection data has been updated.
 	UpdateTSDInfo(ebpf EbpfHandler, pid libpf.PID, info tpbase.TSDInfo) error
-
-	// GetAndResetMetrics collects the metrics from the Observer and resets
-	// the counters to their initial value.
-	GetAndResetMetrics() ([]metrics.Metric, error)
-}
-
-// Instance is the interface to operate on per-PID data with symbolization support.
-// It extends Observer with the ability to symbolize frames.
-type Instance interface {
-	Observer
 
 	// Symbolize converts one ebpf frame to one or more (if inlining was expanded) libpf.Frame.
 	// The resulting libpf.Frame values are appended to frames.
