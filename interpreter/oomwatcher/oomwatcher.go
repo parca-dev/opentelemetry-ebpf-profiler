@@ -5,6 +5,7 @@ package oomwatcher // import "go.opentelemetry.io/ebpf-profiler/interpreter/oomw
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/parca-dev/oomprof/oomprof"
@@ -77,6 +78,10 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 // Attach creates an observer instance for the given process.
 func (d *oomWatcherData) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID,
 	_ libpf.Address, _ remotememory.RemoteMemory) (interpreter.Instance, error) {
+	if os.Getpid() == int(pid) {
+		// Don't watch ourself, a parent process is required to report OOM's on the agent.
+		return nil, oomprof.ErrSelfWatch
+	}
 	instance := &oomWatcherInstance{
 		pid:  pid,
 		data: d,
@@ -86,9 +91,6 @@ func (d *oomWatcherData) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID,
 	if d.state != nil {
 		logf("oom: watching PID %d", pid)
 		if err := d.state.WatchPid(uint32(pid)); err != nil {
-			if err == oomprof.ErrSelfWatch {
-				return nil, nil
-			}
 			return nil, fmt.Errorf("failed to watch PID %d: %w", pid, err)
 		}
 	}
