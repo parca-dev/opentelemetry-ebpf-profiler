@@ -8,17 +8,21 @@ import (
 	"errors"
 	"fmt"
 	"math/bits"
+	"os"
 	"reflect"
 	"sync"
+	"syscall"
 	"unsafe"
 
 	cebpf "github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/features"
+	"github.com/cilium/ebpf/link"
 	log "github.com/sirupsen/logrus"
 	"golang.org/x/exp/constraints"
 
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/lpm"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	sdtypes "go.opentelemetry.io/ebpf-profiler/nativeunwind/stackdeltatypes"
@@ -35,6 +39,11 @@ const (
 	// updatePoolQueueCap decides the work queue capacity of each worker.
 	updatePoolQueueCap = 8
 )
+
+type usdtKey struct {
+	node uint64
+	name string
+}
 
 type ebpfMapsImpl struct {
 	// Interpreter related eBPF maps
@@ -65,6 +74,11 @@ type ebpfMapsImpl struct {
 	hasLPMTrieBatchOperations bool
 
 	updateWorkers *asyncMapUpdaterPool
+
+	progs map[string]*cebpf.Program
+
+	// map of inode to link
+	usdtMap map[usdtKey]link.Link
 }
 
 // Compile time check to make sure ebpfMapsImpl satisfies the interface .
@@ -75,8 +89,9 @@ var _ ebpfapi.EbpfHandler = &ebpfMapsImpl{}
 //
 // It further spawns background workers for deferred map updates; the given
 // context can be used to terminate them on shutdown.
-func LoadMaps(ctx context.Context, maps map[string]*cebpf.Map) (ebpfapi.EbpfHandler, error) {
-	impl := &ebpfMapsImpl{}
+func LoadMaps(ctx context.Context, maps map[string]*cebpf.Map,
+	progs map[string]*cebpf.Program) (ebpfapi.EbpfHandler, error) {
+	impl := &ebpfMapsImpl{progs: progs}
 	impl.errCounter = make(map[metrics.MetricID]int64)
 
 	implRefVal := reflect.ValueOf(impl).Elem()
@@ -118,6 +133,78 @@ func LoadMaps(ctx context.Context, maps map[string]*cebpf.Map) (ebpfapi.EbpfHand
 	impl.updateWorkers = newAsyncMapUpdaterPool(ctx, updatePoolWorkers, updatePoolQueueCap)
 
 	return impl, nil
+}
+
+// Kernel 6.6 introduced multi-uprobes which we want to use because single shot uprobes
+// don't work for shared libraries.
+func hasMultiUprobe() bool {
+	major, minor, _, err := util.GetCurrentKernelVersion()
+	if err != nil {
+		return false
+	}
+	return major >= 6 && minor >= 6
+}
+
+// AttachUSDTProbe allows interpreters to attach to uprobes found in libraries
+func (impl *ebpfMapsImpl) AttachUSDTProbe(pid libpf.PID, path string, probe pfelf.USDTProbe,
+	progName string) (link.Link, error) {
+	if impl.progs[progName] == nil {
+		return nil, fmt.Errorf("no eBPF program named %s", progName)
+	}
+
+	exe, err := link.OpenExecutable(path)
+	if err != nil {
+		return nil, err
+	}
+
+	// get inode for file
+	s, err := os.Stat(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to stat path %s: %w", path, err)
+	}
+	statt, ok := s.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil, errors.New("failed to get raw syscall.Stat_t")
+	}
+	inode := statt.Ino
+
+	uKey := usdtKey{node: inode, name: progName}
+
+	if impl.usdtMap == nil {
+		impl.usdtMap = make(map[usdtKey]link.Link)
+	} else {
+		if l, ok := impl.usdtMap[uKey]; ok {
+			log.Debugf("Reusing link probe %s:%s inode:%d", probe.Name, path, inode)
+			return l, nil
+		}
+	}
+
+	useMulti := hasMultiUprobe()
+	prog := impl.progs[progName]
+
+	var lnk link.Link
+	if useMulti {
+		up, err := exe.UprobeMulti([]string{probe.Name}, prog, &link.UprobeMultiOptions{
+			Addresses:     []uint64{probe.Location},
+			RefCtrOffsets: []uint64{probe.SemaphoreOffset},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to attach usdt to %s: %w %s", probe.Name, err, prog)
+		}
+		lnk = up
+	} else {
+		up, err := exe.Uprobe(probe.Name, prog, &link.UprobeOptions{
+			Address:      probe.Location,
+			RefCtrOffset: probe.SemaphoreOffset,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to attach usdt to %s: %w %s", probe.Name, err, prog)
+		}
+		lnk = up
+	}
+	log.Infof("Attached new uprobe to %s:%s in PID %d, inode : %d", probe.Name, path, pid, inode)
+	impl.usdtMap[uKey] = lnk
+	return lnk, nil
 }
 
 func (impl *ebpfMapsImpl) CoredumpTest() bool {

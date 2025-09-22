@@ -316,4 +316,5 @@ var MetricsTranslation = []metrics.MetricID{
 	C.metricID_UnwindNodeAsyncIdErrReadEnvPtr:             metrics.IDUnwindNodeAsyncIdErrReadEnvPtr,
 	C.metricID_UnwindNodeAsyncIdErrReadIdField:            metrics.IDUnwindNodeAsyncIdErrReadIdField,
 	C.metricID_UnwindNodeAsyncIdErrReadIdDouble:           metrics.IDUnwindNodeAsyncIdErrReadIdDouble,
+	C.metricID_RtldMapCompleteHits:                        metrics.IDRtldMapCompleteHits,
 }

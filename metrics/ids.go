@@ -731,6 +731,9 @@ const (
 	// Number of failures to read Node.js async ID double value
 	IDUnwindNodeAsyncIdErrReadIdDouble = 307
 
+	// Number of times rtld:map_complete USDT probe was fired
+	IDRtldMapCompleteHits = 308
+
 	// max number of ID values, keep this as *last entry*
-	IDMax = 308
+	IDMax = 309
 )

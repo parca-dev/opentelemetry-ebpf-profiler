@@ -4,12 +4,15 @@
 package util // import "go.opentelemetry.io/ebpf-profiler/util"
 
 import (
+	"bytes"
+	"fmt"
 	"math/bits"
 	"sync/atomic"
 	"unicode"
 	"unicode/utf8"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf/hash"
+	"golang.org/x/sys/unix"
 )
 
 // IsValidString checks if string is UTF-8-encoded and only contains expected characters.
@@ -78,4 +81,15 @@ type OnDiskFileIdentifier struct {
 
 func (odfi OnDiskFileIdentifier) Hash32() uint32 {
 	return uint32(hash.Uint64(odfi.InodeNum) + odfi.DeviceID)
+}
+
+// GetCurrentKernelVersion returns the major, minor and patch version of the kernel of the host
+// from the utsname struct.
+func GetCurrentKernelVersion() (major, minor, patch uint32, err error) {
+	var uname unix.Utsname
+	if err := unix.Uname(&uname); err != nil {
+		return 0, 0, 0, fmt.Errorf("could not get Kernel Version: %v", err)
+	}
+	_, _ = fmt.Fscanf(bytes.NewReader(uname.Release[:]), "%d.%d.%d", &major, &minor, &patch)
+	return major, minor, patch, nil
 }

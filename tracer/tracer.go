@@ -38,6 +38,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/times"
 	"go.opentelemetry.io/ebpf-profiler/tracehandler"
 	"go.opentelemetry.io/ebpf-profiler/tracer/types"
+	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
 // Compile time check to make sure times.Times satisfies the interfaces.
@@ -190,7 +191,7 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 		return nil, fmt.Errorf("failed to load eBPF code: %v", err)
 	}
 
-	ebpfHandler, err := pmebpf.LoadMaps(ctx, ebpfMaps)
+	ebpfHandler, err := pmebpf.LoadMaps(ctx, ebpfMaps, ebpfProgs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load eBPF maps: %v", err)
 	}
@@ -316,7 +317,7 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 
 	if cfg.KernelVersionCheck {
 		var major, minor, patch uint32
-		major, minor, patch, err = GetCurrentKernelVersion()
+		major, minor, patch, err = util.GetCurrentKernelVersion()
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to get kernel version: %v", err)
 		}
@@ -520,7 +521,13 @@ func loadPerfUnwinders(coll *cebpf.CollectionSpec, ebpfProgs map[string]*cebpf.P
 			name:             "native_tracer_entry",
 			noTailCallTarget: true,
 			enable:           true,
-		})
+		},
+		progLoaderHelper{
+			name:             "usdt_rtld_map_complete",
+			noTailCallTarget: true,
+			enable:           true,
+		},
+	)
 
 	for _, unwindProg := range progs {
 		if !unwindProg.enable {
@@ -535,6 +542,11 @@ func loadPerfUnwinders(coll *cebpf.CollectionSpec, ebpfProgs map[string]*cebpf.P
 		progSpec, ok := coll.Programs[unwindProgName]
 		if !ok {
 			return fmt.Errorf("program %s does not exist", unwindProgName)
+		}
+
+		if strings.HasPrefix(progSpec.Name, "usdt") {
+			log.Infof("Setting attach type of %s to UprobeMulti", progSpec.Name)
+			progSpec.AttachType = cebpf.AttachTraceUprobeMulti
 		}
 
 		if err := loadProgram(ebpfProgs, tailcallMap, unwindProg.progID, progSpec,
@@ -1135,4 +1147,9 @@ func (t *Tracer) StartOffCPUProfiling() error {
 // TraceProcessor gets the trace processor.
 func (t *Tracer) TraceProcessor() tracehandler.TraceProcessor {
 	return t.processManager
+}
+
+// GetEbpfMaps returns the eBPF maps for testing purposes.
+func (t *Tracer) GetEbpfMaps() map[string]*cebpf.Map {
+	return t.ebpfMaps
 }

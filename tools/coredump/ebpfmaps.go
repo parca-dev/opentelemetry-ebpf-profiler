@@ -8,9 +8,11 @@ import (
 	"math/bits"
 	"unsafe"
 
+	"github.com/cilium/ebpf/link"
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/lpm"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	sdtypes "go.opentelemetry.io/ebpf-profiler/nativeunwind/stackdeltatypes"
@@ -262,4 +264,9 @@ func (emc *ebpfMapsCoredump) SupportsGenericBatchOperations() bool {
 
 func (emc *ebpfMapsCoredump) SupportsLPMTrieBatchOperations() bool {
 	return false
+}
+
+func (emc *ebpfMapsCoredump) AttachUSDTProbe(_ libpf.PID, _ string, _ pfelf.USDTProbe,
+	_ string) (link.Link, error) {
+	return nil, nil
 }

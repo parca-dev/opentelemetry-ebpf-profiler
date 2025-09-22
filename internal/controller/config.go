@@ -11,6 +11,7 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
+	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
 type Config struct {
@@ -95,7 +96,7 @@ func (cfg *Config) Validate() error {
 	}
 
 	if !cfg.NoKernelVersionCheck {
-		major, minor, patch, err := tracer.GetCurrentKernelVersion()
+		major, minor, patch, err := util.GetCurrentKernelVersion()
 		if err != nil {
 			return fmt.Errorf("failed to get kernel version: %v", err)
 		}
