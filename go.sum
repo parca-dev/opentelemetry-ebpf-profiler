@@ -170,8 +170,8 @@ github.com/opencontainers/image-spec v1.1.0 h1:8SG7/vwALn54lVB/0yZ/MMwhFrPYtpEHQ
 github.com/opencontainers/image-spec v1.1.0/go.mod h1:W4s4sFTMaBeK1BQLXbG4AdM2szdn85PY75RI83NrTrM=
 github.com/opencontainers/runtime-spec v1.2.0 h1:z97+pHb3uELt/yiAWD691HNHQIF07bE7dzrbT927iTk=
 github.com/opencontainers/runtime-spec v1.2.0/go.mod h1:jwyrGlmzljRJv/Fgzds9SsS/C5hL+LL3ko9hs6T5lQ0=
-github.com/parca-dev/oomprof v0.1.5-0.20250918220314-dbb0077f3ff1 h1:HsU7HCoVefO2W1VbiZhU6137hokWajurWvrXgIFthws=
-github.com/parca-dev/oomprof v0.1.5-0.20250918220314-dbb0077f3ff1/go.mod h1:iqI6XrmiNWOa8m2vEIKo+GtQrqbWCMLFpBWuk8RuAPs=
+github.com/parca-dev/oomprof v0.1.5-0.20250922151707-ec00408377fb h1:OErx5d2jVlHFFx5fnGKYNIf5KymfhwPVgdSct6KOlHQ=
+github.com/parca-dev/oomprof v0.1.5-0.20250922151707-ec00408377fb/go.mod h1:iqI6XrmiNWOa8m2vEIKo+GtQrqbWCMLFpBWuk8RuAPs=
 github.com/peterbourgon/ff/v3 v3.4.0 h1:QBvM/rizZM1cB0p0lGMdmR7HxZeI/ZrBWB4DqLkMUBc=
 github.com/peterbourgon/ff/v3 v3.4.0/go.mod h1:zjJVUhx+twciwfDl0zBcFzl4dW8axCRyXE/eKY9RztQ=
 github.com/pkg/errors v0.9.1 h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=
