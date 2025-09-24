@@ -7,8 +7,10 @@ import (
 	"errors"
 	"unsafe"
 
+	"github.com/cilium/ebpf/link"
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/lpm"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/process"
@@ -112,6 +114,10 @@ type EbpfHandler interface {
 
 	// If unwinder needs special behavior for coredump mode to work use this.
 	CoredumpTest() bool
+
+	// AttachUSDTProbe attaches a uprobe to the given USDT probe in the given process.
+	AttachUSDTProbe(pid libpf.PID, path string, probe pfelf.USDTProbe,
+		progName string) (link.Link, error)
 }
 
 // Loader is a function to detect and load data from given interpreter ELF file.

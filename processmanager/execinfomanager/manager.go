@@ -26,6 +26,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter/perl"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/php"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/python"
+	"go.opentelemetry.io/ebpf-profiler/interpreter/rtld"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/ruby"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
@@ -143,7 +144,7 @@ func NewExecutableInfoManager(
 	if collectCustomLabels {
 		interpreterLoaders = append(interpreterLoaders, customlabels.Loader)
 	}
-	interpreterLoaders = append(interpreterLoaders, oomwatcher.Loader)
+	interpreterLoaders = append(interpreterLoaders, oomwatcher.Loader, rtld.Loader)
 
 	deferredFileIDs, err := lru.NewSynced[host.FileID, libpf.Void](deferredFileIDSize,
 		func(id host.FileID) uint32 { return uint32(id) })

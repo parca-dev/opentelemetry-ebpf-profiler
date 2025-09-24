@@ -32,6 +32,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/traceutil"
 	"go.opentelemetry.io/ebpf-profiler/util"
 
+	"github.com/cilium/ebpf/link"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -255,6 +256,11 @@ func (mockup *ebpfMapsMockup) DeletePidPageMappingInfo(_ libpf.PID, prefixes []l
 func (mockup *ebpfMapsMockup) CollectMetrics() []metrics.Metric     { return []metrics.Metric{} }
 func (mockup *ebpfMapsMockup) SupportsGenericBatchOperations() bool { return false }
 func (mockup *ebpfMapsMockup) SupportsLPMTrieBatchOperations() bool { return false }
+
+func (mockup *ebpfMapsMockup) AttachUSDTProbe(_ libpf.PID, _ string, _ pfelf.USDTProbe,
+	_ string) (link.Link, error) {
+	return nil, nil
+}
 
 type symbolReporterMockup struct{}
 

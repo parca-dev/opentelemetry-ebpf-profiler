@@ -2211,5 +2211,12 @@
     "name": "UnwindNodeAsyncIdErrReadIdDouble",
     "field": "bpf.nodejs_async_id.errors.read_id_double",
     "id": 307
+  },
+  {
+    "description": "Number of times rtld:map_complete USDT probe was fired",
+    "type": "counter",
+    "name": "RtldMapCompleteHits",
+    "field": "bpf.rtld.map_complete_hits",
+    "id": 308
   }
 ]

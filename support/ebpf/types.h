@@ -364,6 +364,9 @@ enum {
   metricID_UnwindNodeAsyncIdErrReadIdField,
   metricID_UnwindNodeAsyncIdErrReadIdDouble,
 
+  // number of times rtld:map_complete USDT probe was fired
+  metricID_RtldMapCompleteHits,
+
   //
   // Metric IDs above are for counters (cumulative values)
   //
