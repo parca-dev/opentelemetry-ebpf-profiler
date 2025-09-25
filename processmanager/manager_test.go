@@ -32,6 +32,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/traceutil"
 	"go.opentelemetry.io/ebpf-profiler/util"
 
+	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -257,9 +258,13 @@ func (mockup *ebpfMapsMockup) CollectMetrics() []metrics.Metric     { return []m
 func (mockup *ebpfMapsMockup) SupportsGenericBatchOperations() bool { return false }
 func (mockup *ebpfMapsMockup) SupportsLPMTrieBatchOperations() bool { return false }
 
-func (mockup *ebpfMapsMockup) AttachUSDTProbe(_ libpf.PID, _ string, _ pfelf.USDTProbe,
-	_ string) (link.Link, error) {
+func (mockup *ebpfMapsMockup) AttachUSDTProbes(_ libpf.PID, _, _ string, _ []pfelf.USDTProbe,
+	_ []uint64) (link.Link, error) {
 	return nil, nil
+}
+
+func (mockup *ebpfMapsMockup) GetProgram(_ string) *ebpf.Program {
+	return nil
 }
 
 type symbolReporterMockup struct{}

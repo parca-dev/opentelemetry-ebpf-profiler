@@ -102,6 +102,7 @@ const (
 	TraceOriginSampling = C.TRACE_SAMPLING
 	TraceOriginOffCPU   = C.TRACE_OFF_CPU
 	TraceOriginMemory   = C.TRACE_MEMORY
+	TraceOriginCuda     = C.TRACE_CUDA_LAUNCH
 )
 
 type ApmSpanID C.ApmSpanID

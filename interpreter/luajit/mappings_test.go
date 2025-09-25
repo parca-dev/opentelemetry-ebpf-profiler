@@ -15,6 +15,7 @@ import (
 	"testing"
 	"unsafe"
 
+	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/ebpf-profiler/host"
@@ -67,9 +68,13 @@ func (m *ebpfMapsMockup) DeleteProcData(libpf.InterpreterType, libpf.PID) error 
 	return nil
 }
 
-func (mockup *ebpfMapsMockup) AttachUSDTProbe(_ libpf.PID, _ string, _ pfelf.USDTProbe,
-	_ string) (link.Link, error) {
+func (mockup *ebpfMapsMockup) AttachUSDTProbes(_ libpf.PID, _, _ string, _ []pfelf.USDTProbe,
+	_ []uint64) (link.Link, error) {
 	return nil, nil
+}
+
+func (m *ebpfMapsMockup) GetProgram(_ string) *ebpf.Program {
+	return nil
 }
 
 // TestSynchronizeMappings tests that if a mapping is realloc'd we do the right thing.

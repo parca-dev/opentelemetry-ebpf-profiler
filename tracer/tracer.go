@@ -134,6 +134,8 @@ type Config struct {
 	CollectCustomLabels bool
 	// VerboseMode indicates whether to enable verbose output of eBPF tracers.
 	VerboseMode bool
+	// InstrumentCudaLaunch determines whether to instrument calls to `cudaLaunchKernel`.
+	InstrumentCudaLaunch bool
 	// BPFVerifierLogLevel is the log level of the eBPF verifier output.
 	BPFVerifierLogLevel uint32
 	// ProbabilisticInterval is the time interval for which probabilistic profiling will be enabled.
@@ -398,8 +400,8 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 		return nil, nil, fmt.Errorf("failed to load perf eBPF programs: %v", err)
 	}
 
-	if cfg.OffCPUThreshold > 0 {
-		if err = loadKProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], tailCallProgs,
+	if cfg.OffCPUThreshold > 0 || cfg.InstrumentCudaLaunch {
+		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], tailCallProgs,
 			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD()); err != nil {
 			return nil, nil, fmt.Errorf("failed to load kprobe eBPF programs: %v", err)
 		}
@@ -544,6 +546,7 @@ func loadPerfUnwinders(coll *cebpf.CollectionSpec, ebpfProgs map[string]*cebpf.P
 			return fmt.Errorf("program %s does not exist", unwindProgName)
 		}
 
+		// TODO: what do we do if we are a <6.6 kernel?
 		if strings.HasPrefix(progSpec.Name, "usdt") {
 			log.Infof("Setting attach type of %s to UprobeMulti", progSpec.Name)
 			progSpec.AttachType = cebpf.AttachTraceUprobeMulti
@@ -578,30 +581,41 @@ func progArrayReferences(perfTailCallMapFD int, insns asm.Instructions) []int {
 	return insNos
 }
 
-// loadKProbeUnwinders reuses large parts of loadPerfUnwinders. By default all eBPF programs
-// are written as perf event eBPF programs. loadKProbeUnwinders dynamically rewrites the
-// specification of these programs to kprobe eBPF programs and adjusts tail call maps.
-func loadKProbeUnwinders(coll *cebpf.CollectionSpec, ebpfProgs map[string]*cebpf.Program,
+// loadProbeUnwinders reuses large parts of loadPerfUnwinders. By default all eBPF programs
+// are written as perf event eBPF programs. loadProbeUnwinders dynamically rewrites the
+// specification of these programs to kprobe/uprobe eBPF programs and adjusts tail call maps.
+func loadProbeUnwinders(coll *cebpf.CollectionSpec, ebpfProgs map[string]*cebpf.Program,
 	tailcallMap *cebpf.Map, tailCallProgs []progLoaderHelper,
 	bpfVerifierLogLevel uint32, perfTailCallMapFD int) error {
 	programOptions := cebpf.ProgramOptions{
 		LogLevel: cebpf.LogLevel(bpfVerifierLogLevel),
 	}
 
-	progs := make([]progLoaderHelper, len(tailCallProgs)+2)
-	copy(progs, tailCallProgs)
-	progs = append(progs,
-		progLoaderHelper{
+	baseProgs := []progLoaderHelper{
+		{
 			name:             "finish_task_switch",
 			noTailCallTarget: true,
 			enable:           true,
 		},
-		progLoaderHelper{
+		{
 			name:             "tracepoint__sched_switch",
 			noTailCallTarget: true,
 			enable:           true,
 		},
-	)
+	}
+
+	// Only add CUDA probe if kernel supports uprobe multi-attach (6.6+) and bpf_get_attach_cookie
+	if util.HasMultiUprobeSupport() {
+		baseProgs = append(baseProgs, progLoaderHelper{
+			name:             "cuda_probe",
+			noTailCallTarget: true,
+			enable:           true,
+		})
+	}
+
+	progs := make([]progLoaderHelper, len(tailCallProgs)+len(baseProgs))
+	copy(progs, tailCallProgs)
+	progs = append(progs, baseProgs...)
 
 	for _, unwindProg := range progs {
 		if !unwindProg.enable {
@@ -889,11 +903,14 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) *host.Trace {
 		Origin:           libpf.Origin(ptr.Origin),
 		OffTime:          int64(ptr.Offtime),
 		KTime:            times.KTime(ptr.Ktime),
+		ParcaGPUTraceID:  ptr.Parca_gpu_trace_id,
 		CPU:              cpu,
 		EnvVars:          procMeta.EnvVariables,
 	}
 
-	if trace.Origin != support.TraceOriginSampling && trace.Origin != support.TraceOriginOffCPU {
+	if trace.Origin != support.TraceOriginSampling &&
+		trace.Origin != support.TraceOriginOffCPU &&
+		trace.Origin != support.TraceOriginCuda {
 		log.Warnf("Skip handling trace from unexpected %d origin", trace.Origin)
 		return nil
 	}

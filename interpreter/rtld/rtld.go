@@ -17,19 +17,17 @@ import (
 
 // data holds the Uprobe link to keep it in memory
 type data struct {
-	probe     pfelf.USDTProbe
-	path      string
-	probeLink link.Link
+	path string
+	link link.Link
 }
 
 // instance represents a per-PID instance of the rtld interpreter
 type instance struct {
 	interpreter.InstanceStubs
-	link link.Link
 }
 
 // Loader detects if the ELF file contains the rtld:map_complete USDT probe
-func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpreter.Data, error) {
+func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpreter.Data, error) {
 	// Check if this is ld.so by examining the filename
 	fileName := info.FileName()
 	if !strings.Contains(fileName, "ld-") && !strings.Contains(fileName, "ld.so") {
@@ -53,17 +51,22 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse USDT probes: %w", err)
 	}
-
+	prog := "usdt_rtld_map_complete"
 	// Look for rtld:map_complete probe
 	for _, probe := range probes {
-		if probe.Provider == "rtld" && probe.Name == "map_complete" {
-			log.Infof("Found rtld:map_complete USDT probe in %s at 0x%x",
-				fileName, probe.Location)
-			return &data{
-				path:  fileName,
-				probe: probe,
-			}, nil
+		if probe.Provider != "rtld" || probe.Name != "map_complete" {
+			continue
 		}
+		log.Debugf("Found rtld:map_complete USDT probe in %s at 0x%x",
+			fileName, probe.Location)
+		link, err := ebpf.AttachUSDTProbes(0, fileName, prog, []pfelf.USDTProbe{probe}, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to attach uprobe to rtld:map_complete usdt: %w", err)
+		}
+		return &data{
+			path: fileName,
+			link: link,
+		}, nil
 	}
 
 	return nil, nil
@@ -72,12 +75,7 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 // Attach attaches the uprobe to the rtld:map_complete USDT probe
 func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Address,
 	_ remotememory.RemoteMemory) (interpreter.Instance, error) {
-	link, err := ebpf.AttachUSDTProbe(pid, d.path, d.probe, "usdt_rtld_map_complete")
-	if err != nil {
-		return nil, fmt.Errorf("failed to attach uprobe to rtld:map_complete usdt: %w", err)
-	}
-	log.Infof("Attached uprobe to rtld:map_complete usdt in PID %d", pid)
-	return &instance{link: link}, nil
+	return &instance{}, nil
 }
 
 // Detach removes the uprobe
@@ -88,11 +86,11 @@ func (i *instance) Detach(_ interpreter.EbpfHandler, pid libpf.PID) error {
 
 // Unload cleans up the uprobe link
 func (d *data) Unload(_ interpreter.EbpfHandler) {
-	if d.probeLink != nil {
-		if err := d.probeLink.Close(); err != nil {
+	if d.link != nil {
+		if err := d.link.Close(); err != nil {
 			log.Errorf("[rtld] Failed to close uprobe link: %v", err)
 		}
-		d.probeLink = nil
+		d.link = nil
 	}
 	log.Debugf("[rtld] Unloaded uprobe for %s", d.path)
 }

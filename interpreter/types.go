@@ -7,6 +7,7 @@ import (
 	"errors"
 	"unsafe"
 
+	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
@@ -112,12 +113,18 @@ type EbpfHandler interface {
 	// from the eBPF map pid_page_to_mapping_info.
 	DeletePidInterpreterMapping(libpf.PID, lpm.Prefix) error
 
+	GetProgram(name string) *ebpf.Program
+
 	// If unwinder needs special behavior for coredump mode to work use this.
 	CoredumpTest() bool
 
-	// AttachUSDTProbe attaches a uprobe to the given USDT probe in the given process.
-	AttachUSDTProbe(pid libpf.PID, path string, probe pfelf.USDTProbe,
-		progName string) (link.Link, error)
+	// AttachUSDTProbes attaches an eBPF program to the given USDT probes in the given path.
+	// pid is optional, if 0 is specified we attach to all processes using the path.
+	// The caller is responsible for "closing" AND keeping pinned in memory the returned
+	// link.  This can be done in Instance.Detach for pid based probed or Data.Unload for
+	// system wide probes.
+	AttachUSDTProbes(pid libpf.PID, path, prog string, probes []pfelf.USDTProbe,
+		cookies []uint64) (link.Link, error)
 }
 
 // Loader is a function to detect and load data from given interpreter ELF file.

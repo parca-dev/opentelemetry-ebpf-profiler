@@ -406,6 +406,7 @@ typedef enum TraceOrigin {
   TRACE_SAMPLING,
   TRACE_OFF_CPU,
   TRACE_MEMORY,
+  TRACE_CUDA_LAUNCH,
 } TraceOrigin;
 
 // MAX_FRAME_UNWINDS defines the maximum number of frames per
@@ -672,6 +673,8 @@ typedef struct Trace {
   s32 kernel_stack_id;
   // The number of frames in the stack.
   u32 stack_len;
+  // Trace id for cuda/cupti stack correlation.
+  u32 parca_gpu_trace_id;
 
   // origin indicates the source of the trace.
   TraceOrigin origin;

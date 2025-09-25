@@ -93,3 +93,14 @@ func GetCurrentKernelVersion() (major, minor, patch uint32, err error) {
 	_, _ = fmt.Fscanf(bytes.NewReader(uname.Release[:]), "%d.%d.%d", &major, &minor, &patch)
 	return major, minor, patch, nil
 }
+
+// HasMultiUprobeSupport checks if the kernel supports uprobe multi-attach.
+// Kernel 6.6 introduced multi-uprobes which we want to use because single shot uprobes
+// don't work for shared libraries. This also implies bpf_get_attach_cookie support.
+func HasMultiUprobeSupport() bool {
+	major, minor, _, err := GetCurrentKernelVersion()
+	if err != nil {
+		return false
+	}
+	return major > 6 || (major == 6 && minor >= 6)
+}
