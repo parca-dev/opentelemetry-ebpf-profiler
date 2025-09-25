@@ -2126,8 +2126,6 @@ func (d *v8Data) loadNodeClData(ef *pfelf.File) error {
 	}
 
 	major := binary.LittleEndian.Uint32(versBuf[0:4])
-	// minor := binary.LittleEndian.Uint32(versBuf[4:8])
-	// patch := binary.LittleEndian.Uint32(versBuf[8:12])
 
 	if major >= 22 {
 		if major < 24 {
