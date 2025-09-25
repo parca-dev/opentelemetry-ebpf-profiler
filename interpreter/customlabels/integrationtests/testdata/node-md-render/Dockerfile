@@ -1,4 +1,4 @@
-ARG NODE_VERSION=20
+ARG NODE_VERSION=22
 FROM node:${NODE_VERSION}
 
 # Install build dependencies for native modules
@@ -25,5 +25,9 @@ COPY *.js ./
 # Expose ports for app and gdbserver
 EXPOSE 80
 
-# Start the application
-CMD ["node", "index.js"]
+# Start the application with conditional flag for Node < 24
+CMD if [ $(node -v | cut -c2- | cut -d. -f1) -lt 24 ]; then \
+        exec node --experimental-async-context-frame index.js; \
+    else \
+        exec node index.js; \
+    fi

@@ -340,29 +340,22 @@ enum {
   // number of failures in context pointer validity check
   metricID_UnwindLuaJITErrLMismatch,
 
+  // total number of attempts to add node custom labels.
+  // This - (successes + errors) is the number of times
+  // we read nothing (undefined or empty labelset).
+  metricID_UnwindNodeCustomLabelsAttempts,
+
+  // total number of successes adding node custom labels
+  metricID_UnwindNodeCustomLabelsSuccesses,
+
+  // total number of failed attempts to add node custom labels
+  metricID_UnwindNodeCustomLabelsFailures,
+
   // number of attempts to read Go labels (upstream)
   metricID_UnwindGoLabelsAttempts,
 
   // number of failures to read Go labels (upstream)
   metricID_UnwindGoLabelsFailures,
-
-  metricID_UnwindNodeClFailedReadHmPointer,
-  metricID_UnwindNodeClFailedNoLsInHm,
-  metricID_UnwindNodeClFailedReadHmStruct,
-  metricID_UnwindNodeClFailedReadBucket,
-  metricID_UnwindNodeClFailedReadLsAddr,
-  metricID_UnwindNodeClFailedTooManyBuckets,
-  metricID_UnwindNodeClFailedGettingId,
-  metricID_UnwindNodeClWarnIdZero,
-  metricID_UnwindNodeAsyncIdErrGetTlsSymbol,
-  metricID_UnwindNodeAsyncIdErrReadIsolate,
-  metricID_UnwindNodeAsyncIdErrReadContextHandle,
-  metricID_UnwindNodeAsyncIdErrReadRealContextHandle,
-  metricID_UnwindNodeAsyncIdErrReadNativeContext,
-  metricID_UnwindNodeAsyncIdErrReadEmbedderData,
-  metricID_UnwindNodeAsyncIdErrReadEnvPtr,
-  metricID_UnwindNodeAsyncIdErrReadIdField,
-  metricID_UnwindNodeAsyncIdErrReadIdDouble,
 
   // number of times rtld:map_complete USDT probe was fired
   metricID_RtldMapCompleteHits,
@@ -432,6 +425,7 @@ typedef struct Frame {
   // The lower 32 bits provide the co_firstlineno value and the upper 32 bits
   // provide the f_lasti value. Other interpreter handlers use the field in
   // a similarly domain-specific fashion.
+
   u64 addr_or_line;
   // Indicates the type of the frame (Python, PHP, native etc.).
   u8 kind;
@@ -551,12 +545,6 @@ typedef struct RubyProcInfo {
 // V8ProcInfo is a container for the data needed to build a stack trace for a V8 process.
 typedef struct V8ProcInfo {
   u32 version;
-  // Node.js environment offsets from complete_offsets.csv
-  u32 context_handle_offset;
-  u32 native_context_offset;
-  u32 embedder_data_offset;
-  u32 environment_pointer_offset;
-  u32 execution_async_id_offset;
   // Introspection data
   u16 type_JSFunction_first, type_JSFunction_last, type_Code, type_SharedFunctionInfo;
   u8 off_HeapObject_map, off_Map_instancetype, off_JSFunction_code, off_JSFunction_shared;
@@ -564,6 +552,8 @@ typedef struct V8ProcInfo {
   u8 fp_marker, fp_function, fp_bytecode_offset;
   u8 codekind_shift, codekind_mask, codekind_baseline;
   u64 isolate_sym;
+  u32 cped_offset;
+  u32 wrapped_object_offset;
 } V8ProcInfo;
 
 typedef struct LuaJITProcInfo {
@@ -632,16 +622,6 @@ typedef struct NativeCustomLabelsThreadLocalData {
   size_t count;
   size_t capacity;
 } NativeCustomLabelsSet;
-
-typedef struct {
-  u64 key;
-  void *value;
-} NativeCustomLabelsHmBucket;
-
-typedef struct {
-  NativeCustomLabelsHmBucket *buckets;
-  u64 log2_capacity;
-} NativeCustomLabelsHm;
 
 #define MAX_CUSTOM_LABELS 10
 
@@ -1104,8 +1084,10 @@ typedef struct ApmIntProcInfo {
 
 typedef struct NativeCustomLabelsProcInfo {
   u64 current_set_tls_offset;
-  bool has_current_hm;
-  u64 current_hm_tls_offset;
+
+  bool has_als_data;
+  u64 als_identity_hash_tls_offset;
+  u64 als_handle_tls_offset;
 } NativeCustomLabelsProcInfo;
 
 typedef struct GoCustomLabelsOffsets {
