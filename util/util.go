@@ -11,6 +11,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/cilium/ebpf/asm"
 	"go.opentelemetry.io/ebpf-profiler/libpf/hash"
 	"golang.org/x/sys/unix"
 )
@@ -92,4 +93,49 @@ func GetCurrentKernelVersion() (major, minor, patch uint32, err error) {
 	}
 	_, _ = fmt.Fscanf(bytes.NewReader(uname.Release[:]), "%d.%d.%d", &major, &minor, &patch)
 	return major, minor, patch, nil
+}
+
+var (
+	// testOnlyMultiUprobeOverride allows tests to override HasMultiUprobeSupport
+	testOnlyMultiUprobeOverride *bool
+)
+
+// SetTestOnlyMultiUprobeSupport overrides HasMultiUprobeSupport for testing.
+// Pass nil to restore normal behavior.
+func SetTestOnlyMultiUprobeSupport(override *bool) {
+	testOnlyMultiUprobeOverride = override
+}
+
+// HasMultiUprobeSupport checks if the kernel supports uprobe multi-attach.
+// Kernel 6.6 introduced multi-uprobes which we want to use because single shot uprobes
+// don't work for shared libraries. This also implies bpf_get_attach_cookie support.
+func HasMultiUprobeSupport() bool {
+	if testOnlyMultiUprobeOverride != nil {
+		return *testOnlyMultiUprobeOverride
+	}
+	major, minor, _, err := GetCurrentKernelVersion()
+	if err != nil {
+		return false
+	}
+	return major > 6 || (major == 6 && minor >= 6)
+}
+
+// ProgArrayReferences returns a list of instructions which load a specified tail
+// call FD.
+func ProgArrayReferences(perfTailCallMapFD int, insns asm.Instructions) []int {
+	insNos := []int{}
+	for i := range insns {
+		ins := &insns[i]
+		if asm.OpCode(ins.OpCode.Class()) != asm.OpCode(asm.LdClass) {
+			continue
+		}
+		m := ins.Map()
+		if m == nil {
+			continue
+		}
+		if perfTailCallMapFD == m.FD() {
+			insNos = append(insNos, i)
+		}
+	}
+	return insNos
 }

@@ -17,7 +17,6 @@ import (
 	"unsafe"
 
 	cebpf "github.com/cilium/ebpf"
-	"github.com/cilium/ebpf/asm"
 	"github.com/cilium/ebpf/link"
 	"github.com/elastic/go-perf"
 	log "github.com/sirupsen/logrus"
@@ -192,12 +191,12 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 	}
 
 	// Based on includeTracers we decide later which are loaded into the kernel.
-	ebpfMaps, ebpfProgs, err := initializeMapsAndPrograms(kmod, cfg)
+	ebpfMaps, ebpfProgs, coll, err := initializeMapsAndPrograms(kmod, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load eBPF code: %v", err)
 	}
 
-	ebpfHandler, err := pmebpf.LoadMaps(ctx, ebpfMaps, ebpfProgs)
+	ebpfHandler, err := pmebpf.LoadMaps(ctx, ebpfMaps, ebpfProgs, coll)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load eBPF maps: %v", err)
 	}
@@ -229,6 +228,19 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 		probabilisticInterval:  cfg.ProbabilisticInterval,
 		probabilisticThreshold: cfg.ProbabilisticThreshold,
 	}
+
+	// Wire up the process manager for TriggerProcessSync calls
+	processSyncTrigger := func(pid libpf.PID) {
+		log.Infof("[tracer] ebpf handler process sync triggered for PID %d", pid)
+		// Send the PID event to the pidEvents channel for processing
+		select {
+		case tracer.pidEvents <- libpf.PIDTID(pid):
+		default:
+			// Channel is full, drop the event to avoid blocking
+			log.Debugf("pidEvents channel full, dropping event for PID %d", pid)
+		}
+	}
+	ebpfHandler.SetProcessSyncTrigger(processSyncTrigger)
 
 	return tracer, nil
 }
@@ -280,28 +292,28 @@ func buildStackDeltaTemplates(coll *cebpf.CollectionSpec) error {
 
 // initializeMapsAndPrograms loads the definitions for the eBPF maps and programs provided
 // by the embedded elf file and loads these into the kernel.
-func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
-	ebpfMaps map[string]*cebpf.Map, ebpfProgs map[string]*cebpf.Program, err error) {
+func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (ebpfMaps map[string]*cebpf.Map,
+	ebpfProgs map[string]*cebpf.Program, coll *cebpf.CollectionSpec, err error) {
 	// Loading specifications about eBPF programs and maps from the embedded elf file
 	// does not load them into the kernel.
 	// A collection specification holds the information about eBPF programs and maps.
 	// References to eBPF maps in the eBPF programs are just placeholders that need to be
 	// replaced by the actual loaded maps later on with RewriteMaps before loading the
 	// programs into the kernel.
-	coll, err := support.LoadCollectionSpec()
+	coll, err = support.LoadCollectionSpec()
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load specification for tracers: %v", err)
+		return nil, nil, nil, fmt.Errorf("failed to load specification for tracers: %v", err)
 	}
 
 	if cfg.VerboseMode {
 		if err = coll.Variables["with_debug_output"].Set(uint32(1)); err != nil {
-			return nil, nil, fmt.Errorf("failed to set debug output: %v", err)
+			return nil, nil, nil, fmt.Errorf("failed to set debug output: %v", err)
 		}
 	}
 
 	err = buildStackDeltaTemplates(coll)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	ebpfMaps = make(map[string]*cebpf.Map)
@@ -311,25 +323,25 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 	// in the next step the placesholders in the eBPF programs with the file descriptors of the
 	// loaded maps in the kernel.
 	if err = loadAllMaps(coll, cfg, ebpfMaps); err != nil {
-		return nil, nil, fmt.Errorf("failed to load eBPF maps: %v", err)
+		return nil, nil, nil, fmt.Errorf("failed to load eBPF maps: %v", err)
 	}
 
 	// Replace the place holders for map access in the eBPF programs with
 	// the file descriptors of the loaded maps.
 	//nolint:staticcheck
 	if err = coll.RewriteMaps(ebpfMaps); err != nil {
-		return nil, nil, fmt.Errorf("failed to rewrite maps: %v", err)
+		return nil, nil, nil, fmt.Errorf("failed to rewrite maps: %v", err)
 	}
 
 	if cfg.KernelVersionCheck {
 		var major, minor, patch uint32
 		major, minor, patch, err = util.GetCurrentKernelVersion()
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to get kernel version: %v", err)
+			return nil, nil, nil, fmt.Errorf("failed to get kernel version: %v", err)
 		}
 		if hasProbeReadBug(major, minor, patch) {
 			if err = checkForMaccessPatch(coll, ebpfMaps, kmod); err != nil {
-				return nil, nil, fmt.Errorf("your kernel version %d.%d.%d may be "+
+				return nil, nil, nil, fmt.Errorf("your kernel version %d.%d.%d may be "+
 					"affected by a Linux kernel bug that can lead to system "+
 					"freezes, terminating host agent now to avoid "+
 					"triggering this bug.\n"+
@@ -401,14 +413,14 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 
 	if err = loadPerfUnwinders(coll, ebpfProgs, ebpfMaps["perf_progs"], tailCallProgs,
 		cfg.BPFVerifierLogLevel); err != nil {
-		return nil, nil, fmt.Errorf("failed to load perf eBPF programs: %v", err)
+		return nil, nil, nil, fmt.Errorf("failed to load perf eBPF programs: %v", err)
 	}
 
 	if cfg.OffCPUThreshold > 0 || len(cfg.UProbeLinks) > 0 || cfg.LoadProbe {
 		// Load the tail call destinations if any kind of event profiling is enabled.
 		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], tailCallProgs,
 			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD()); err != nil {
-			return nil, nil, fmt.Errorf("failed to load kprobe eBPF programs: %v", err)
+			return nil, nil, nil, fmt.Errorf("failed to load kprobe eBPF programs: %v", err)
 		}
 	}
 
@@ -427,7 +439,7 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 		}
 		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], offCPUProgs,
 			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD()); err != nil {
-			return nil, nil, fmt.Errorf("failed to load kprobe eBPF programs: %v", err)
+			return nil, nil, nil, fmt.Errorf("failed to load kprobe eBPF programs: %v", err)
 		}
 	}
 
@@ -441,20 +453,20 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 		}
 		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], uprobeProgs,
 			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD()); err != nil {
-			return nil, nil, fmt.Errorf("failed to load uprobe eBPF programs: %v", err)
+			return nil, nil, nil, fmt.Errorf("failed to load uprobe eBPF programs: %v", err)
 		}
 	}
 
 	if err = loadSystemConfig(coll, ebpfMaps, kmod, cfg.IncludeTracers,
 		cfg.OffCPUThreshold, cfg.FilterErrorFrames); err != nil {
-		return nil, nil, fmt.Errorf("failed to load system config: %v", err)
+		return nil, nil, nil, fmt.Errorf("failed to load system config: %v", err)
 	}
 
 	if err = removeTemporaryMaps(ebpfMaps); err != nil {
-		return nil, nil, fmt.Errorf("failed to remove temporary maps: %v", err)
+		return nil, nil, nil, fmt.Errorf("failed to remove temporary maps: %v", err)
 	}
 
-	return ebpfMaps, ebpfProgs, nil
+	return ebpfMaps, ebpfProgs, coll, nil
 }
 
 // removeTemporaryMaps unloads and deletes eBPF maps that are only required for the
@@ -562,11 +574,6 @@ func loadPerfUnwinders(coll *cebpf.CollectionSpec, ebpfProgs map[string]*cebpf.P
 			noTailCallTarget: true,
 			enable:           true,
 		},
-		progLoaderHelper{
-			name:             "usdt_rtld_map_complete",
-			noTailCallTarget: true,
-			enable:           true,
-		},
 	)
 
 	for _, unwindProg := range progs {
@@ -584,11 +591,6 @@ func loadPerfUnwinders(coll *cebpf.CollectionSpec, ebpfProgs map[string]*cebpf.P
 			return fmt.Errorf("program %s does not exist", unwindProgName)
 		}
 
-		if strings.HasPrefix(progSpec.Name, "usdt") {
-			log.Infof("Setting attach type of %s to UprobeMulti", progSpec.Name)
-			progSpec.AttachType = cebpf.AttachTraceUprobeMulti
-		}
-
 		if err := loadProgram(ebpfProgs, tailcallMap, unwindProg.progID, progSpec,
 			programOptions, unwindProg.noTailCallTarget); err != nil {
 			return err
@@ -596,26 +598,6 @@ func loadPerfUnwinders(coll *cebpf.CollectionSpec, ebpfProgs map[string]*cebpf.P
 	}
 
 	return nil
-}
-
-// progArrayReferences returns a list of instructions which load a specified tail
-// call FD.
-func progArrayReferences(perfTailCallMapFD int, insns asm.Instructions) []int {
-	insNos := []int{}
-	for i := range insns {
-		ins := &insns[i]
-		if asm.OpCode(ins.OpCode.Class()) != asm.OpCode(asm.LdClass) {
-			continue
-		}
-		m := ins.Map()
-		if m == nil {
-			continue
-		}
-		if perfTailCallMapFD == m.FD() {
-			insNos = append(insNos, i)
-		}
-	}
-	return insNos
 }
 
 // loadProbeUnwinders reuses large parts of loadPerfUnwinders. By default all eBPF programs
@@ -644,7 +626,7 @@ func loadProbeUnwinders(coll *cebpf.CollectionSpec, ebpfProgs map[string]*cebpf.
 		}
 
 		// Replace the prog array for the tail calls.
-		insns := progArrayReferences(perfTailCallMapFD, progSpec.Instructions)
+		insns := util.ProgArrayReferences(perfTailCallMapFD, progSpec.Instructions)
 		for _, ins := range insns {
 			if err := progSpec.Instructions[ins].AssociateMap(tailcallMap); err != nil {
 				return fmt.Errorf("failed to rewrite map ptr: %v", err)
