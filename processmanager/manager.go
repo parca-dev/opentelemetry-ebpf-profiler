@@ -286,6 +286,17 @@ func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace
 
 			newTrace.AppendFrameFull(frame.Type, fileID,
 				relativeRIP, mappingStart, mappingEnd, fileOffset)
+		case libpf.CUDA:
+			name := trace.CustomLabels["_temp_cuda_kernel"]
+			if name == "" {
+				panic("cuda_kernel frame without _temp_cuda_kernel label")
+			}
+			// remove the label
+			delete(trace.CustomLabels, "_temp_cuda_kernel")
+			newTrace.Frames.Append(&libpf.Frame{
+				Type:         frame.Type,
+				FunctionName: libpf.Intern(name),
+			})
 		default:
 			err := pm.symbolizeFrame(i, trace, &newTrace.Frames)
 			if err != nil {
