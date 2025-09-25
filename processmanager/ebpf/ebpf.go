@@ -125,16 +125,6 @@ func LoadMaps(ctx context.Context, maps map[string]*cebpf.Map,
 	return impl, nil
 }
 
-// Kernel 6.6 introduced multi-uprobes which we want to use because single shot uprobes
-// don't work for shared libraries.
-func hasMultiUprobe() bool {
-	major, minor, _, err := util.GetCurrentKernelVersion()
-	if err != nil {
-		return false
-	}
-	return major >= 6 && minor >= 6
-}
-
 // AttachUSDTProbes allows interpreters to attach to usdt probes.
 func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, progName string,
 	probes []pfelf.USDTProbe, cookies []uint64) (link.Link, error) {
@@ -156,7 +146,7 @@ func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, progName string,
 		offsets = append(offsets, p.SemaphoreOffset)
 	}
 
-	useMulti := hasMultiUprobe()
+	useMulti := util.HasMultiUprobeSupport()
 	if !useMulti && len(probes) > 1 {
 		return nil, errors.New("attaching multiple probes requires multi support (kernel 6.6+)")
 	}
