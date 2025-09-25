@@ -8,10 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"math/bits"
-	"os"
 	"reflect"
 	"sync"
-	"syscall"
 	"unsafe"
 
 	cebpf "github.com/cilium/ebpf"
@@ -39,11 +37,6 @@ const (
 	// updatePoolQueueCap decides the work queue capacity of each worker.
 	updatePoolQueueCap = 8
 )
-
-type usdtKey struct {
-	node uint64
-	name string
-}
 
 type ebpfMapsImpl struct {
 	// Interpreter related eBPF maps
@@ -76,9 +69,6 @@ type ebpfMapsImpl struct {
 	updateWorkers *asyncMapUpdaterPool
 
 	progs map[string]*cebpf.Program
-
-	// map of inode to link
-	usdtMap map[usdtKey]link.Link
 }
 
 // Compile time check to make sure ebpfMapsImpl satisfies the interface .
@@ -145,9 +135,9 @@ func hasMultiUprobe() bool {
 	return major >= 6 && minor >= 6
 }
 
-// AttachUSDTProbe allows interpreters to attach to uprobes found in libraries
-func (impl *ebpfMapsImpl) AttachUSDTProbe(pid libpf.PID, path string, probe pfelf.USDTProbe,
-	progName string) (link.Link, error) {
+// AttachUSDTProbes allows interpreters to attach to usdt probes.
+func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, progName string,
+	probes []pfelf.USDTProbe, cookies []uint64) (link.Link, error) {
 	if impl.progs[progName] == nil {
 		return nil, fmt.Errorf("no eBPF program named %s", progName)
 	}
@@ -157,53 +147,44 @@ func (impl *ebpfMapsImpl) AttachUSDTProbe(pid libpf.PID, path string, probe pfel
 		return nil, err
 	}
 
-	// get inode for file
-	s, err := os.Stat(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to stat path %s: %w", path, err)
-	}
-	statt, ok := s.Sys().(*syscall.Stat_t)
-	if !ok {
-		return nil, errors.New("failed to get raw syscall.Stat_t")
-	}
-	inode := statt.Ino
-
-	uKey := usdtKey{node: inode, name: progName}
-
-	if impl.usdtMap == nil {
-		impl.usdtMap = make(map[usdtKey]link.Link)
-	} else {
-		if l, ok := impl.usdtMap[uKey]; ok {
-			log.Debugf("Reusing link probe %s:%s inode:%d", probe.Name, path, inode)
-			return l, nil
-		}
+	names := make([]string, 0, len(probes))
+	addresses := make([]uint64, 0, len(probes))
+	offsets := make([]uint64, 0, len(probes))
+	for _, p := range probes {
+		names = append(names, p.Name)
+		addresses = append(addresses, p.Location)
+		offsets = append(offsets, p.SemaphoreOffset)
 	}
 
 	useMulti := hasMultiUprobe()
+	if !useMulti && len(probes) > 1 {
+		return nil, errors.New("attaching multiple probes requires multi support (kernel 6.6+)")
+	}
 	prog := impl.progs[progName]
 
 	var lnk link.Link
 	if useMulti {
-		up, err := exe.UprobeMulti([]string{probe.Name}, prog, &link.UprobeMultiOptions{
-			Addresses:     []uint64{probe.Location},
-			RefCtrOffsets: []uint64{probe.SemaphoreOffset},
+		up, err := exe.UprobeMulti(names, prog, &link.UprobeMultiOptions{
+			Addresses:     addresses,
+			RefCtrOffsets: offsets,
+			Cookies:       cookies,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("failed to attach usdt to %s: %w %s", probe.Name, err, prog)
+			return nil, fmt.Errorf("failed to attach usdt probes to %s: %s %w", path, progName, err)
 		}
 		lnk = up
 	} else {
-		up, err := exe.Uprobe(probe.Name, prog, &link.UprobeOptions{
-			Address:      probe.Location,
-			RefCtrOffset: probe.SemaphoreOffset,
+		up, err := exe.Uprobe(names[0], prog, &link.UprobeOptions{
+			Address:      addresses[0],
+			RefCtrOffset: offsets[0],
 		})
 		if err != nil {
-			return nil, fmt.Errorf("failed to attach usdt to %s: %w %s", probe.Name, err, prog)
+			return nil, fmt.Errorf("failed to attach usdt probes to %s: %s %w", path, progName, err)
 		}
 		lnk = up
 	}
-	log.Infof("Attached new uprobe to %s:%s in PID %d, inode : %d", probe.Name, path, pid, inode)
-	impl.usdtMap[uKey] = lnk
+	log.Infof("Attached probe %s to udst %s in PID %d", progName, path, pid)
+
 	return lnk, nil
 }
 
@@ -361,6 +342,10 @@ func (impl *ebpfMapsImpl) CollectMetrics() []metrics.Metric {
 	}
 
 	return counts
+}
+
+func (impl *ebpfMapsImpl) GetProgram(name string) *cebpf.Program {
+	return impl.progs[name]
 }
 
 // poolPIDPage caches reusable heap-allocated PIDPage instances
