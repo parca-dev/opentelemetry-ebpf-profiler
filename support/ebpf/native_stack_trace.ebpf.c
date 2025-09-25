@@ -641,7 +641,7 @@ static EBPF_INLINE int unwind_native(struct pt_regs *ctx)
 }
 
 SEC("perf_event/native_tracer_entry")
-int native_tracer_entry(struct bpf_perf_event_data *ctx)
+int native_tracer_entry(struct pt_regs *regs)
 {
   // Get the PID and TGID register.
   u64 id  = bpf_get_current_pid_tgid();
@@ -653,6 +653,6 @@ int native_tracer_entry(struct bpf_perf_event_data *ctx)
   }
 
   u64 ts = bpf_ktime_get_ns();
-  return collect_trace((struct pt_regs *)&ctx->regs, TRACE_SAMPLING, pid, tid, ts, 0);
+  return collect_trace(regs, TRACE_SAMPLING, pid, tid, ts, 0, 0);
 }
 MULTI_USE_FUNC(unwind_native)

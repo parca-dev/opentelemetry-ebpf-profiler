@@ -35,6 +35,8 @@ const (
 	LuaJIT InterpreterType = support.FrameMarkerLuaJIT
 	// Go identifies Go code.
 	Go InterpreterType = support.FrameMarkerGo
+	// CUDA interpreter type for CUDA kernels.
+	CUDA InterpreterType = support.FrameMarkerCUDAKernel
 )
 
 // Pseudo-interpreters without a corresponding frame type.
