@@ -443,7 +443,7 @@ bool EBPF_INLINE is_smi(u64 x)
 //
 // So to read a SMI, we do addr >> 32, and to read an object, we do addr - 1.
 //
-// Since objects can be moved by the GC, they are not usually referenced by the GC, but
+// Since objects can be moved by the GC, they are not usually referenced directly with pointers, but
 // rather by "handles" that introduce another layer of indirection: that is,
 // a handle usually holds an Address *, rather than an Address.
 //
