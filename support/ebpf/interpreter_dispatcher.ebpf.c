@@ -424,7 +424,8 @@ static EBPF_INLINE void maybe_add_native_custom_labels(PerCPURecord *record)
     increment_metric(metricID_UnwindNativeCustomLabelsAddErrors);
 }
 
-bool EBPF_INLINE is_smi(u64 x) {
+bool EBPF_INLINE is_smi(u64 x)
+{
   return !(x & 0xFFFFFFFF);
 }
 
@@ -452,9 +453,9 @@ bool EBPF_INLINE is_smi(u64 x) {
 // Custom labels are based on Node's async context frame feature,
 // which is available starting in v22 (requiring to launch Node with a custom flag),
 // and on by default starting in v24. When this feature is on,
-// all AsyncLocalStorage instances (https://nodejs.org/api/async_context.html#class-asynclocalstorage)
-// are stored in v8's ContinuationPreservedEmbedderData (CPED) and in most cases
-// propagation is handled by v8 itself.
+// all AsyncLocalStorage instances
+// (https://nodejs.org/api/async_context.html#class-asynclocalstorage) are stored in v8's
+// ContinuationPreservedEmbedderData (CPED) and in most cases propagation is handled by v8 itself.
 //
 // When this feature is enabled,
 // Node installs in the CPED a map (that is, the JavaScript Map type)
@@ -524,7 +525,7 @@ static EBPF_INLINE bool maybe_add_node_custom_labels(PerCPURecord *record)
     DEBUG_PRINT("node cl: failed to get v8 CPED address");
     return false;
   }
-  
+
   DEBUG_PRINT("node cl: CPED address is 0x%llx", cped_addr);
   u64 cped_table_ptr = cped_addr + 0x17;
   u64 cped_table_addr;
@@ -533,7 +534,7 @@ static EBPF_INLINE bool maybe_add_node_custom_labels(PerCPURecord *record)
     return false;
   }
 
-  u64 n_buckets_ptr = cped_table_addr - 1 + 0x10 + 2 * 8;
+  u64 n_buckets_ptr    = cped_table_addr - 1 + 0x10 + 2 * 8;
   u64 first_bucket_ptr = n_buckets_ptr + 8;
 
   u64 n_buckets_smi;
@@ -546,7 +547,7 @@ static EBPF_INLINE bool maybe_add_node_custom_labels(PerCPURecord *record)
     DEBUG_PRINT("node cl: N buckets is not a smi: 0x%llx", n_buckets_smi);
     return false;
   }
-  s32 n_buckets = n_buckets_smi >> 32;    
+  s32 n_buckets = n_buckets_smi >> 32;
   DEBUG_PRINT("node cl: N buckets: %d", n_buckets);
 
   if (n_buckets & (n_buckets - 1)) {
@@ -554,15 +555,17 @@ static EBPF_INLINE bool maybe_add_node_custom_labels(PerCPURecord *record)
     return false;
   }
 
-  DEBUG_PRINT("node cl: id hash off: 0x%llx, handle offset: 0x%llx",
-              proc->als_identity_hash_tls_offset, proc->als_handle_tls_offset);
+  DEBUG_PRINT(
+    "node cl: id hash off: 0x%llx, handle offset: 0x%llx",
+    proc->als_identity_hash_tls_offset,
+    proc->als_handle_tls_offset);
 
   u64 als_id_hash_ptr = addr_for_tls_symbol(proc->als_identity_hash_tls_offset, false);
-  u64 als_handle_ptr = addr_for_tls_symbol(proc->als_handle_tls_offset, false);
+  u64 als_handle_ptr  = addr_for_tls_symbol(proc->als_handle_tls_offset, false);
 
   int als_id_hash;
 
-  if ((err = bpf_probe_read_user(&als_id_hash, sizeof (int), (void *)als_id_hash_ptr))) {
+  if ((err = bpf_probe_read_user(&als_id_hash, sizeof(int), (void *)als_id_hash_ptr))) {
     DEBUG_PRINT("node cl: failed to read hash: %d", err);
     return false;
   }
@@ -614,13 +617,18 @@ static EBPF_INLINE bool maybe_add_node_custom_labels(PerCPURecord *record)
     };
 
     struct Entry e;
-    struct Entry *entry_ptr = (struct Entry *)(first_bucket_ptr + 8 * n_buckets + sizeof(struct Entry) * entry_idx);
+    struct Entry *entry_ptr =
+      (struct Entry *)(first_bucket_ptr + 8 * n_buckets + sizeof(struct Entry) * entry_idx);
     if ((err = bpf_probe_read_user(&e, sizeof(e), (void *)entry_ptr))) {
       DEBUG_PRINT("node cl: failed to read entry: %d\n", err);
       return false;
     }
 
-    DEBUG_PRINT("node cl: successfully read entry: key: 0x%llx, val: 0x%llx, next: 0x%llx", e.key, e.value, e.next_index);
+    DEBUG_PRINT(
+      "node cl: successfully read entry: key: 0x%llx, val: 0x%llx, next: 0x%llx",
+      e.key,
+      e.value,
+      e.next_index);
 
     if (e.key == als_identity) {
       DEBUG_PRINT("node cl: key matches.");
@@ -643,7 +651,7 @@ static EBPF_INLINE bool maybe_add_node_custom_labels(PerCPURecord *record)
     DEBUG_PRINT("node cl: ClWrap at 0x%llx", cl_wrap_ptr);
 
     u64 cl_ptr_ptr = cl_wrap_ptr + 24;
-    u64 token_ptr = cl_ptr_ptr + 8;
+    u64 token_ptr  = cl_ptr_ptr + 8;
     u64 token;
     if ((err = bpf_probe_read_user(&token, sizeof(u64), (void *)token_ptr))) {
       DEBUG_PRINT("node cl: failed reading token: %d\n", err);
@@ -658,7 +666,7 @@ static EBPF_INLINE bool maybe_add_node_custom_labels(PerCPURecord *record)
       DEBUG_PRINT("node cl: failed reading cl ptr: %d\n", err);
       return false;
     }
-      
+
     bool success = read_labelset_into_trace(record, (NativeCustomLabelsSet *)cl_ptr);
 
     if (success) {

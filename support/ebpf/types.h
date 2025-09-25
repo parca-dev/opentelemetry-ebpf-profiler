@@ -344,13 +344,13 @@ enum {
   // This - (successes + errors) is the number of times
   // we read nothing (undefined or empty labelset).
   metricID_UnwindNodeCustomLabelsAttempts,
-  
+
   // total number of successes adding node custom labels
   metricID_UnwindNodeCustomLabelsSuccesses,
 
   // total number of failed attempts to add node custom labels
   metricID_UnwindNodeCustomLabelsFailures,
-  
+
   // number of attempts to read Go labels (upstream)
   metricID_UnwindGoLabelsAttempts,
 
