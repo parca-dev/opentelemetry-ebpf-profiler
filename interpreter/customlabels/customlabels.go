@@ -16,18 +16,13 @@ import (
 const (
 	abiVersionExport    = "custom_labels_abi_version"
 	currentSetTlsExport = "custom_labels_current_set"
-	currentHmTlsExport  = "custom_labels_async_hashmap"
 )
 
 var dsoRegex = regexp.MustCompile(`.*/libcustomlabels.*\.so`)
-var nodeRegex = regexp.MustCompile(`.*/customlabels\.node`)
 
 type data struct {
 	abiVersionElfVA   libpf.Address
 	currentSetTlsAddr libpf.Address
-
-	hasCurrentHm     bool
-	currentHmTlsAddr libpf.Address
 
 	isSharedLibrary bool
 }
@@ -58,12 +53,9 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 	// symbol.
 	fn := info.FileName()
 	isNativeSharedLibrary := dsoRegex.MatchString(fn)
-	isNodeExtension := (!isNativeSharedLibrary) && nodeRegex.MatchString(fn)
-	isSharedLibrary := isNativeSharedLibrary || isNodeExtension
 
-	var currentSetTlsAddr, currentHmTlsAddr libpf.Address
-	var hasCurrentHm bool
-	if isSharedLibrary {
+	var currentSetTlsAddr libpf.Address
+	if isNativeSharedLibrary {
 		// Resolve thread info TLS export.
 		tlsDescs, err := ef.TLSDescriptors()
 		if err != nil {
@@ -73,9 +65,6 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 		currentSetTlsAddr, ok = tlsDescs[currentSetTlsExport]
 		if !ok {
 			return nil, errors.New("failed to locate TLS descriptor for custom labels")
-		}
-		if isNodeExtension {
-			currentHmTlsAddr, hasCurrentHm = tlsDescs[currentHmTlsExport]
 		}
 	} else {
 		offset, err := ef.LookupTLSSymbolOffset(currentSetTlsExport)
@@ -88,9 +77,7 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 	d := data{
 		abiVersionElfVA:   libpf.Address(abiVersionSym.Address),
 		currentSetTlsAddr: currentSetTlsAddr,
-		hasCurrentHm:      hasCurrentHm,
-		currentHmTlsAddr:  currentHmTlsAddr,
-		isSharedLibrary:   isSharedLibrary,
+		isSharedLibrary:   isNativeSharedLibrary,
 	}
 	return &d, nil
 }
@@ -120,15 +107,8 @@ func (d data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID,
 		currentSetTlsOffset = uint64(d.currentSetTlsAddr)
 	}
 
-	var currentHmTlsOffset uint64
-	if d.hasCurrentHm {
-		currentHmTlsOffset = rm.Uint64(bias + d.currentHmTlsAddr + 8)
-	}
-
 	procInfo := support.NativeCustomLabelsProcInfo{
-		Current_set_tls_offset: currentSetTlsOffset,
-		Has_current_hm:         d.hasCurrentHm,
-		Current_hm_tls_offset:  currentHmTlsOffset,
+		Set_tls_offset: currentSetTlsOffset,
 	}
 	if err := ebpf.UpdateProcData(libpf.CustomLabels, pid, unsafe.Pointer(&procInfo)); err != nil {
 		return nil, err

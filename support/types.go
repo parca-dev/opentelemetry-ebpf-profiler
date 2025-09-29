@@ -55,7 +55,7 @@ const (
 const MaxFrameUnwinds = 0x100
 
 const (
-	MetricIDBeginCumulative = 0x81
+	MetricIDBeginCumulative = 0x70
 )
 
 const (
@@ -294,11 +294,6 @@ type RubyProcInfo struct {
 }
 type V8ProcInfo struct {
 	Version                    uint32
-	Context_handle_offset      uint32
-	Native_context_offset      uint32
-	Embedder_data_offset       uint32
-	Environment_pointer_offset uint32
-	Execution_async_id_offset  uint32
 	Type_JSFunction_first      uint16
 	Type_JSFunction_last       uint16
 	Type_Code                  uint16
@@ -316,12 +311,10 @@ type V8ProcInfo struct {
 	Codekind_shift             uint8
 	Codekind_mask              uint8
 	Codekind_baseline          uint8
-	Isolate_sym                uint64
+	Pad_cgo_0                  [3]byte
 }
 type NativeCustomLabelsProcInfo struct {
-	Current_set_tls_offset uint64
-	Has_current_hm         bool
-	Current_hm_tls_offset  uint64
+	Set_tls_offset uint64
 }
 type LuaJITProcInfo struct {
 	G2dispatch      uint16
@@ -489,22 +482,5 @@ var MetricsTranslation = []metrics.MetricID{
 	0x5f: metrics.IDUnwindDotnetErrCodeTooLarge,
 	0x69: metrics.IDUnwindLuaJITAttempts,
 	0x6a: metrics.IDUnwindLuaJITErrNoProcInfo,
-	0x6f: metrics.IDUnwindNodeClFailedReadHmPointer,
-	0x70: metrics.IDUnwindNodeClFailedNoLsInHm,
-	0x71: metrics.IDUnwindNodeClFailedReadHmStruct,
-	0x72: metrics.IDUnwindNodeClFailedReadBucket,
-	0x73: metrics.IDUnwindNodeClFailedReadLsAddr,
-	0x74: metrics.IDUnwindNodeClFailedTooManyBuckets,
-	0x75: metrics.IDUnwindNodeClFailedGettingId,
-	0x76: metrics.IDUnwindNodeClWarnIdZero,
-	0x77: metrics.IDUnwindNodeAsyncIdErrGetTlsSymbol,
-	0x78: metrics.IDUnwindNodeAsyncIdErrReadIsolate,
-	0x79: metrics.IDUnwindNodeAsyncIdErrReadContextHandle,
-	0x7a: metrics.IDUnwindNodeAsyncIdErrReadRealContextHandle,
-	0x7b: metrics.IDUnwindNodeAsyncIdErrReadNativeContext,
-	0x7c: metrics.IDUnwindNodeAsyncIdErrReadEmbedderData,
-	0x7d: metrics.IDUnwindNodeAsyncIdErrReadEnvPtr,
-	0x7e: metrics.IDUnwindNodeAsyncIdErrReadIdField,
-	0x7f: metrics.IDUnwindNodeAsyncIdErrReadIdDouble,
-	0x80: metrics.IDRtldMapCompleteHits,
+	0x6f: metrics.IDRtldMapCompleteHits,
 }
