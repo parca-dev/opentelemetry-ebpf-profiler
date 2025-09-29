@@ -14,6 +14,7 @@ import (
 	"unsafe"
 
 	"github.com/coreos/pkg/dlopen"
+	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/rtld"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
@@ -180,6 +181,11 @@ done:
 func TestIntegrationSingleShot(t *testing.T) {
 	if !testutils.IsRoot() {
 		t.Skip("This test requires root privileges")
+	}
+
+	// Enable debug logging for CI debugging
+	if os.Getenv("DEBUG_TEST") != "" {
+		log.SetLevel(log.DebugLevel)
 	}
 
 	// Override HasMultiUprobeSupport to force single-shot mode
