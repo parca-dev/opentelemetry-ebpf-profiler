@@ -63,7 +63,6 @@ func TestIntegration(t *testing.T) {
 		// is on v25 by then.
 		"latest",
 		"22.19.0",
-		"20.19.5",
 	} {
 		name := "node-" + nodeVersion
 		t.Run(name, func(t *testing.T) {

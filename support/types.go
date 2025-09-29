@@ -55,7 +55,7 @@ const (
 const MaxFrameUnwinds = 0x100
 
 const (
-	MetricIDBeginCumulative = 0x70
+	MetricIDBeginCumulative = 0x73
 )
 
 const (
@@ -311,10 +311,15 @@ type V8ProcInfo struct {
 	Codekind_shift             uint8
 	Codekind_mask              uint8
 	Codekind_baseline          uint8
-	Pad_cgo_0                  [3]byte
+	Isolate_sym                uint64
+	Cped_offset                uint32
+	Wrapped_object_offset      uint32
 }
 type NativeCustomLabelsProcInfo struct {
-	Set_tls_offset uint64
+	Current_set_tls_offset       uint64
+	Has_als_data                 bool
+	Als_identity_hash_tls_offset uint64
+	Als_handle_tls_offset        uint64
 }
 type LuaJITProcInfo struct {
 	G2dispatch      uint16
@@ -482,5 +487,8 @@ var MetricsTranslation = []metrics.MetricID{
 	0x5f: metrics.IDUnwindDotnetErrCodeTooLarge,
 	0x69: metrics.IDUnwindLuaJITAttempts,
 	0x6a: metrics.IDUnwindLuaJITErrNoProcInfo,
-	0x6f: metrics.IDRtldMapCompleteHits,
+	0x72: metrics.IDRtldMapCompleteHits,
+	0x6d: metrics.IDUnwindNodeCustomLabelsAttempts,
+	0x6e: metrics.IDUnwindNodeCustomLabelsSuccesses,
+	0x6f: metrics.IDUnwindNodeCustomLabelsFailures,
 }
