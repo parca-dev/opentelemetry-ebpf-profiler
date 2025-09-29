@@ -2094,10 +2094,31 @@
     "id": 290
   },
   {
+    "description": "Number of attempts to read Node.js custom labels",
+    "type": "counter",
+    "name": "UnwindNodeCustomLabelsAttempts",
+    "field": "bpf.node_custom_labels.attempts",
+    "id": 291
+  },
+  {
+    "description": "Number of successful reads of Node.js custom labels",
+    "type": "counter",
+    "name": "UnwindNodeCustomLabelsSuccesses",
+    "field": "bpf.node_custom_labels.successes",
+    "id": 292
+  },
+  {
+    "description": "Number of failed attempts to read Node.js custom labels",
+    "type": "counter",
+    "name": "UnwindNodeCustomLabelsFailures",
+    "field": "bpf.node_custom_labels.failures",
+    "id": 293
+  },
+  {
     "description": "Number of times rtld:map_complete USDT probe was fired",
     "type": "counter",
     "name": "RtldMapCompleteHits",
     "field": "bpf.rtld.map_complete_hits",
-    "id": 291
+    "id": 294
   }
 ]

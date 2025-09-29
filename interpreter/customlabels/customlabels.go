@@ -16,13 +16,21 @@ import (
 const (
 	abiVersionExport    = "custom_labels_abi_version"
 	currentSetTlsExport = "custom_labels_current_set"
+
+	alsIdentityHashExport = "custom_labels_als_identity_hash"
+	alsHandleExport       = "custom_labels_als_handle"
 )
 
 var dsoRegex = regexp.MustCompile(`.*/libcustomlabels.*\.so`)
+var nodeRegex = regexp.MustCompile(`.*/customlabels\.node`)
 
 type data struct {
 	abiVersionElfVA   libpf.Address
 	currentSetTlsAddr libpf.Address
+
+	hasAlsData          bool
+	alsIdentityHashAddr libpf.Address
+	alsHandleAddr       libpf.Address
 
 	isSharedLibrary bool
 }
@@ -53,9 +61,13 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 	// symbol.
 	fn := info.FileName()
 	isNativeSharedLibrary := dsoRegex.MatchString(fn)
+	isNodeExtension := (!isNativeSharedLibrary) && nodeRegex.MatchString(fn)
+	isSharedLibrary := isNativeSharedLibrary || isNodeExtension
 
 	var currentSetTlsAddr libpf.Address
-	if isNativeSharedLibrary {
+	var alsIdentityHashAddr, alsHandleAddr libpf.Address
+	var hasAlsId, hasAlsData bool
+	if isSharedLibrary {
 		// Resolve thread info TLS export.
 		tlsDescs, err := ef.TLSDescriptors()
 		if err != nil {
@@ -66,6 +78,12 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 		if !ok {
 			return nil, errors.New("failed to locate TLS descriptor for custom labels")
 		}
+		if isNodeExtension {
+			alsIdentityHashAddr, hasAlsId = tlsDescs[alsIdentityHashExport]
+			if hasAlsId {
+				alsHandleAddr, hasAlsData = tlsDescs[alsHandleExport]
+			}
+		}
 	} else {
 		offset, err := ef.LookupTLSSymbolOffset(currentSetTlsExport)
 		if err != nil {
@@ -75,9 +93,12 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 	}
 
 	d := data{
-		abiVersionElfVA:   libpf.Address(abiVersionSym.Address),
-		currentSetTlsAddr: currentSetTlsAddr,
-		isSharedLibrary:   isNativeSharedLibrary,
+		abiVersionElfVA:     libpf.Address(abiVersionSym.Address),
+		currentSetTlsAddr:   currentSetTlsAddr,
+		isSharedLibrary:     isSharedLibrary,
+		hasAlsData:          hasAlsData,
+		alsIdentityHashAddr: alsIdentityHashAddr,
+		alsHandleAddr:       alsHandleAddr,
 	}
 	return &d, nil
 }
@@ -107,8 +128,18 @@ func (d data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID,
 		currentSetTlsOffset = uint64(d.currentSetTlsAddr)
 	}
 
+	var alsIdentityHashTlsOffset, alsHandleTlsOffset uint64
+	if d.hasAlsData {
+		alsIdentityHashTlsOffset = rm.Uint64(bias + d.alsIdentityHashAddr + 8)
+		alsHandleTlsOffset = rm.Uint64(bias + d.alsHandleAddr + 8)
+	}
+
 	procInfo := support.NativeCustomLabelsProcInfo{
-		Set_tls_offset: currentSetTlsOffset,
+		Current_set_tls_offset: currentSetTlsOffset,
+
+		Has_als_data:                 d.hasAlsData,
+		Als_identity_hash_tls_offset: alsIdentityHashTlsOffset,
+		Als_handle_tls_offset:        alsHandleTlsOffset,
 	}
 	if err := ebpf.UpdateProcData(libpf.CustomLabels, pid, unsafe.Pointer(&procInfo)); err != nil {
 		return nil, err

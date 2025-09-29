@@ -680,9 +680,18 @@ const (
 	// Number of times we didn't find an entry for this process in the LuaJIT process info array
 	IDUnwindLuaJITErrNoProcInfo = 290
 
+	// Number of attempts to read Node.js custom labels
+	IDUnwindNodeCustomLabelsAttempts = 291
+
+	// Number of successful reads of Node.js custom labels
+	IDUnwindNodeCustomLabelsSuccesses = 292
+
+	// Number of failed attempts to read Node.js custom labels
+	IDUnwindNodeCustomLabelsFailures = 293
+
 	// Number of times rtld:map_complete USDT probe was fired
-	IDRtldMapCompleteHits = 291
+	IDRtldMapCompleteHits = 294
 
 	// max number of ID values, keep this as *last entry*
-	IDMax = 292
+	IDMax = 295
 )
