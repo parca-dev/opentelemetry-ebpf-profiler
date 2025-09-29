@@ -21,7 +21,6 @@ extern bpf_map_def trace_events;
 extern bpf_map_def go_labels_procs;
 extern bpf_map_def cl_procs;
 extern bpf_map_def v8_procs;
-extern bpf_map_def v8_cached_env_ptrs;
 
 #if defined(TESTING_COREDUMP)
 
