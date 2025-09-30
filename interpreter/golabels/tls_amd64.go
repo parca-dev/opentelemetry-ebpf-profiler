@@ -63,6 +63,6 @@ func extractTLSGOffset(f *pfelf.File) (int32, error) {
 		}
 	}
 exit:
-	log.Warnf("Failed to decode stackcheck symbol, Go label collection might not work %s", path)
+	log.Warnf("Failed to decode stackcheck symbol, Go label collection might not work")
 	return -8, nil
 }

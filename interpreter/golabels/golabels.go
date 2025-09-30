@@ -58,7 +58,7 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 	log.Debugf("file %s detected as go version %s", info.FileName(), goVersion)
 
 	offsets := getOffsets(goVersion)
-	tlsOffset, err := extractTLSGOffset(file, info.FileName())
+	tlsOffset, err := extractTLSGOffset(file)
 	if err != nil {
 		return nil, fmt.Errorf("failed to extract TLS offset: %w", err)
 	}
