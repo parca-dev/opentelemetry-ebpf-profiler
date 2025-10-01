@@ -8,7 +8,6 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
-	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
 	"go.opentelemetry.io/ebpf-profiler/support"
 )
@@ -44,7 +43,7 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 	}
 	abiVersionSym, err := ef.LookupSymbol(abiVersionExport)
 	if err != nil {
-		if errors.Is(err, pfelf.ErrSymbolNotFound) {
+		if errors.Is(err, libpf.ErrSymbolNotFound) {
 			return nil, nil
 		}
 

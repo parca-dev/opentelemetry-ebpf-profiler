@@ -358,7 +358,7 @@ func (o *offsetData) readSym(sym *libpf.Symbol) ([]byte, error) {
 
 func (o *offsetData) lookupSymbol(name libpf.SymbolName) (s *libpf.Symbol, err error) {
 	s, err = o.f.LookupSymbol(name)
-	if err == pfelf.ErrSymbolNotFound && o.syms != nil {
+	if err == libpf.ErrSymbolNotFound && o.syms != nil {
 		s, err = o.syms.LookupSymbol(name)
 	}
 	if s == nil && o.dsyms != nil {

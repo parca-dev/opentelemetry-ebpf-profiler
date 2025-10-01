@@ -101,6 +101,7 @@ const (
 	TraceOriginUnknown  = C.TRACE_UNKNOWN
 	TraceOriginSampling = C.TRACE_SAMPLING
 	TraceOriginOffCPU   = C.TRACE_OFF_CPU
+	TraceOriginUProbe   = C.TRACE_UPROBE
 	TraceOriginMemory   = C.TRACE_MEMORY
 )
 
