@@ -1,6 +1,5 @@
 #include "bpfdefs.h"
 #include "tracemgmt.h"
-
 #include "types.h"
 
 SEC("usdt/rtld/map_complete")

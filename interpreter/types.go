@@ -7,7 +7,6 @@ import (
 	"errors"
 	"unsafe"
 
-	"github.com/cilium/ebpf/link"
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
@@ -115,9 +114,27 @@ type EbpfHandler interface {
 	// If unwinder needs special behavior for coredump mode to work use this.
 	CoredumpTest() bool
 
-	// AttachUSDTProbe attaches a uprobe to the given USDT probe in the given process.
-	AttachUSDTProbe(pid libpf.PID, path string, probe pfelf.USDTProbe,
-		progName string) (link.Link, error)
+	// AttachUSDTProbes attaches an eBPF program to the given USDT probes in the given path.
+	// pid is required to support older kernels that can't attach to a shared library
+	// w/o a pid. If probeAll is true and we have a newer kernel we'll ignore the pid and attach
+	// to all and return the ink the first return variable. Otherwise the link will be associated
+	// with the pid and be returned in the second return.
+	// The caller is responsible for "closing" AND keeping pinned in memory the returned
+	// link. The first return should be close in Data.Unload and the second return should be
+	// closed in Instance.Detach for pid based probed or Data.Unload for system wide probes.
+	AttachUSDTProbes(pid libpf.PID, path, multiProgName string, probes []pfelf.USDTProbe,
+		cookies []uint64, singleProgNames []string, probeAll bool) (LinkCloser, error)
+
+	// Allow interpreters to trigger a process sync
+	TriggerProcessSync(libpf.PID) error
+
+	// SetProcessSyncTrigger allows setting the process sync trigger function
+	SetProcessSyncTrigger(func(pid libpf.PID))
+}
+
+type LinkCloser interface {
+	Detach() error
+	Unload() error
 }
 
 // Loader is a function to detect and load data from given interpreter ELF file.

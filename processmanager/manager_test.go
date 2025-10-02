@@ -30,9 +30,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/support"
 	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
 	"go.opentelemetry.io/ebpf-profiler/traceutil"
-	"go.opentelemetry.io/ebpf-profiler/util"
 
-	"github.com/cilium/ebpf/link"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -154,6 +152,8 @@ type mappingArgs struct {
 
 // ebpfMapsMockup implements the ebpf interface as test mockup
 type ebpfMapsMockup struct {
+	interpreter.EbpfHandlerStubs
+
 	updateProcCount, deleteProcCount uint8
 
 	stackDeltaMemory []pmebpf.StackDeltaEBPF
@@ -172,18 +172,6 @@ type ebpfMapsMockup struct {
 
 var _ interpreter.EbpfHandler = &ebpfMapsMockup{}
 
-func (mockup *ebpfMapsMockup) CoredumpTest() bool {
-	return false
-}
-
-func (mockup *ebpfMapsMockup) RemoveReportedPID(libpf.PID) {
-}
-
-func (mockup *ebpfMapsMockup) UpdateInterpreterOffsets(uint16, host.FileID,
-	[]util.Range) error {
-	return nil
-}
-
 func (mockup *ebpfMapsMockup) UpdateProcData(libpf.InterpreterType, libpf.PID,
 	unsafe.Pointer) error {
 	mockup.updateProcCount++
@@ -195,17 +183,6 @@ func (mockup *ebpfMapsMockup) DeleteProcData(libpf.InterpreterType, libpf.PID) e
 	return nil
 }
 
-func (mockup *ebpfMapsMockup) UpdatePidInterpreterMapping(libpf.PID,
-	lpm.Prefix, uint8, host.FileID, uint64) error {
-	return nil
-}
-
-func (mockup *ebpfMapsMockup) DeletePidInterpreterMapping(libpf.PID, lpm.Prefix) error {
-	return nil
-}
-
-func (mockup *ebpfMapsMockup) UpdateUnwindInfo(uint16, sdtypes.UnwindInfo) error { return nil }
-
 func (mockup *ebpfMapsMockup) UpdateExeIDToStackDeltas(fileID host.FileID,
 	deltaArrays []pmebpf.StackDeltaEBPF) (uint16, error) {
 	mockup.stackDeltaMemory = append(mockup.stackDeltaMemory, deltaArrays...)
@@ -216,11 +193,6 @@ func (mockup *ebpfMapsMockup) UpdateExeIDToStackDeltas(fileID host.FileID,
 
 func (mockup *ebpfMapsMockup) DeleteExeIDToStackDeltas(host.FileID, uint16) error {
 	mockup.deleteStackDeltaRangesCount++
-	return nil
-}
-
-func (mockup *ebpfMapsMockup) UpdateStackDeltaPages(host.FileID, []uint16,
-	uint16, uint64) error {
 	return nil
 }
 
@@ -253,13 +225,29 @@ func (mockup *ebpfMapsMockup) DeletePidPageMappingInfo(_ libpf.PID, prefixes []l
 	return len(prefixes), nil
 }
 
-func (mockup *ebpfMapsMockup) CollectMetrics() []metrics.Metric     { return []metrics.Metric{} }
-func (mockup *ebpfMapsMockup) SupportsGenericBatchOperations() bool { return false }
-func (mockup *ebpfMapsMockup) SupportsLPMTrieBatchOperations() bool { return false }
+func (mockup *ebpfMapsMockup) CollectMetrics() []metrics.Metric {
+	return nil
+}
 
-func (mockup *ebpfMapsMockup) AttachUSDTProbe(_ libpf.PID, _ string, _ pfelf.USDTProbe,
-	_ string) (link.Link, error) {
-	return nil, nil
+func (mockup *ebpfMapsMockup) RemoveReportedPID(_ libpf.PID) {
+	// No-op for tests
+}
+
+func (mockup *ebpfMapsMockup) SupportsGenericBatchOperations() bool {
+	return false
+}
+
+func (mockup *ebpfMapsMockup) SupportsLPMTrieBatchOperations() bool {
+	return false
+}
+
+func (mockup *ebpfMapsMockup) UpdateStackDeltaPages(_ host.FileID, _ []uint16,
+	_ uint16, _ uint64) error {
+	return nil
+}
+
+func (mockup *ebpfMapsMockup) UpdateUnwindInfo(_ uint16, _ sdtypes.UnwindInfo) error {
+	return nil
 }
 
 type symbolReporterMockup struct{}

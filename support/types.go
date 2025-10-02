@@ -11,21 +11,22 @@ import (
 )
 
 const (
-	FrameMarkerUnknown  = 0x0
-	FrameMarkerErrorBit = 0x80
-	FrameMarkerPython   = 0x1
-	FrameMarkerNative   = 0x3
-	FrameMarkerPHP      = 0x2
-	FrameMarkerPHPJIT   = 0x9
-	FrameMarkerKernel   = 0x4
-	FrameMarkerHotSpot  = 0x5
-	FrameMarkerRuby     = 0x6
-	FrameMarkerPerl     = 0x7
-	FrameMarkerV8       = 0x8
-	FrameMarkerDotnet   = 0xa
-	FrameMarkerLuaJIT   = 0xb
-	FrameMarkerGo       = 0xc
-	FrameMarkerAbort    = 0xff
+	FrameMarkerUnknown    = 0x0
+	FrameMarkerErrorBit   = 0x80
+	FrameMarkerPython     = 0x1
+	FrameMarkerNative     = 0x3
+	FrameMarkerPHP        = 0x2
+	FrameMarkerPHPJIT     = 0x9
+	FrameMarkerKernel     = 0x4
+	FrameMarkerHotSpot    = 0x5
+	FrameMarkerRuby       = 0x6
+	FrameMarkerPerl       = 0x7
+	FrameMarkerV8         = 0x8
+	FrameMarkerDotnet     = 0xa
+	FrameMarkerLuaJIT     = 0xb
+	FrameMarkerGo         = 0xc
+	FrameMarkerCUDAKernel = 0xd
+	FrameMarkerAbort      = 0xff
 )
 
 const (
@@ -91,6 +92,7 @@ const (
 	TraceOriginOffCPU   = 0x2
 	TraceOriginUProbe   = 0x3
 	TraceOriginMemory   = 0x4
+	TraceOriginCuda     = 0x5
 )
 
 type ApmSpanID [8]byte
@@ -176,6 +178,7 @@ type Trace struct {
 	Custom_labels      CustomLabelsArray
 	Kernel_stack_id    int32
 	Stack_len          uint32
+	Parca_gpu_trace_id uint32
 	Origin             uint32
 	Offtime            uint64
 	Frames             [256]Frame
@@ -331,7 +334,7 @@ type LuaJITProcInfo struct {
 const (
 	Sizeof_Frame      = 0x18
 	Sizeof_StackDelta = 0x4
-	Sizeof_Trace      = 0x1ad0
+	Sizeof_Trace      = 0x1ad8
 
 	sizeof_ApmIntProcInfo = 0x8
 	sizeof_DotnetProcInfo = 0x4

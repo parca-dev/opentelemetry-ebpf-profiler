@@ -19,6 +19,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter/dotnet"
 	golang "go.opentelemetry.io/ebpf-profiler/interpreter/go"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/golabels"
+	"go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/hotspot"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/luajit"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/nodev8"
@@ -136,7 +137,6 @@ func NewExecutableInfoManager(
 	if includeTracers.Has(types.LuaJITTracer) {
 		interpreterLoaders = append(interpreterLoaders, luajit.Loader)
 	}
-
 	interpreterLoaders = append(interpreterLoaders, apmint.Loader)
 	if includeTracers.Has(types.Labels) {
 		interpreterLoaders = append(interpreterLoaders, golabels.Loader)
@@ -145,6 +145,10 @@ func NewExecutableInfoManager(
 		interpreterLoaders = append(interpreterLoaders, customlabels.Loader)
 	}
 	interpreterLoaders = append(interpreterLoaders, oomwatcher.Loader, rtld.Loader)
+
+	if includeTracers.Has(types.CUDATracer) {
+		interpreterLoaders = append(interpreterLoaders, gpu.Loader)
+	}
 
 	deferredFileIDs, err := lru.NewSynced[host.FileID, libpf.Void](deferredFileIDSize,
 		func(id host.FileID) uint32 { return uint32(id) })

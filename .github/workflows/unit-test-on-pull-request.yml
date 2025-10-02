@@ -232,3 +232,24 @@ jobs:
         run: |
           uname -a
           sudo go test ./interpreter/... -v -run TestIntegration
+
+  rtld-legacy-tests:
+    name: RTLD legacy tests (Ubuntu 22.04)
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Clone code
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Test RTLD on legacy kernel/userspace
+        env:
+          DEBUG_TEST: "1"
+        run: |
+          echo "Kernel version: $(uname -r)"
+          echo "glibc version: $(ldd --version | head -1)"
+          echo "ld.so location: $(find /lib* /usr/lib* -name 'ld-linux*' -o -name 'ld.so*' 2>/dev/null | head -5)"
+          echo "Multi-uprobe support: $(go run -c 'package main; import "go.opentelemetry.io/ebpf-profiler/util"; import "fmt"; func main() { fmt.Println(util.HasMultiUprobeSupport()) }' 2>/dev/null || echo 'unknown')"
+          sudo -E go test ./interpreter/rtld -v -run 'TestIntegration' -timeout=120s
