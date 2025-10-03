@@ -7,7 +7,6 @@ import (
 	"errors"
 	"unsafe"
 
-	"github.com/cilium/ebpf/link"
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
@@ -115,9 +114,40 @@ type EbpfHandler interface {
 	// If unwinder needs special behavior for coredump mode to work use this.
 	CoredumpTest() bool
 
-	// AttachUSDTProbe attaches a uprobe to the given USDT probe in the given process.
-	AttachUSDTProbe(pid libpf.PID, path string, probe pfelf.USDTProbe,
-		progName string) (link.Link, error)
+	// AttachUSDTProbes attaches an eBPF program to USDT probes in the specified binary.
+	//
+	// Parameters:
+	//  - pid: The process ID. Required for older kernels (pre-6.6) that cannot attach to shared
+	//    libraries without a PID. On newer kernels with multi-uprobe support, this is ignored
+	//    when probeAll is true.
+	//  - path: Full path to the binary containing the USDT probes.
+	//  - multiProgName: Name of eBPF program to use for multi-uprobe attachment (newer kernels).
+	//  - probes: The USDT probe definitions to attach to.
+	//  - cookies: Optional cookies to pass to the eBPF program (one per probe, or nil).
+	//  - singleProgNames: eBPF program names for single-shot attachment (older kernels, one
+	//    per probe).
+	//  - probeAll: If true and the kernel supports it, attach to all processes using this
+	//    binary. If false, only attach to the specified pid.
+	//
+	// Returns:
+	//  - LinkCloser: A handle to the attached probes. The caller must:
+	//    1. Store the LinkCloser to prevent it from being garbage collected (which would
+	//       detach the probes)
+	//    2. Call LinkCloser.Detach() from Instance.Detach() to detach from the specific PID
+	//    3. Call LinkCloser.Unload() from Data.Unload() to fully clean up the eBPF program
+	AttachUSDTProbes(pid libpf.PID, path, multiProgName string, probes []pfelf.USDTProbe,
+		cookies []uint64, singleProgNames []string, probeAll bool) (LinkCloser, error)
+
+	// Allow interpreters to trigger a process sync
+	TriggerProcessSync(libpf.PID) error
+
+	// SetProcessSyncTrigger allows setting the process sync trigger function
+	SetProcessSyncTrigger(func(pid libpf.PID))
+}
+
+type LinkCloser interface {
+	Detach() error
+	Unload() error
 }
 
 // Loader is a function to detect and load data from given interpreter ELF file.

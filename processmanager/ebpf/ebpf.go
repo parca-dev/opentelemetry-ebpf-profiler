@@ -4,14 +4,14 @@
 package ebpf // import "go.opentelemetry.io/ebpf-profiler/processmanager/ebpf"
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
 	"math/bits"
-	"os"
 	"reflect"
+	"strings"
 	"sync"
-	"syscall"
 	"unsafe"
 
 	cebpf "github.com/cilium/ebpf"
@@ -21,6 +21,7 @@ import (
 	"golang.org/x/exp/constraints"
 
 	"go.opentelemetry.io/ebpf-profiler/host"
+	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/lpm"
@@ -39,11 +40,6 @@ const (
 	// updatePoolQueueCap decides the work queue capacity of each worker.
 	updatePoolQueueCap = 8
 )
-
-type usdtKey struct {
-	node uint64
-	name string
-}
 
 type ebpfMapsImpl struct {
 	// Interpreter related eBPF maps
@@ -75,10 +71,13 @@ type ebpfMapsImpl struct {
 
 	updateWorkers *asyncMapUpdaterPool
 
-	progs map[string]*cebpf.Program
+	coll          *cebpf.CollectionSpec
+	perfProgsFD   int
+	probeProgsMap *cebpf.Map
+	usdtProgs     map[string]*cebpf.Program
 
-	// map of inode to link
-	usdtMap map[usdtKey]link.Link
+	// processSyncTrigger is a function to trigger process synchronization
+	processSyncTrigger func(pid libpf.PID)
 }
 
 // Compile time check to make sure ebpfMapsImpl satisfies the interface .
@@ -90,8 +89,12 @@ var _ ebpfapi.EbpfHandler = &ebpfMapsImpl{}
 // It further spawns background workers for deferred map updates; the given
 // context can be used to terminate them on shutdown.
 func LoadMaps(ctx context.Context, maps map[string]*cebpf.Map,
-	progs map[string]*cebpf.Program) (ebpfapi.EbpfHandler, error) {
-	impl := &ebpfMapsImpl{progs: progs}
+	progs map[string]*cebpf.Program, coll *cebpf.CollectionSpec) (ebpfapi.EbpfHandler, error) {
+	impl := &ebpfMapsImpl{
+		coll:          coll,
+		perfProgsFD:   maps["perf_progs"].FD(),
+		probeProgsMap: maps["kprobe_progs"],
+	}
 	impl.errCounter = make(map[metrics.MetricID]int64)
 
 	implRefVal := reflect.ValueOf(impl).Elem()
@@ -135,80 +138,198 @@ func LoadMaps(ctx context.Context, maps map[string]*cebpf.Map,
 	return impl, nil
 }
 
-// Kernel 6.6 introduced multi-uprobes which we want to use because single shot uprobes
-// don't work for shared libraries.
-func hasMultiUprobe() bool {
-	major, minor, _, err := util.GetCurrentKernelVersion()
-	if err != nil {
-		return false
-	}
-	return major >= 6 && minor >= 6
+type linkCloser struct {
+	detachLink []link.Link
+	unloadLink link.Link
 }
 
-// AttachUSDTProbe allows interpreters to attach to uprobes found in libraries
-func (impl *ebpfMapsImpl) AttachUSDTProbe(pid libpf.PID, path string, probe pfelf.USDTProbe,
-	progName string) (link.Link, error) {
-	if impl.progs[progName] == nil {
-		return nil, fmt.Errorf("no eBPF program named %s", progName)
+func (lc *linkCloser) Detach() error {
+	var errs []error
+	if lc.detachLink != nil {
+		for _, l := range lc.detachLink {
+			if err := l.Close(); err != nil {
+				errs = append(errs, err)
+			}
+		}
 	}
+	return errors.Join(errs...)
+}
 
+func (lc *linkCloser) Unload() error {
+	if lc.unloadLink != nil {
+		return lc.unloadLink.Close()
+	}
+	return nil
+}
+
+// AttachUSDTProbes allows interpreters to attach to usdt probes.
+func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName string,
+	probes []pfelf.USDTProbe, cookies []uint64, singleProgNames []string,
+	probeAll bool) (interpreter.LinkCloser, error) {
 	exe, err := link.OpenExecutable(path)
 	if err != nil {
 		return nil, err
 	}
 
-	// get inode for file
-	s, err := os.Stat(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to stat path %s: %w", path, err)
+	if impl.usdtProgs == nil {
+		impl.usdtProgs = make(map[string]*cebpf.Program)
 	}
-	statt, ok := s.Sys().(*syscall.Stat_t)
-	if !ok {
-		return nil, errors.New("failed to get raw syscall.Stat_t")
+
+	names := make([]string, 0, len(probes))
+	addresses := make([]uint64, 0, len(probes))
+	offsets := make([]uint64, 0, len(probes))
+	for _, p := range probes {
+		names = append(names, p.Name)
+		addresses = append(addresses, p.Location)
+		offsets = append(offsets, p.SemaphoreOffset)
 	}
-	inode := statt.Ino
 
-	uKey := usdtKey{node: inode, name: progName}
+	useMulti := util.HasMultiUprobeSupport()
 
-	if impl.usdtMap == nil {
-		impl.usdtMap = make(map[usdtKey]link.Link)
-	} else {
-		if l, ok := impl.usdtMap[uKey]; ok {
-			log.Debugf("Reusing link probe %s:%s inode:%d", probe.Name, path, inode)
-			return l, nil
+	// If singleProgNames provided and we're not using multi-probe, use individual programs
+	if singleProgNames != nil && !useMulti {
+		if len(singleProgNames) != len(probes) {
+			return nil, fmt.Errorf(
+				"number of single program names %d does not match number of probes %d",
+				len(singleProgNames), len(probes))
 		}
+		// Single-shot mode with multiple programs
+		var links []link.Link
+		for i := range probes {
+			prog := impl.usdtProgs[singleProgNames[i]]
+			if prog == nil {
+				if err := impl.loadUSDTProgram(singleProgNames[i], false); err != nil {
+					return nil, err
+				}
+				prog = impl.usdtProgs[singleProgNames[i]]
+			}
+			lnk, err := exe.Uprobe(names[i], prog, &link.UprobeOptions{
+				Address:      addresses[i],
+				RefCtrOffset: offsets[i],
+				PID:          int(pid),
+			})
+			if err != nil {
+				return nil, fmt.Errorf("failed to attach usdt probe %s: %w", names[i], err)
+			}
+			links = append(links, lnk)
+		}
+		log.Infof("Attached %d individual probes to %s in PID %d", len(links), path, pid)
+		return &linkCloser{detachLink: links}, nil
 	}
 
-	useMulti := hasMultiUprobe()
-	prog := impl.progs[progName]
+	prog := impl.usdtProgs[multiProgName]
+	if prog == nil {
+		if err := impl.loadUSDTProgram(multiProgName, useMulti); err != nil {
+			return nil, err
+		}
+		prog = impl.usdtProgs[multiProgName]
+	}
 
-	var lnk link.Link
+	if !useMulti && len(probes) > 1 {
+		return nil, errors.New("attaching multiple probes requires multi support (kernel 6.6+)")
+	}
+
 	if useMulti {
-		up, err := exe.UprobeMulti([]string{probe.Name}, prog, &link.UprobeMultiOptions{
-			Addresses:     []uint64{probe.Location},
-			RefCtrOffsets: []uint64{probe.SemaphoreOffset},
+		// If probeAll is false use the pid
+		var probePid uint32
+		if !probeAll {
+			probePid = uint32(pid)
+		}
+
+		lnk, err := exe.UprobeMulti(names, prog, &link.UprobeMultiOptions{
+			Addresses:     addresses,
+			RefCtrOffsets: offsets,
+			Cookies:       cookies,
+			PID:           probePid,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("failed to attach usdt to %s: %w %s", probe.Name, err, prog)
+			return nil, fmt.Errorf("failed to attach usdt probes to %s: %s %w",
+				path, multiProgName, err)
 		}
-		lnk = up
+		log.Infof("Attached probe %s to udst %s in PID %d", multiProgName, path, pid)
+		return &linkCloser{unloadLink: lnk}, nil
 	} else {
-		up, err := exe.Uprobe(probe.Name, prog, &link.UprobeOptions{
-			Address:      probe.Location,
-			RefCtrOffset: probe.SemaphoreOffset,
+		lnk, err := exe.Uprobe(names[0], prog, &link.UprobeOptions{
+			Address:      addresses[0],
+			RefCtrOffset: offsets[0],
+			PID:          int(pid),
 		})
 		if err != nil {
-			return nil, fmt.Errorf("failed to attach usdt to %s: %w %s", probe.Name, err, prog)
+			return nil, fmt.Errorf("failed to attach usdt probes to %s: %s %w",
+				path, multiProgName, err)
 		}
-		lnk = up
+		log.Infof("Attached probe %s to udst %s in PID %d", multiProgName, path, pid)
+		return &linkCloser{detachLink: []link.Link{lnk}}, nil
 	}
-	log.Infof("Attached new uprobe to %s:%s in PID %d, inode : %d", probe.Name, path, pid, inode)
-	impl.usdtMap[uKey] = lnk
-	return lnk, nil
+}
+
+// loadProgram loads an eBPF program from progSpec and populates the related maps.
+func (impl *ebpfMapsImpl) loadUSDTProgram(progName string, useMulti bool) error {
+	progSpec := impl.coll.Programs[progName]
+	programOptions := cebpf.ProgramOptions{
+		// TODO: wire in debug level
+	}
+	restoreRlimit, err := rlimit.MaximizeMemlock()
+	if err != nil {
+		return fmt.Errorf("failed to adjust rlimit: %v", err)
+	}
+	defer restoreRlimit()
+
+	if useMulti {
+		progSpec.AttachType = cebpf.AttachTraceUprobeMulti
+	}
+
+	// Replace the prog array for the tail calls.
+	insns := util.ProgArrayReferences(impl.perfProgsFD, progSpec.Instructions)
+	for _, ins := range insns {
+		assocErr := progSpec.Instructions[ins].AssociateMap(impl.probeProgsMap)
+		if assocErr != nil {
+			return fmt.Errorf("failed to rewrite map ptr: %v", assocErr)
+		}
+		log.Infof("Rewrote map ptr in prog %s at instruction %d from %d to %d",
+			progName, ins, impl.perfProgsFD, impl.probeProgsMap.FD())
+	}
+
+	// Load the eBPF program into the kernel. If no error is returned,
+	// the eBPF program can be used/called/triggered from now on.
+	prog, err := cebpf.NewProgramWithOptions(progSpec, programOptions)
+	if err != nil {
+		// These errors tend to have hundreds of lines (or more),
+		// so we print each line individually.
+		if ve, ok := err.(*cebpf.VerifierError); ok {
+			for _, line := range ve.Log {
+				log.Error(line)
+			}
+		} else {
+			scanner := bufio.NewScanner(strings.NewReader(err.Error()))
+			for scanner.Scan() {
+				log.Error(scanner.Text())
+			}
+		}
+		return fmt.Errorf("failed to load %s", progSpec.Name)
+	}
+	impl.usdtProgs[progSpec.Name] = prog
+	return nil
 }
 
 func (impl *ebpfMapsImpl) CoredumpTest() bool {
 	return false
+}
+
+func (impl *ebpfMapsImpl) TriggerProcessSync(pid libpf.PID) error {
+	if impl.processSyncTrigger == nil {
+		log.Debugf("TriggerProcessSync called for PID %d but processSyncTrigger is not set", pid)
+		return nil
+	}
+
+	log.Debugf("TriggerProcessSync called for PID %d", pid)
+	impl.processSyncTrigger(pid)
+	return nil
+}
+
+// SetProcessSyncTrigger sets the process sync trigger function
+func (impl *ebpfMapsImpl) SetProcessSyncTrigger(triggerFunc func(pid libpf.PID)) {
+	impl.processSyncTrigger = triggerFunc
 }
 
 // UpdateInterpreterOffsets adds the given moduleRanges to the eBPF map interpreterOffsets.

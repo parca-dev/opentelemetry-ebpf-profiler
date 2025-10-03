@@ -8,7 +8,6 @@ import (
 	"math/bits"
 	"unsafe"
 
-	"github.com/cilium/ebpf/link"
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
@@ -266,7 +265,16 @@ func (emc *ebpfMapsCoredump) SupportsLPMTrieBatchOperations() bool {
 	return false
 }
 
-func (emc *ebpfMapsCoredump) AttachUSDTProbe(_ libpf.PID, _ string, _ pfelf.USDTProbe,
-	_ string) (link.Link, error) {
+func (emc *ebpfMapsCoredump) AttachUSDTProbes(_ libpf.PID, _, _ string, _ []pfelf.USDTProbe,
+	_ []uint64, _ []string, _ bool) (interpreter.LinkCloser, error) {
 	return nil, nil
+}
+
+func (emc *ebpfMapsCoredump) TriggerProcessSync(_ libpf.PID) error {
+	// No-op for coredump
+	return nil
+}
+
+func (emc *ebpfMapsCoredump) SetProcessSyncTrigger(func(pid libpf.PID)) {
+	// No-op for coredump
 }
