@@ -56,9 +56,9 @@ func (p *gpuTraceFixer) addTime(key mapKey, ev *kernelTimingEvent) *host.Trace {
 	return nil
 }
 
-// uprobes aren't perfect and we may miss matching timing to trace at attach boundary
-// so clear them if they get too big.
-func (p *gpuTraceFixer) clear() {
+// maybeClear clears the maps if they get too big. uprobes aren't perfect and
+// we may miss matching timing to trace at attach boundary.
+func (p *gpuTraceFixer) maybeClear() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if len(p.timesAwaitingTraces) > 100 || len(p.tracesAwaitingTimes) > 100 {
@@ -92,6 +92,7 @@ func prepTrace(tr *host.Trace, ev *kernelTimingEvent) {
 		tr.CustomLabels["cuda_graph"] = strconv.FormatUint(uint64(ev.graph), 10)
 	}
 	if len(ev.kernelName) > 0 {
+		// TODO: is there a better way to pass this through?
 		tr.CustomLabels["_temp_cuda_kernel"] = string(ev.kernelName[:])
 		// ConvertTrace will add a pseudo-frame for the kernel.
 		tr.Frames = append([]host.Frame{{
@@ -118,7 +119,7 @@ func Start(ctx context.Context, traceInCh <-chan *host.Trace,
 			select {
 			case <-timer.C:
 				// We don't want to leak memory, so we purge the readers map every 60 seconds.
-				fixer.clear()
+				fixer.maybeClear()
 			case <-ctx.Done():
 				return
 			case t := <-traceInCh:

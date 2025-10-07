@@ -1,6 +1,7 @@
 package gpu // import "go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 
 import (
+	"fmt"
 	"runtime"
 
 	log "github.com/sirupsen/logrus"
@@ -46,7 +47,9 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		}
 
 		// Validate probe arguments match what cuda.ebpf.c expects
-		validateProbeArguments(parcagpuProbes, info.FileName())
+		if err := validateProbeArguments(parcagpuProbes, info.FileName()); err != nil {
+			return nil, err
+		}
 
 		return &data{path: info.FileName(),
 			probes: parcagpuProbes}, nil
@@ -55,8 +58,8 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 }
 
 // validateProbeArguments checks that the USDT probe arguments match the expectations
-// in cuda.ebpf.c and logs errors if they don't match.
-func validateProbeArguments(probes []pfelf.USDTProbe, path string) {
+// in cuda.ebpf.c and returns an error if they don't match.
+func validateProbeArguments(probes []pfelf.USDTProbe, path string) error {
 	var expectedProbes map[string]string
 
 	switch runtime.GOARCH {
@@ -73,9 +76,8 @@ func validateProbeArguments(probes []pfelf.USDTProbe, path string) {
 			"graph_executed":   "8@x1 8@x2 8@[sp, 88] 4@x3 4@x0",
 		}
 	default:
-		log.Warnf("[cuda] Unknown architecture %s, cannot validate USDT probe arguments for %s",
+		return fmt.Errorf("unknown architecture %s, cannot validate USDT probe arguments for %s",
 			runtime.GOARCH, path)
-		return
 	}
 
 	probeMap := make(map[string]string)
@@ -86,17 +88,16 @@ func validateProbeArguments(probes []pfelf.USDTProbe, path string) {
 	for name, expectedArgs := range expectedProbes {
 		actualArgs, ok := probeMap[name]
 		if !ok {
-			log.Errorf("[cuda] Missing expected USDT probe '%s' in %s", name, path)
-			continue
+			return fmt.Errorf("missing expected USDT probe '%s' in %s", name, path)
 		}
 		if actualArgs != expectedArgs {
-			log.Errorf("[cuda] USDT probe '%s' in %s has incorrect arguments:\n"+
-				"  Expected: %s\n"+
-				"  Actual:   %s\n"+
-				"  This will cause incorrect data collection. cuda.ebpf.c needs to be updated.",
+			return fmt.Errorf("USDT probe '%s' in %s has incorrect arguments: "+
+				"expected: %s"+
+				"actual: %s",
 				name, path, expectedArgs, actualArgs)
 		}
 	}
+	return nil
 }
 
 func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Address,
