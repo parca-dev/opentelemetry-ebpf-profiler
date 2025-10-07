@@ -133,6 +133,8 @@ type Config struct {
 	CollectCustomLabels bool
 	// VerboseMode indicates whether to enable verbose output of eBPF tracers.
 	VerboseMode bool
+	// InstrumentCudaLaunch determines whether to instrument calls to `cudaLaunchKernel`.
+	InstrumentCudaLaunch bool
 	// BPFVerifierLogLevel is the log level of the eBPF verifier output.
 	BPFVerifierLogLevel uint32
 	// ProbabilisticInterval is the time interval for which probabilistic profiling will be enabled.
@@ -416,7 +418,10 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (ebpfMaps map
 		return nil, nil, nil, fmt.Errorf("failed to load perf eBPF programs: %v", err)
 	}
 
-	if cfg.OffCPUThreshold > 0 || len(cfg.UProbeLinks) > 0 || cfg.LoadProbe {
+	if cfg.OffCPUThreshold > 0 ||
+		len(cfg.UProbeLinks) > 0 ||
+		cfg.LoadProbe ||
+		cfg.InstrumentCudaLaunch {
 		// Load the tail call destinations if any kind of event profiling is enabled.
 		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], tailCallProgs,
 			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD()); err != nil {
@@ -896,6 +901,7 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) *host.Trace {
 		Origin:           libpf.Origin(ptr.Origin),
 		OffTime:          int64(ptr.Offtime),
 		KTime:            times.KTime(ptr.Ktime),
+		ParcaGPUTraceID:  ptr.Parca_gpu_trace_id,
 		CPU:              cpu,
 		EnvVars:          procMeta.EnvVariables,
 	}
@@ -904,6 +910,7 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) *host.Trace {
 	case support.TraceOriginSampling:
 	case support.TraceOriginOffCPU:
 	case support.TraceOriginUProbe:
+	case support.TraceOriginCuda:
 	default:
 		log.Warnf("Skip handling trace from unexpected %d origin", trace.Origin)
 		return nil
@@ -930,6 +937,7 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) *host.Trace {
 	ptr.Ktime = 0
 	ptr.Origin = 0
 	ptr.Offtime = 0
+	ptr.Parca_gpu_trace_id = 0
 	ptr.Custom_labels = support.CustomLabelsArray{}
 	trace.Hash = host.TraceHash(xxh3.Hash128(raw).Lo)
 
