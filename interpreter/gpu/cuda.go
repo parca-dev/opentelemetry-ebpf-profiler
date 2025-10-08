@@ -101,7 +101,7 @@ func validateProbeArguments(probes []pfelf.USDTProbe, path string) error {
 }
 
 func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Address,
-	_ remotememory.RemoteMemory) (ii interpreter.Instance, err error) {
+	_ remotememory.RemoteMemory) (interpreter.Instance, error) {
 	// Maps usdt probe name to ebpf program name.
 	// Use the first character of the probe name as a cookie.
 	// 'c' -> cuda_correlation
