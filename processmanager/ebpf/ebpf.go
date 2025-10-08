@@ -166,8 +166,15 @@ func (lc *linkCloser) Unload() error {
 func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName string,
 	probes []pfelf.USDTProbe, cookies []uint64, singleProgNames []string,
 	probeAll bool) (interpreter.LinkCloser, error) {
-	exe, err := link.OpenExecutable(path)
+	containerPath := fmt.Sprintf("/proc/%d/root/%s", pid, path)
+
+	// TODO: This will crack open the exe with debug.elf and read symbols, we should
+	// contribute a PR to cilium to allow it to delegate to pfelf instead. This will
+	// also allow us to avoid the proc/pid/root stuff.
+	exe, err := link.OpenExecutable(containerPath)
 	if err != nil {
+		// The upstack code will swallow file not found errors so drop a crumb.
+		log.Warnf("failed to open executable in AttachUSDTProbes %v", err)
 		return nil, err
 	}
 
