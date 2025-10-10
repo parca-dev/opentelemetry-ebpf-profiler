@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/support"
+	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
 type mapKey struct {
@@ -93,7 +94,7 @@ func prepTrace(tr *host.Trace, ev *kernelTimingEvent) {
 	}
 	if len(ev.kernelName) > 0 {
 		// TODO: is there a better way to pass this through?
-		tr.CustomLabels["_temp_cuda_kernel"] = string(ev.kernelName[:])
+		tr.CustomLabels["_temp_cuda_kernel"] = util.GoString(ev.kernelName[:])
 		// ConvertTrace will add a pseudo-frame for the kernel.
 		tr.Frames = append([]host.Frame{{
 			Type: libpf.CUDAKernelFrame,

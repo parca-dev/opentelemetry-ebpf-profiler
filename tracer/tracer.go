@@ -6,7 +6,6 @@ package tracer // import "go.opentelemetry.io/ebpf-profiler/tracer"
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -176,15 +175,6 @@ type progLoaderHelper struct {
 	progID uint32
 	// noTailCallTarget indicates if this eBPF program should be added to the tailcallMap.
 	noTailCallTarget bool
-}
-
-// Convert a C-string to Go string.
-func goString(cstr []byte) string {
-	index := bytes.IndexByte(cstr, byte(0))
-	if index < 0 {
-		index = len(cstr)
-	}
-	return strings.Clone(unsafe.String(unsafe.SliceData(cstr), index))
 }
 
 // schedProcessFreeHookName returns the name of the tracepoint hook to use.
@@ -916,7 +906,7 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) *host.Trace {
 	pid := libpf.PID(ptr.Pid)
 	procMeta := t.processManager.MetaForPID(pid)
 	trace := &host.Trace{
-		Comm:             goString(ptr.Comm[:]),
+		Comm:             util.GoString(ptr.Comm[:]),
 		ExecutablePath:   procMeta.Executable,
 		ContainerID:      procMeta.ContainerID,
 		ProcessName:      procMeta.Name,
@@ -947,8 +937,8 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) *host.Trace {
 		trace.CustomLabels = make(map[string]string, clLen)
 		for i := 0; i < clLen; i++ {
 			lbl := ptr.Custom_labels.Labels[i]
-			key := goString(lbl.Key[:])
-			val := goString(lbl.Val[:])
+			key := util.GoString(lbl.Key[:])
+			val := util.GoString(lbl.Val[:])
 			trace.CustomLabels[key] = val
 		}
 	}
