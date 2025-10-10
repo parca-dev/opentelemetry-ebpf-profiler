@@ -7,10 +7,12 @@ import (
 	"bytes"
 	"fmt"
 	"math/bits"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"unicode"
 	"unicode/utf8"
+	"unsafe"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/asm"
@@ -180,4 +182,13 @@ func ProgArrayReferences(perfTailCallMapFD int, insns asm.Instructions) []int {
 		}
 	}
 	return insNos
+}
+
+// Convert a C-string to Go string.
+func GoString(cstr []byte) string {
+	index := bytes.IndexByte(cstr, byte(0))
+	if index < 0 {
+		index = len(cstr)
+	}
+	return strings.Clone(unsafe.String(unsafe.SliceData(cstr), index))
 }
