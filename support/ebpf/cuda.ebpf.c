@@ -41,7 +41,7 @@ struct kernel_timing {
   u32 device_id;
   u32 stream_id;
   u32 graph_id;
-  char kernel_name[128];
+  char kernel_name[256];
 };
 
 bpf_map_def SEC("maps") cuda_timing_events = {

@@ -10,6 +10,7 @@ import (
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/perf"
+	"github.com/ianlancetaylor/demangle"
 	log "github.com/sirupsen/logrus"
 
 	"go.opentelemetry.io/ebpf-profiler/host"
@@ -94,7 +95,13 @@ func prepTrace(tr *host.Trace, ev *kernelTimingEvent) {
 	}
 	if len(ev.kernelName) > 0 {
 		// TODO: is there a better way to pass this through?
-		tr.CustomLabels["_temp_cuda_kernel"] = util.GoString(ev.kernelName[:])
+		str := util.GoString(ev.kernelName[:])
+		if demstr, err := demangle.ToString(str, demangle.NoParams, demangle.NoEnclosingParams); err != nil {
+			log.Debugf("failed to demangle cuda kernel name %q: %v", str, err)
+		} else {
+			str = demstr
+		}
+		tr.CustomLabels["_temp_cuda_kernel"] = str
 		// ConvertTrace will add a pseudo-frame for the kernel.
 		tr.Frames = append([]host.Frame{{
 			Type: libpf.CUDAKernelFrame,
