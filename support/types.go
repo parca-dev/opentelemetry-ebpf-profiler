@@ -98,12 +98,13 @@ const (
 type ApmSpanID [8]byte
 type ApmTraceID [16]byte
 type CustomLabel struct {
-	Key [17]uint8
+	Key [26]uint8
 	Val [49]uint8
 }
 type CustomLabelsArray struct {
-	Len    uint32
-	Labels [10]CustomLabel
+	Len       uint32
+	Labels    [10]CustomLabel
+	Pad_cgo_0 [2]byte
 }
 type Event struct {
 	Type uint32
@@ -333,7 +334,7 @@ type LuaJITProcInfo struct {
 const (
 	Sizeof_Frame      = 0x18
 	Sizeof_StackDelta = 0x4
-	Sizeof_Trace      = 0x1ae8
+	Sizeof_Trace      = 0x1b40
 
 	sizeof_ApmIntProcInfo = 0x8
 	sizeof_DotnetProcInfo = 0x4
@@ -342,7 +343,7 @@ const (
 )
 
 const (
-	CustomLabelMaxKeyLen = 0x10
+	CustomLabelMaxKeyLen = 0x19
 	CustomLabelMaxValLen = 0x30
 )
 
