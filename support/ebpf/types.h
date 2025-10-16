@@ -605,8 +605,8 @@ typedef struct __attribute__((packed)) ApmCorrelationBuf {
 #define CUSTOM_LABEL_MAX_VAL_LEN 48
 
 typedef struct CustomLabel {
-  u8 key[CUSTOM_LABEL_MAX_KEY_LEN];
-  u8 val[CUSTOM_LABEL_MAX_VAL_LEN];
+  u8 key[CUSTOM_LABEL_MAX_KEY_LEN + 1];
+  u8 val[CUSTOM_LABEL_MAX_VAL_LEN + 1];
 } CustomLabel;
 
 typedef struct NativeCustomLabelsString {

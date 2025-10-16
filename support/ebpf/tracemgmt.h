@@ -259,10 +259,10 @@ static inline EBPF_INLINE PerCPURecord *get_pristine_per_cpu_record()
   trace->parca_gpu_trace_id        = 0;
 
   trace->custom_labels.len = 0;
-  u64 *labels_space        = (u64 *)&trace->custom_labels.labels;
+  u8 *labels_space        = (u8 *)&trace->custom_labels.labels;
   // I'm not sure this is necessary since we only increment len after
   // we successfully write the label.
-  UNROLL for (int i = 0; i < sizeof(CustomLabel) * MAX_CUSTOM_LABELS / 8; i++)
+  UNROLL for (int i = 0; i < sizeof(CustomLabel) * MAX_CUSTOM_LABELS; i++)
   {
     labels_space[i] = 0;
   }
