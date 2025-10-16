@@ -62,7 +62,6 @@ type Trace struct {
 	OffTime          int64 // Time a task was off-cpu in nanoseconds.
 	APMTraceID       libpf.APMTraceID
 	APMTransactionID libpf.APMTransactionID
-	ParcaGPUTraceID  uint32
 	CPU              int
 	EnvVars          map[string]string
 	CustomLabels     map[string]string

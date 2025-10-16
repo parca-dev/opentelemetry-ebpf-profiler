@@ -286,17 +286,6 @@ func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace
 
 			newTrace.AppendFrameFull(frame.Type, fileID,
 				relativeRIP, mappingStart, mappingEnd, fileOffset)
-		case libpf.CUDA:
-			name, ok := trace.CustomLabels["_temp_cuda_kernel"]
-			if !ok {
-				name = "unnamed_cuda_kernel"
-			}
-			// remove the label
-			delete(trace.CustomLabels, "_temp_cuda_kernel")
-			newTrace.Frames.Append(&libpf.Frame{
-				Type:         frame.Type,
-				FunctionName: libpf.Intern(name),
-			})
 		default:
 			err := pm.symbolizeFrame(i, trace, &newTrace.Frames)
 			if err != nil {
@@ -342,4 +331,21 @@ func (pm *ProcessManager) MaybeNotifyAPMAgent(
 	}
 
 	return serviceName
+}
+
+// GetInterpretersForPID returns all interpreter instances for the given PID.
+func (pm *ProcessManager) GetInterpretersForPID(pid libpf.PID) []interpreter.Instance {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+
+	interpreters := pm.interpreters[pid]
+	if len(interpreters) == 0 {
+		return nil
+	}
+
+	result := make([]interpreter.Instance, 0, len(interpreters))
+	for _, instance := range interpreters {
+		result = append(result, instance)
+	}
+	return result
 }

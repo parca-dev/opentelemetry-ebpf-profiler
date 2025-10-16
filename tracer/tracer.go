@@ -22,6 +22,7 @@ import (
 	"github.com/zeebo/xxh3"
 
 	"go.opentelemetry.io/ebpf-profiler/host"
+	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/kallsyms"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/xsync"
@@ -917,7 +918,6 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) *host.Trace {
 		Origin:           libpf.Origin(ptr.Origin),
 		OffTime:          int64(ptr.Offtime),
 		KTime:            times.KTime(ptr.Ktime),
-		ParcaGPUTraceID:  ptr.Parca_gpu_trace_id,
 		CPU:              cpu,
 		EnvVars:          procMeta.EnvVariables,
 	}
@@ -1208,4 +1208,9 @@ func (t *Tracer) TraceProcessor() tracehandler.TraceProcessor {
 // GetEbpfMaps returns the eBPF maps for testing purposes.
 func (t *Tracer) GetEbpfMaps() map[string]*cebpf.Map {
 	return t.ebpfMaps
+}
+
+// GetInterpretersForPID returns all interpreter instances for the given PID.
+func (t *Tracer) GetInterpretersForPID(pid libpf.PID) []interpreter.Instance {
+	return t.processManager.GetInterpretersForPID(pid)
 }
