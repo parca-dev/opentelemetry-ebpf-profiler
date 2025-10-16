@@ -600,7 +600,7 @@ typedef struct __attribute__((packed)) ApmCorrelationBuf {
   ApmSpanID transaction_id;
 } ApmCorrelationBuf;
 
-#define CUSTOM_LABEL_MAX_KEY_LEN COMM_LEN
+#define CUSTOM_LABEL_MAX_KEY_LEN 25
 // Big enough to hold UUIDs, etc.
 #define CUSTOM_LABEL_MAX_VAL_LEN 48
 
