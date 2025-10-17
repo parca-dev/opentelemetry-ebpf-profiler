@@ -490,7 +490,7 @@ var MetricsTranslation = []metrics.MetricID{
 	0x5f: metrics.IDUnwindDotnetErrCodeTooLarge,
 	0x69: metrics.IDUnwindLuaJITAttempts,
 	0x6a: metrics.IDUnwindLuaJITErrNoProcInfo,
-	0x72: metrics.IDRtldMapCompleteHits,
+	0x72: metrics.IDDlopenUprobeHits,
 	0x6d: metrics.IDUnwindNodeCustomLabelsAttempts,
 	0x6e: metrics.IDUnwindNodeCustomLabelsSuccesses,
 	0x6f: metrics.IDUnwindNodeCustomLabelsFailures,

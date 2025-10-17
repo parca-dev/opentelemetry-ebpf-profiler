@@ -302,7 +302,7 @@ var MetricsTranslation = []metrics.MetricID{
 	C.metricID_UnwindDotnetErrCodeTooLarge:                metrics.IDUnwindDotnetErrCodeTooLarge,
 	C.metricID_UnwindLuaJITAttempts:                       metrics.IDUnwindLuaJITAttempts,
 	C.metricID_UnwindLuaJITErrNoProcInfo:                  metrics.IDUnwindLuaJITErrNoProcInfo,
-	C.metricID_RtldMapCompleteHits:                        metrics.IDRtldMapCompleteHits,
+	C.metricID_DlopenUprobeHits:                           metrics.IDDlopenUprobeHits,
 	C.metricID_UnwindNodeCustomLabelsAttempts:             metrics.IDUnwindNodeCustomLabelsAttempts,
 	C.metricID_UnwindNodeCustomLabelsSuccesses:            metrics.IDUnwindNodeCustomLabelsSuccesses,
 	C.metricID_UnwindNodeCustomLabelsFailures:             metrics.IDUnwindNodeCustomLabelsFailures,

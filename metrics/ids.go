@@ -689,8 +689,8 @@ const (
 	// Number of failed attempts to read Node.js custom labels
 	IDUnwindNodeCustomLabelsFailures = 293
 
-	// Number of times rtld:map_complete USDT probe was fired
-	IDRtldMapCompleteHits = 294
+	// Number of times dlopen uprobe was fired
+	IDDlopenUprobeHits = 294
 
 	// max number of ID values, keep this as *last entry*
 	IDMax = 295

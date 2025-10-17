@@ -239,19 +239,6 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 		probabilisticThreshold: cfg.ProbabilisticThreshold,
 	}
 
-	// Wire up the process manager for TriggerProcessSync calls
-	processSyncTrigger := func(pid libpf.PID) {
-		log.Infof("[tracer] ebpf handler process sync triggered for PID %d", pid)
-		// Send the PID event to the pidEvents channel for processing
-		select {
-		case tracer.pidEvents <- libpf.PIDTID(pid):
-		default:
-			// Channel is full, drop the event to avoid blocking
-			log.Debugf("pidEvents channel full, dropping event for PID %d", pid)
-		}
-	}
-	ebpfHandler.SetProcessSyncTrigger(processSyncTrigger)
-
 	return tracer, nil
 }
 

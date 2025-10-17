@@ -270,11 +270,7 @@ func (emc *ebpfMapsCoredump) AttachUSDTProbes(_ libpf.PID, _, _ string, _ []pfel
 	return nil, nil
 }
 
-func (emc *ebpfMapsCoredump) TriggerProcessSync(_ libpf.PID) error {
-	// No-op for coredump
-	return nil
-}
-
-func (emc *ebpfMapsCoredump) SetProcessSyncTrigger(func(pid libpf.PID)) {
-	// No-op for coredump
+func (emc *ebpfMapsCoredump) AttachUprobe(_ libpf.PID, _ string, _ uint64,
+	_ string) (interpreter.LinkCloser, error) {
+	return nil, nil
 }
