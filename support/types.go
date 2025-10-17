@@ -178,7 +178,6 @@ type Trace struct {
 	Custom_labels      CustomLabelsArray
 	Kernel_stack_id    int32
 	Stack_len          uint32
-	Parca_gpu_trace_id uint32
 	Origin             uint32
 	Offtime            uint64
 	Frames             [256]Frame
@@ -334,7 +333,7 @@ type LuaJITProcInfo struct {
 const (
 	Sizeof_Frame      = 0x18
 	Sizeof_StackDelta = 0x4
-	Sizeof_Trace      = 0x1ad8
+	Sizeof_Trace      = 0x1ad0
 
 	sizeof_ApmIntProcInfo = 0x8
 	sizeof_DotnetProcInfo = 0x4

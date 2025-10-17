@@ -26,8 +26,7 @@ const (
 var (
 	// Global map of data instances, keyed by path
 	// This mutex also protects all pidToFixer maps within each data instance
-	gpuFixerMu    sync.RWMutex
-	dataInstances = make(map[string]*data)
+	gpuFixers sync.Map
 )
 
 // gpuTraceFixer matches traces with timing information for a specific PID.
@@ -47,9 +46,6 @@ type data struct {
 	path   string
 	link   interpreter.LinkCloser
 	probes []pfelf.USDTProbe
-
-	// Map of PID to gpuTraceFixer (protected by gpuFixerMu)
-	pidToFixer map[libpf.PID]*gpuTraceFixer
 }
 
 // Instance is the CUDA interpreter instance
@@ -98,15 +94,9 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		}
 
 		d := &data{
-			path:       info.FileName(),
-			probes:     parcagpuProbes,
-			pidToFixer: make(map[libpf.PID]*gpuTraceFixer),
+			path:   info.FileName(),
+			probes: parcagpuProbes,
 		}
-
-		// Register in global map
-		gpuFixerMu.Lock()
-		dataInstances[d.path] = d
-		gpuFixerMu.Unlock()
 
 		return d, nil
 	}
@@ -186,9 +176,7 @@ func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Addre
 	}
 
 	// Use global mutex to protect pidToFixer map
-	gpuFixerMu.Lock()
-	d.pidToFixer[pid] = fixer
-	gpuFixerMu.Unlock()
+	gpuFixers.Store(pid, fixer)
 
 	return &Instance{
 		link: lc,
@@ -200,12 +188,7 @@ func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Addre
 // Detach removes the fixer for this PID and closes the link if needed.
 func (i *Instance) Detach(_ interpreter.EbpfHandler, _ libpf.PID) error {
 	// Remove fixer for this PID
-	gpuFixerMu.Lock()
-	d, ok := dataInstances[i.path]
-	if ok {
-		delete(d.pidToFixer, i.pid)
-	}
-	gpuFixerMu.Unlock()
+	gpuFixers.Delete(i.pid)
 
 	if i.link != nil {
 		log.Debugf("[cuda] parcagpu USDT probes closed for %s", i.path)
@@ -350,54 +333,33 @@ func (f *gpuTraceFixer) prepTrace(tr *host.Trace, ev *CuptiTimingEvent) *host.Tr
 // Completed traces are sent directly to traceOutChan.
 func AddTrace(trace *host.Trace, traceOutChan chan<- *host.Trace) error {
 	pid := trace.PID
-
-	// Iterate through all data instances and look for the fixer
-	gpuFixerMu.RLock()
-	defer gpuFixerMu.RUnlock()
-
-	for _, d := range dataInstances {
-		fixer, ok := d.pidToFixer[pid]
-		if ok {
-			return fixer.addTrace(trace, traceOutChan)
-		}
+	value, ok := gpuFixers.Load(pid)
+	if !ok {
+		return fmt.Errorf("no GPU fixer found for PID %d", pid)
 	}
-
-	return fmt.Errorf("no GPU fixer found for PID %d", pid)
+	fixer := value.(*gpuTraceFixer)
+	return fixer.addTrace(trace, traceOutChan)
 }
 
 // AddTime is a static function that delegates to the appropriate fixer for the PID.
 func AddTime(ev *CuptiTimingEvent) *host.Trace {
 	pid := libpf.PID(ev.Pid)
-
-	// Iterate through all data instances and look for the fixer
-	gpuFixerMu.RLock()
-	defer gpuFixerMu.RUnlock()
-
-	for _, d := range dataInstances {
-		fixer, ok := d.pidToFixer[pid]
-		if ok {
-			return fixer.addTime(ev)
-		}
+	value, ok := gpuFixers.Load(pid)
+	if !ok {
+		log.Warnf("no GPU fixer found for PID %d", pid)
+		return nil
 	}
-
-	return nil
+	fixer := value.(*gpuTraceFixer)
+	return fixer.addTime(ev)
 }
 
 // MaybeClearAll periodically clears all fixers to avoid memory leaks.
 func MaybeClearAll() {
-	gpuFixerMu.RLock()
-	defer gpuFixerMu.RUnlock()
-
-	for _, d := range dataInstances {
-		fixers := make([]*gpuTraceFixer, 0, len(d.pidToFixer))
-		for _, fixer := range d.pidToFixer {
-			fixers = append(fixers, fixer)
-		}
-
-		for _, fixer := range fixers {
-			fixer.maybeClear()
-		}
-	}
+	gpuFixers.Range(func(key, value any) bool {
+		fixer := value.(*gpuTraceFixer)
+		fixer.maybeClear()
+		return true
+	})
 }
 
 func (i *Instance) Symbolize(f *host.Frame, frames *libpf.Frames) error {
@@ -422,11 +384,6 @@ func (i *Instance) Symbolize(f *host.Frame, frames *libpf.Frames) error {
 }
 
 func (d *data) Unload(ebpf interpreter.EbpfHandler) {
-	// Unregister from global map
-	gpuFixerMu.Lock()
-	delete(dataInstances, d.path)
-	gpuFixerMu.Unlock()
-
 	if d.link != nil {
 		log.Debugf("[cuda] parcagpu USDT probes closed for %s", d.path)
 		if err := d.link.Unload(); err != nil {

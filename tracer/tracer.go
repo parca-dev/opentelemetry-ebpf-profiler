@@ -953,7 +953,6 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) *host.Trace {
 	ptr.Ktime = 0
 	ptr.Origin = 0
 	ptr.Offtime = 0
-	ptr.Parca_gpu_trace_id = 0
 	ptr.Custom_labels = support.CustomLabelsArray{}
 	trace.Hash = host.TraceHash(xxh3.Hash128(raw).Lo)
 
