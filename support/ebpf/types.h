@@ -357,8 +357,8 @@ enum {
   // number of failures to read Go labels (upstream)
   metricID_UnwindGoLabelsFailures,
 
-  // number of times rtld:map_complete USDT probe was fired
-  metricID_RtldMapCompleteHits,
+  // number of times dlopen uprobe was fired
+  metricID_DlopenUprobeHits,
 
   //
   // Metric IDs above are for counters (cumulative values)

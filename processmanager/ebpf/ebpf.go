@@ -74,10 +74,7 @@ type ebpfMapsImpl struct {
 	coll          *cebpf.CollectionSpec
 	perfProgsFD   int
 	probeProgsMap *cebpf.Map
-	usdtProgs     map[string]*cebpf.Program
-
-	// processSyncTrigger is a function to trigger process synchronization
-	processSyncTrigger func(pid libpf.PID)
+	userProgs     map[string]*cebpf.Program
 }
 
 // Compile time check to make sure ebpfMapsImpl satisfies the interface .
@@ -178,8 +175,8 @@ func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName st
 		return nil, err
 	}
 
-	if impl.usdtProgs == nil {
-		impl.usdtProgs = make(map[string]*cebpf.Program)
+	if impl.userProgs == nil {
+		impl.userProgs = make(map[string]*cebpf.Program)
 	}
 
 	names := make([]string, 0, len(probes))
@@ -203,12 +200,12 @@ func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName st
 		// Single-shot mode with multiple programs
 		var links []link.Link
 		for i := range probes {
-			prog := impl.usdtProgs[singleProgNames[i]]
+			prog := impl.userProgs[singleProgNames[i]]
 			if prog == nil {
 				if err := impl.loadUSDTProgram(singleProgNames[i], false); err != nil {
 					return nil, err
 				}
-				prog = impl.usdtProgs[singleProgNames[i]]
+				prog = impl.userProgs[singleProgNames[i]]
 			}
 			lnk, err := exe.Uprobe(names[i], prog, &link.UprobeOptions{
 				Address:      addresses[i],
@@ -224,12 +221,12 @@ func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName st
 		return &linkCloser{detachLink: links}, nil
 	}
 
-	prog := impl.usdtProgs[multiProgName]
+	prog := impl.userProgs[multiProgName]
 	if prog == nil {
 		if err := impl.loadUSDTProgram(multiProgName, useMulti); err != nil {
 			return nil, err
 		}
-		prog = impl.usdtProgs[multiProgName]
+		prog = impl.userProgs[multiProgName]
 	}
 
 	if !useMulti && len(probes) > 1 {
@@ -315,28 +312,50 @@ func (impl *ebpfMapsImpl) loadUSDTProgram(progName string, useMulti bool) error 
 		}
 		return fmt.Errorf("failed to load %s", progSpec.Name)
 	}
-	impl.usdtProgs[progSpec.Name] = prog
+	impl.userProgs[progSpec.Name] = prog
 	return nil
+}
+
+// AttachUprobe attaches an eBPF uprobe to a function at a specific offset in a binary
+func (impl *ebpfMapsImpl) AttachUprobe(pid libpf.PID, path string, offset uint64,
+	progName string) (interpreter.LinkCloser, error) {
+	containerPath := fmt.Sprintf("/proc/%d/root/%s", pid, path)
+
+	exe, err := link.OpenExecutable(containerPath)
+	if err != nil {
+		log.Warnf("failed to open executable in AttachUprobe %v", err)
+		return nil, err
+	}
+
+	if impl.userProgs == nil {
+		impl.userProgs = make(map[string]*cebpf.Program)
+	}
+
+	// Load the program if not already loaded
+	prog := impl.userProgs[progName]
+	if prog == nil {
+		if loadErr := impl.loadUSDTProgram(progName, false); loadErr != nil {
+			return nil, loadErr
+		}
+		prog = impl.userProgs[progName]
+	}
+
+	// Attach the uprobe
+	lnk, err := exe.Uprobe("", prog, &link.UprobeOptions{
+		Address: offset,
+		PID:     int(pid),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to attach uprobe to %s at offset 0x%x: %w",
+			path, offset, err)
+	}
+
+	log.Infof("Attached uprobe %s to %s at offset 0x%x in PID %d", progName, path, offset, pid)
+	return &linkCloser{detachLink: []link.Link{lnk}}, nil
 }
 
 func (impl *ebpfMapsImpl) CoredumpTest() bool {
 	return false
-}
-
-func (impl *ebpfMapsImpl) TriggerProcessSync(pid libpf.PID) error {
-	if impl.processSyncTrigger == nil {
-		log.Debugf("TriggerProcessSync called for PID %d but processSyncTrigger is not set", pid)
-		return nil
-	}
-
-	log.Debugf("TriggerProcessSync called for PID %d", pid)
-	impl.processSyncTrigger(pid)
-	return nil
-}
-
-// SetProcessSyncTrigger sets the process sync trigger function
-func (impl *ebpfMapsImpl) SetProcessSyncTrigger(triggerFunc func(pid libpf.PID)) {
-	impl.processSyncTrigger = triggerFunc
 }
 
 // UpdateInterpreterOffsets adds the given moduleRanges to the eBPF map interpreterOffsets.

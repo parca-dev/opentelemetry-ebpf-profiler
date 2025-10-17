@@ -138,11 +138,8 @@ type EbpfHandler interface {
 	AttachUSDTProbes(pid libpf.PID, path, multiProgName string, probes []pfelf.USDTProbe,
 		cookies []uint64, singleProgNames []string, probeAll bool) (LinkCloser, error)
 
-	// Allow interpreters to trigger a process sync
-	TriggerProcessSync(libpf.PID) error
-
-	// SetProcessSyncTrigger allows setting the process sync trigger function
-	SetProcessSyncTrigger(func(pid libpf.PID))
+	// AttachUprobe attaches an eBPF uprobe to a function at a specific offset in a binary
+	AttachUprobe(pid libpf.PID, path string, offset uint64, progName string) (LinkCloser, error)
 }
 
 type LinkCloser interface {
