@@ -39,8 +39,8 @@ var (
 // that launched the kernel."
 type gpuTraceFixer struct {
 	mu                  sync.Mutex
-	timesAwaitingTraces map[uint32][]KernelTimingEvent // keyed by correlation ID
-	tracesAwaitingTimes map[uint32]*host.Trace         // keyed by correlation ID
+	timesAwaitingTraces map[uint32][]CuptiTimingEvent // keyed by correlation ID
+	tracesAwaitingTimes map[uint32]*host.Trace        // keyed by correlation ID
 }
 
 type data struct {
@@ -60,8 +60,8 @@ type Instance struct {
 	pid  libpf.PID
 }
 
-// KernelTimingEvent is the structure received from eBPF via perf buffer
-type KernelTimingEvent struct {
+// CuptiTimingEvent is the structure received from eBPF via perf buffer
+type CuptiTimingEvent struct {
 	Pid                     uint32
 	Id                      uint32
 	Start, End, GraphNodeId uint64
@@ -181,7 +181,7 @@ func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Addre
 
 	// Create and register fixer for this PID
 	fixer := &gpuTraceFixer{
-		timesAwaitingTraces: make(map[uint32][]KernelTimingEvent),
+		timesAwaitingTraces: make(map[uint32][]CuptiTimingEvent),
 		tracesAwaitingTimes: make(map[uint32]*host.Trace),
 	}
 
@@ -251,7 +251,7 @@ func (f *gpuTraceFixer) addTrace(trace *host.Trace, traceOutChan chan<- *host.Tr
 }
 
 // addTime is called when timing info is received from eBPF, to match it with a trace.
-func (f *gpuTraceFixer) addTime(ev *KernelTimingEvent) *host.Trace {
+func (f *gpuTraceFixer) addTime(ev *CuptiTimingEvent) *host.Trace {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -310,7 +310,7 @@ func (f *gpuTraceFixer) maybeClear() {
 }
 
 // prepTrace prepares a trace with timing information and kernel name.
-func (f *gpuTraceFixer) prepTrace(tr *host.Trace, ev *KernelTimingEvent) *host.Trace {
+func (f *gpuTraceFixer) prepTrace(tr *host.Trace, ev *CuptiTimingEvent) *host.Trace {
 	if ev.Graph != 0 {
 		// Graphs can have many kernels with same correlation ID
 		clone := *tr
@@ -366,7 +366,7 @@ func AddTrace(trace *host.Trace, traceOutChan chan<- *host.Trace) error {
 }
 
 // AddTime is a static function that delegates to the appropriate fixer for the PID.
-func AddTime(ev *KernelTimingEvent) *host.Trace {
+func AddTime(ev *CuptiTimingEvent) *host.Trace {
 	pid := libpf.PID(ev.Pid)
 
 	// Iterate through all data instances and look for the fixer
@@ -418,13 +418,6 @@ func (i *Instance) Symbolize(f *host.Frame, frames *libpf.Frames) error {
 		AddressOrLineno: f.Lineno,
 		FunctionName:    internStr,
 	})
-	// If we have a graph callback add a frame we can turn into cudaGraph-###
-	if callbackType == 311 {
-		frames.Append(&libpf.Frame{
-			Type:         libpf.CUDAKernelFrame,
-			FunctionName: libpf.Intern(fmt.Sprintf("cudaGraph-%d", f.LJCalleePC)),
-		})
-	}
 	return nil
 }
 

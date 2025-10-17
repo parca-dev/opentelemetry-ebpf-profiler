@@ -256,7 +256,6 @@ static inline EBPF_INLINE PerCPURecord *get_pristine_per_cpu_record()
   trace->apm_trace_id.as_int.hi    = 0;
   trace->apm_trace_id.as_int.lo    = 0;
   trace->apm_transaction_id.as_int = 0;
-  trace->parca_gpu_trace_id        = 0;
 
   trace->custom_labels.len = 0;
   u64 *labels_space        = (u64 *)&trace->custom_labels.labels;
@@ -808,7 +807,6 @@ static inline EBPF_INLINE int collect_trace(
   trace->tid     = tid;
   trace->ktime   = trace_timestamp;
   trace->offtime = off_cpu_time;
-  //  trace->parca_gpu_trace_id = cuda_id;
   if (bpf_get_current_comm(&(trace->comm), sizeof(trace->comm)) < 0) {
     increment_metric(metricID_ErrBPFCurrentComm);
   }

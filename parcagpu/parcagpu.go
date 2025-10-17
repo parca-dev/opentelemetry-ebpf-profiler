@@ -71,7 +71,7 @@ func Start(ctx context.Context, traceInCh <-chan *host.Trace,
 					noDataCount.Add(1)
 					continue
 				}
-				ev := (*gpu.KernelTimingEvent)(unsafe.Pointer(&data.RawSample[0]))
+				ev := (*gpu.CuptiTimingEvent)(unsafe.Pointer(&data.RawSample[0]))
 				log.Debugf("[cuda]: timing info with id 0x%x for cuda from %d", ev.Id, ev.Pid)
 				if completedTrace := gpu.AddTime(ev); completedTrace != nil {
 					log.Debugf("[cuda]: trace completed with event: 0x%x", ev.Id)
