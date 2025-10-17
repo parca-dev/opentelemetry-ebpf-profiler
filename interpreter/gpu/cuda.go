@@ -24,8 +24,7 @@ const (
 )
 
 var (
-	// Global map of data instances, keyed by path
-	// This mutex also protects all pidToFixer maps within each data instance
+	// gpuFixers maps PID to gpuTraceFixer
 	gpuFixers sync.Map
 )
 
@@ -175,7 +174,6 @@ func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Addre
 		tracesAwaitingTimes: make(map[uint32]*host.Trace),
 	}
 
-	// Use global mutex to protect pidToFixer map
 	gpuFixers.Store(pid, fixer)
 
 	return &Instance{
@@ -187,7 +185,6 @@ func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Addre
 
 // Detach removes the fixer for this PID and closes the link if needed.
 func (i *Instance) Detach(_ interpreter.EbpfHandler, _ libpf.PID) error {
-	// Remove fixer for this PID
 	gpuFixers.Delete(i.pid)
 
 	if i.link != nil {
@@ -254,7 +251,7 @@ func (f *gpuTraceFixer) maybeClear() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if len(f.timesAwaitingTraces) > 100 || len(f.tracesAwaitingTimes) > 100 {
-		log.Warnf("[cuda] clearing gpu trace fixer maps, too many entries: %d traces, %d times",
+		log.Warnf("[cuda] clearing gpu trace fixer maps: %d traces, %d times",
 			len(f.tracesAwaitingTimes), len(f.timesAwaitingTraces))
 		keys := libpf.MapKeysToSet(f.timesAwaitingTraces)
 		// sort keys by correlation ID so we keep the highest (most recent) ones
@@ -321,8 +318,12 @@ func (f *gpuTraceFixer) prepTrace(tr *host.Trace, ev *CuptiTimingEvent) *host.Tr
 		} else {
 			str = demstr
 		}
-		// Store the interned string directly in the uint64 field (both are 8 bytes)
+		// Store the interned string directly in the File field (both are 8 bytes)
 		istr := libpf.Intern(str)
+		// See collect_trace where we always make the first frame a CUDA kernel frame.
+		if tr.Frames[0].Type != libpf.CUDAKernelFrame {
+			panic("first frame is not a CUDA kernel frame")
+		}
 		tr.Frames[0].File = host.FileID(*(*uint64)(unsafe.Pointer(&istr)))
 		tr.Frames[0].LJCalleePC = ev.Graph
 	}

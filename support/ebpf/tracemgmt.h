@@ -816,6 +816,7 @@ static inline EBPF_INLINE int collect_trace(
   DEBUG_PRINT("kernel stack id = %d", trace->kernel_stack_id);
 
   if (cuda_id != 0) {
+    // Create a CUDA kernel frame, Symbolize will later resolve the kernel name from the ID.
     _push(trace, 0, cuda_id, FRAME_MARKER_CUDA_KERNEL);
   }
 
