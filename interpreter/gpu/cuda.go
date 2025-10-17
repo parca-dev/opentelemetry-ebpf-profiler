@@ -325,7 +325,6 @@ func (f *gpuTraceFixer) prepTrace(tr *host.Trace, ev *CuptiTimingEvent) *host.Tr
 			panic("first frame is not a CUDA kernel frame")
 		}
 		tr.Frames[0].File = host.FileID(*(*uint64)(unsafe.Pointer(&istr)))
-		tr.Frames[0].LJCalleePC = ev.Graph
 	}
 	return tr
 }
