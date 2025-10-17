@@ -355,13 +355,13 @@ read_labelset_into_trace(PerCPURecord *record, NativeCustomLabelsSet *p_current_
     if (!lbl->key.buf)
       continue;
     CustomLabel *out_lbl = &out->labels[ct];
-    unsigned klen        = MIN(lbl->key.len, CUSTOM_LABEL_MAX_KEY_LEN - 1);
+    unsigned klen        = MIN(lbl->key.len, CUSTOM_LABEL_MAX_KEY_LEN);
     if ((err = bpf_probe_read_user(out_lbl->key, klen, (void *)lbl->key.buf))) {
       increment_metric(metricID_UnwindNativeCustomLabelsErrReadKey);
       DEBUG_PRINT("cl: failed to read label key: %d", err);
       goto exit;
     }
-    unsigned vlen = MIN(lbl->value.len, CUSTOM_LABEL_MAX_VAL_LEN - 1);
+    unsigned vlen = MIN(lbl->value.len, CUSTOM_LABEL_MAX_VAL_LEN);
     if ((err = bpf_probe_read_user(out_lbl->val, vlen, (void *)lbl->value.buf))) {
       increment_metric(metricID_UnwindNativeCustomLabelsErrReadValue);
       DEBUG_PRINT("cl: failed to read label value: %d", err);
