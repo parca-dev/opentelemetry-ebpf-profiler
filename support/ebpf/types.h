@@ -654,8 +654,6 @@ typedef struct Trace {
   s32 kernel_stack_id;
   // The number of frames in the stack.
   u32 stack_len;
-  // Trace id for cuda/cupti stack correlation.
-  u32 parca_gpu_trace_id;
 
   // origin indicates the source of the trace.
   TraceOrigin origin;

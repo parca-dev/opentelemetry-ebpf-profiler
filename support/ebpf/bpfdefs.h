@@ -262,26 +262,4 @@ static long (*bpf_get_attach_cookie)(void *ctx) = (void *)BPF_FUNC_get_attach_co
 
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 
-#if defined(__x86_64__)
-  #define __PT_PARM1_REG di
-  #define __PT_PARM2_REG si
-  #define __PT_PARM3_REG dx
-  #define __PT_PARM4_REG cx
-  #define __PT_PARM5_REG r8
-#elif defined(__aarch64__)
-  #define __PT_PARM1_REG regs[0]
-  #define __PT_PARM2_REG regs[1]
-  #define __PT_PARM3_REG regs[2]
-  #define __PT_PARM4_REG regs[3]
-  #define __PT_PARM5_REG regs[4]
-#elif
-  #error "Unsupported architecture"
-#endif
-
-#define PT_REGS_PARM1(x) ((x)->__PT_PARM1_REG)
-#define PT_REGS_PARM2(x) ((x)->__PT_PARM2_REG)
-#define PT_REGS_PARM3(x) ((x)->__PT_PARM3_REG)
-#define PT_REGS_PARM4(x) ((x)->__PT_PARM4_REG)
-#define PT_REGS_PARM5(x) ((x)->__PT_PARM5_REG)
-
 #endif // OPTI_BPFDEFS_H
