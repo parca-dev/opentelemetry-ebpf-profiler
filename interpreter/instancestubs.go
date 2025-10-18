@@ -77,9 +77,7 @@ func (mockup *EbpfHandlerStubs) AttachUSDTProbes(libpf.PID, string, string, []pf
 	return nil, nil
 }
 
-func (mockup *EbpfHandlerStubs) TriggerProcessSync(libpf.PID) error {
-	return nil
-}
-
-func (mockup *EbpfHandlerStubs) SetProcessSyncTrigger(func(pid libpf.PID)) {
+func (mockup *EbpfHandlerStubs) AttachUprobe(
+	libpf.PID, string, uint64, string) (LinkCloser, error) {
+	return nil, nil
 }
