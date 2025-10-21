@@ -141,7 +141,10 @@ func Test_Golabels(t *testing.T) {
 							require.True(t, strings.HasPrefix(v, "label2"))
 							hits |= (1 << 1)
 						} else if strings.HasPrefix(k, "l3") {
-							require.Len(t, v, 48)
+							// The maximum. Bump this, and
+							// the value in pprof_test.go, if
+							// CUSTOM_LABEL_MAX_VAL_LEN changes.
+							require.Len(t, v, 53)
 							require.True(t, strings.HasPrefix(v, "label3"))
 							hits |= (1 << 2)
 						}
