@@ -2127,12 +2127,18 @@ func (d *v8Data) loadNodeClData(ef *pfelf.File) error {
 
 	major := binary.LittleEndian.Uint32(versBuf[0:4])
 
+	// These offsets are computed by pointing a libclang script at a Node build directory
+	// with a valid compile_commands.json:
+	// see e.g. https://gist.github.com/umanwizard/a9e055a7cc1b81248bbf17501c749481 .
 	if major >= 22 {
 		if major < 24 {
 			d.cpedOffset = 576
 			d.wrappedObjectOffset = 24
-		} else {
+		} else if major < 25 {
 			d.cpedOffset = 632
+			d.wrappedObjectOffset = 32
+		} else {
+			d.cpedOffset = 640
 			d.wrappedObjectOffset = 32
 		}
 		return nil
