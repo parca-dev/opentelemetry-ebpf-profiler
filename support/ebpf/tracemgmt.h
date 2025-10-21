@@ -258,9 +258,8 @@ static inline EBPF_INLINE PerCPURecord *get_pristine_per_cpu_record()
   trace->apm_transaction_id.as_int = 0;
 
   trace->custom_labels.len = 0;
-  u64 *labels_space        = (u64 *)&trace->custom_labels.labels;
-  // I'm not sure this is necessary since we only increment len after
-  // we successfully write the label.
+  _Static_assert(sizeof(CustomLabel) % 8 == 0, "CustomLabel size must be a multiple of 8 bytes.");
+  u64 *labels_space = (u64 *)&trace->custom_labels.labels;
   UNROLL for (int i = 0; i < sizeof(CustomLabel) * MAX_CUSTOM_LABELS / 8; i++)
   {
     labels_space[i] = 0;
