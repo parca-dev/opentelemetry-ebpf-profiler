@@ -135,9 +135,6 @@ type Config struct {
 	FilterErrorFrames bool
 	// KernelVersionCheck indicates whether the kernel version should be checked.
 	KernelVersionCheck bool
-	// CollectCustomLabels determines whether to collect custom labels in
-	// languages that support them.
-	CollectCustomLabels bool
 	// VerboseMode indicates whether to enable verbose output of eBPF tracers.
 	VerboseMode bool
 	// InstrumentCudaLaunch determines whether to instrument calls to `cudaLaunchKernel`.
@@ -215,7 +212,7 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 
 	processManager, err := pm.New(ctx, cfg.IncludeTracers, cfg.Intervals.MonitorInterval(),
 		ebpfHandler, nil, cfg.Reporter, elfunwindinfo.NewStackDeltaProvider(),
-		cfg.FilterErrorFrames, cfg.CollectCustomLabels, cfg.IncludeEnvVars)
+		cfg.FilterErrorFrames, cfg.IncludeEnvVars)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create processManager: %v", err)
 	}

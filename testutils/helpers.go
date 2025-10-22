@@ -39,7 +39,6 @@ func (f MockReporter) ExecutableMetadata(_ *reporter.ExecutableMetadataArgs) {
 func StartTracer(ctx context.Context, t *testing.T, et tracertypes.IncludedTracers,
 	r reporter.SymbolReporter, printBpfLogs bool) (chan *host.Trace, *tracer.Tracer) {
 	trc, err := tracer.NewTracer(ctx, &tracer.Config{
-		CollectCustomLabels:    true,
 		Reporter:               r,
 		Intervals:              &MockIntervals{},
 		IncludeTracers:         et,
