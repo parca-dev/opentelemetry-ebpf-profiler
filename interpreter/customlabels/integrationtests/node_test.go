@@ -13,6 +13,7 @@ package customlabels_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -29,6 +30,7 @@ import (
 
 	"time"
 
+	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/require"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -48,6 +50,113 @@ var files = []string{
 	"USING_ADVANCED.md",
 	"USING_PRO.md",
 	"broken.md",
+}
+
+func runTest(t *testing.T, ctx context.Context, host string, port nat.Port) {
+	enabledTracers, err := tracertypes.Parse("labels,v8")
+	require.NoError(t, err)
+
+	r := &testutils.MockReporter{}
+	traceCh, trc := testutils.StartTracer(ctx, t, enabledTracers, r, false)
+
+	testHTTPEndpoint(ctx, t, host, port)
+	framesPerWorkerId := make(map[int]int)
+	framesPerFileName := make(map[string]int)
+
+	totalWorkloadFrames := 0
+	unlabeledWorkloadFrames := 0
+
+	timer := time.NewTimer(3 * time.Second)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-timer.C:
+			goto done
+		case trace := <-traceCh:
+			if trace == nil {
+				continue
+			}
+			ct, err := trc.TraceProcessor().ConvertTrace(trace)
+			require.NotNil(t, ct)
+			require.NoError(t, err)
+			workerId, okWid := trace.CustomLabels["workerId"]
+			filePath, okFname := trace.CustomLabels["filePath"]
+			var fileName string
+			if okFname {
+				fileName = path.Base(filePath)
+			}
+			knownWorkloadFrames := []string{
+				"lex",
+				"parse",
+				"blockTokens",
+				"readFile",
+				"readFileHandle",
+			}
+			hasWorkloadFrame := false
+
+			for i := range ct.Frames {
+				if ct.Frames[i].Value().Type == libpf.V8Frame {
+					name := ct.Frames[i].Value().FunctionName.String()
+					if slices.Contains(knownWorkloadFrames, name) {
+						hasWorkloadFrame = true
+					}
+				}
+			}
+
+			if hasWorkloadFrame {
+				totalWorkloadFrames++
+				if !(okWid && okFname) {
+					unlabeledWorkloadFrames++
+				}
+			}
+
+			if okWid {
+				val, err := strconv.Atoi(workerId)
+				require.NoError(t, err)
+
+				require.GreaterOrEqual(t, val, 0)
+				require.Less(t, val, N_WORKERS)
+
+				framesPerWorkerId[val]++
+			}
+
+			if okFname {
+				require.Contains(t, files, fileName)
+				framesPerFileName[fileName]++
+			}
+		}
+	}
+done:
+	totalWidFrames := 0
+	// for 8 workers, each should have roughly 1/8
+	// of the labeled frames. There will be a bit of skew,
+	// so accept anything above 60% of that.
+	for i := 0; i < N_WORKERS; i++ {
+		totalWidFrames += framesPerWorkerId[i]
+	}
+	expectedWorkerAvg := float64(totalWidFrames) / float64(N_WORKERS)
+	for i := 0; i < N_WORKERS; i++ {
+		require.Less(t, expectedWorkerAvg*0.60, float64(framesPerWorkerId[i]))
+	}
+	// Each of the documents should account for some nontrivial amount of time,
+	// but since they aren't all the same length, we are less strict.
+	totalFnameFrames := 0
+	for _, v := range framesPerFileName {
+		totalFnameFrames += v
+	}
+	expectedFnameAvg := float64(totalFnameFrames) / float64(len(framesPerFileName))
+	for _, v := range framesPerFileName {
+		require.Less(t, expectedFnameAvg*0.2, float64(v))
+	}
+
+	// Really, there should be zero frames in the
+	// `marked` workload that aren't under labels,
+	// but accept a 5% slop because the unwinder
+	// isn't perfect (e.g. it might interrupt the
+	// process when the Node environment is in an
+	// undefined state)
+	require.Less(t, 20*unlabeledWorkloadFrames, totalWorkloadFrames)
 }
 
 func TestIntegration(t *testing.T) {
@@ -74,112 +183,67 @@ func TestIntegration(t *testing.T) {
 
 			cont := startContainer(ctx, t, nodeVersion)
 
-			enabledTracers, err := tracertypes.Parse("labels,v8")
+			host, err := cont.Host(ctx)
+			require.NoError(t, err)
+			port, err := cont.MappedPort(ctx, "80")
 			require.NoError(t, err)
 
-			r := &testutils.MockReporter{}
-			traceCh, trc := testutils.StartTracer(ctx, t, enabledTracers, r, false)
-
-			testHTTPEndpoint(ctx, t, cont)
-			framesPerWorkerId := make(map[int]int)
-			framesPerFileName := make(map[string]int)
-
-			totalWorkloadFrames := 0
-			unlabeledWorkloadFrames := 0
-
-			timer := time.NewTimer(3 * time.Second)
-			defer timer.Stop()
-
-			for {
-				select {
-				case <-timer.C:
-					goto done
-				case trace := <-traceCh:
-					if trace == nil {
-						continue
-					}
-					ct, err := trc.TraceProcessor().ConvertTrace(trace)
-					require.NotNil(t, ct)
-					require.NoError(t, err)
-					workerId, okWid := trace.CustomLabels["workerId"]
-					filePath, okFname := trace.CustomLabels["filePath"]
-					var fileName string
-					if okFname {
-						fileName = path.Base(filePath)
-					}
-					knownWorkloadFrames := []string{
-						"lex",
-						"parse",
-						"blockTokens",
-						"readFile",
-						"readFileHandle",
-					}
-					hasWorkloadFrame := false
-
-					for i := range ct.Frames {
-						if ct.Frames[i].Value().Type == libpf.V8Frame {
-							name := ct.Frames[i].Value().FunctionName.String()
-							if slices.Contains(knownWorkloadFrames, name) {
-								hasWorkloadFrame = true
-							}
-						}
-					}
-
-					if hasWorkloadFrame {
-						totalWorkloadFrames++
-						if !(okWid && okFname) {
-							unlabeledWorkloadFrames++
-						}
-					}
-
-					if okWid {
-						val, err := strconv.Atoi(workerId)
-						require.NoError(t, err)
-
-						require.GreaterOrEqual(t, val, 0)
-						require.Less(t, val, N_WORKERS)
-
-						framesPerWorkerId[val]++
-					}
-
-					if okFname {
-						require.Contains(t, files, fileName)
-						framesPerFileName[fileName]++
-					}
-				}
-			}
-		done:
-			totalWidFrames := 0
-			// for 8 workers, each should have roughly 1/8
-			// of the labeled frames. There will be a bit of skew,
-			// so accept anything above 60% of that.
-			for i := 0; i < N_WORKERS; i++ {
-				totalWidFrames += framesPerWorkerId[i]
-			}
-			expectedWorkerAvg := float64(totalWidFrames) / float64(N_WORKERS)
-			for i := 0; i < N_WORKERS; i++ {
-				require.Less(t, expectedWorkerAvg*0.60, float64(framesPerWorkerId[i]))
-			}
-			// Each of the documents should account for some nontrivial amount of time,
-			// but since they aren't all the same length, we are less strict.
-			totalFnameFrames := 0
-			for _, v := range framesPerFileName {
-				totalFnameFrames += v
-			}
-			expectedFnameAvg := float64(totalFnameFrames) / float64(len(framesPerFileName))
-			for _, v := range framesPerFileName {
-				require.Less(t, expectedFnameAvg*0.2, float64(v))
-			}
-
-			// Really, there should be zero frames in the
-			// `marked` workload that aren't under labels,
-			// but accept a 5% slop because the unwinder
-			// isn't perfect (e.g. it might interrupt the
-			// process when the Node environment is in an
-			// undefined state)
-			require.Less(t, 20*unlabeledWorkloadFrames, totalWorkloadFrames)
+			runTest(t, ctx, host, port)
 		})
 	}
+	t.Run("node-local-nightly", func(t *testing.T) {
+		type NodejsNightly struct {
+			Version string   `json:"version"`
+			Files   []string `json:"files"`
+		}
+
+		resp, err := http.Get("https://nodejs.org/download/nightly/index.json")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		var nightlies []NodejsNightly
+		err = json.NewDecoder(resp.Body).Decode(&nightlies)
+		require.NoError(t, err)
+		require.NotEmpty(t, nightlies)
+
+		latest := nightlies[0]
+
+		var nodeArch string
+		switch runtime.GOARCH {
+		case "arm64":
+			nodeArch = "linux-arm64"
+		case "amd64":
+			nodeArch = "linux-x64"
+		default:
+			t.Fatalf("Unsupported GOARCH: %s", runtime.GOARCH)
+		}
+
+		tarballName := fmt.Sprintf("node-%s-%s", latest.Version, nodeArch)
+
+		var tarballURL string
+		for _, file := range latest.Files {
+			if file == nodeArch {
+				tarballURL = fmt.Sprintf("https://nodejs.org/download/nightly/%s/%s.tar.gz", latest.Version, tarballName)
+				break
+			}
+		}
+		require.NotEmpty(t, tarballURL, "No tarball found for latest nightly")
+
+		ctx, cancel := context.WithCancel(t.Context())
+		t.Cleanup(cancel)
+
+		defer cancel()
+
+		cont := startNightlyContainer(ctx, t, tarballURL)
+
+		host, err := cont.Host(ctx)
+		require.NoError(t, err)
+		port, err := cont.MappedPort(ctx, "80")
+		require.NoError(t, err)
+
+		runTest(t, ctx, host, port)
+
+	})
 }
 
 func startContainer(ctx context.Context, t *testing.T,
@@ -204,15 +268,32 @@ func startContainer(ctx context.Context, t *testing.T,
 	return cont
 }
 
-func testHTTPEndpoint(ctx context.Context, t *testing.T, cont testcontainers.Container) {
+func startNightlyContainer(ctx context.Context, t *testing.T, nodeURL string) testcontainers.Container {
+	t.Log("starting container for node nightly at URL", nodeURL)
+	//nolint:dogsled
+
+	_, path, _, _ := runtime.Caller(0)
+	cont, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: testcontainers.ContainerRequest{
+			FromDockerfile: testcontainers.FromDockerfile{
+				Dockerfile: "Dockerfile.nightly",
+				Context:    filepath.Dir(path) + "/testdata/node-md-render/",
+				BuildArgs: map[string]*string{
+					"NODE_URL": &nodeURL,
+				},
+			},
+			ExposedPorts: []string{"80/tcp"},
+			WaitingFor:   wait.ForHTTP("/docs/AUTHORS.md"),
+		},
+		Started: true,
+	})
+	require.NoError(t, err)
+	return cont
+}
+
+func testHTTPEndpoint(ctx context.Context, t *testing.T, host string, port nat.Port) {
 	const numGoroutines = 10
 	const requestsPerGoroutine = 10000
-
-	host, err := cont.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := cont.MappedPort(ctx, "80")
-	require.NoError(t, err)
 
 	baseURL := "http://" + net.JoinHostPort(host, port.Port())
 
