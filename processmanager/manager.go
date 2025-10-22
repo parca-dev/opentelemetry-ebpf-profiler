@@ -67,7 +67,7 @@ var (
 func New(ctx context.Context, includeTracers types.IncludedTracers, monitorInterval time.Duration,
 	ebpf pmebpf.EbpfHandler, fileIDMapper FileIDMapper, symbolReporter reporter.SymbolReporter,
 	sdp nativeunwind.StackDeltaProvider, filterErrorFrames bool,
-	collectCustomLabels bool, includeEnvVars libpf.Set[string]) (*ProcessManager, error) {
+	includeEnvVars libpf.Set[string]) (*ProcessManager, error) {
 	if fileIDMapper == nil {
 		var err error
 		fileIDMapper, err = newFileIDMapper(lruFileIDCacheSize)
@@ -83,7 +83,7 @@ func New(ctx context.Context, includeTracers types.IncludedTracers, monitorInter
 	}
 	elfInfoCache.SetLifetime(elfInfoCacheTTL)
 
-	em, err := eim.NewExecutableInfoManager(sdp, ebpf, includeTracers, collectCustomLabels)
+	em, err := eim.NewExecutableInfoManager(sdp, ebpf, includeTracers)
 	if err != nil {
 		return nil, fmt.Errorf("unable to create ExecutableInfoManager: %v", err)
 	}

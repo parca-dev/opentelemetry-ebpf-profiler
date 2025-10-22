@@ -311,7 +311,6 @@ func TestInterpreterConvertTrace(t *testing.T) {
 				&symbolReporterMockup{},
 				nil,
 				true,
-				false,
 				libpf.Set[string]{})
 			require.NoError(t, err)
 
@@ -392,7 +391,6 @@ func TestNewMapping(t *testing.T) {
 				symRepMockup,
 				&dummyProvider,
 				true,
-				false,
 				libpf.Set[string]{})
 			require.NoError(t, err)
 
@@ -578,7 +576,6 @@ func TestProcExit(t *testing.T) {
 				repMockup,
 				&dummyProvider,
 				true,
-				false,
 				libpf.Set[string]{})
 			require.NoError(t, err)
 			defer cancel()
