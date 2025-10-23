@@ -18,7 +18,13 @@ COPY *.js ./
 
 ARG NODE_URL
 
-RUN curl $NODE_URL | tar zxf - && mv node* node && npm install
+RUN curl $NODE_URL > out.tar.gz
+
+RUN tar zxf out.tar.gz
+
+RUN mv node* node
+
+RUN npm install
 
 EXPOSE 80
 
