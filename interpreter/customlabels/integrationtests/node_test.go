@@ -59,7 +59,7 @@ func runTest(t *testing.T, ctx context.Context, host string, port nat.Port) {
 	r := &testutils.MockReporter{}
 	traceCh, trc := testutils.StartTracer(ctx, t, enabledTracers, r, false)
 
-	testHTTPEndpoint(ctx, t, host, port)
+	testHTTPEndpoint(t, host, port)
 	framesPerWorkerId := make(map[int]int)
 	framesPerFileName := make(map[string]int)
 
@@ -223,7 +223,9 @@ func TestIntegration(t *testing.T) {
 		var tarballURL string
 		for _, file := range latest.Files {
 			if file == nodeArch {
-				tarballURL = fmt.Sprintf("https://nodejs.org/download/nightly/%s/%s.tar.gz", latest.Version, tarballName)
+				tarballURL = fmt.Sprintf(
+					"https://nodejs.org/download/nightly/%s/%s.tar.gz",
+					latest.Version, tarballName)
 				break
 			}
 		}
@@ -268,10 +270,12 @@ func startContainer(ctx context.Context, t *testing.T,
 	return cont
 }
 
-func startNightlyContainer(ctx context.Context, t *testing.T, nodeURL string) testcontainers.Container {
+func startNightlyContainer(ctx context.Context,
+	t *testing.T,
+	nodeURL string) testcontainers.Container {
 	t.Log("starting container for node nightly at URL", nodeURL)
-	//nolint:dogsled
 
+	//nolint:dogsled
 	_, path, _, _ := runtime.Caller(0)
 	cont, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		ContainerRequest: testcontainers.ContainerRequest{
@@ -291,7 +295,7 @@ func startNightlyContainer(ctx context.Context, t *testing.T, nodeURL string) te
 	return cont
 }
 
-func testHTTPEndpoint(ctx context.Context, t *testing.T, host string, port nat.Port) {
+func testHTTPEndpoint(t *testing.T, host string, port nat.Port) {
 	const numGoroutines = 10
 	const requestsPerGoroutine = 10000
 
