@@ -990,6 +990,10 @@ func (f *File) LookupTLSSymbolOffset(symbol libpf.SymbolName) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	return f.AdjustTLSSymbol(tlsSym)
+}
+
+func (f *File) AdjustTLSSymbol(tlsSym *libpf.Symbol) (int64, error) {
 	if f.Machine == elf.EM_AARCH64 {
 		return int64(tlsSym.Address), nil
 	}
