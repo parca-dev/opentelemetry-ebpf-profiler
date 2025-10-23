@@ -17,12 +17,11 @@ func TestNativeCustomLabels(t *testing.T) {
 		t.Skip("root privileges required")
 	}
 
-	r := &testutils.MockReporter{}
 	enabledTracers, _ := tracertypes.Parse("all")
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	traceCh, _ := testutils.StartTracer(ctx, t, enabledTracers, r, false)
+	traceCh, _ := testutils.StartTracer(ctx, t, enabledTracers, false)
 	// TODO - change this to `cargo build --release --bin custom-labels-example`
 	// once we have the Rust workspace from upstream.
 	cmd := exec.Command("cargo", "build", "--release",

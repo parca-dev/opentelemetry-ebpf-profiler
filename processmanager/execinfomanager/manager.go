@@ -106,7 +106,6 @@ func NewExecutableInfoManager(
 	sdp nativeunwind.StackDeltaProvider,
 	ebpf pmebpf.EbpfHandler,
 	includeTracers types.IncludedTracers,
-	collectCustomLabels bool,
 ) (*ExecutableInfoManager, error) {
 	// Initialize interpreter loaders.
 	interpreterLoaders := make([]interpreter.Loader, 0)
@@ -139,10 +138,7 @@ func NewExecutableInfoManager(
 	}
 	interpreterLoaders = append(interpreterLoaders, apmint.Loader)
 	if includeTracers.Has(types.Labels) {
-		interpreterLoaders = append(interpreterLoaders, golabels.Loader)
-	}
-	if collectCustomLabels {
-		interpreterLoaders = append(interpreterLoaders, customlabels.Loader)
+		interpreterLoaders = append(interpreterLoaders, golabels.Loader, customlabels.Loader)
 	}
 	interpreterLoaders = append(interpreterLoaders, oomwatcher.Loader, rtld.Loader)
 
