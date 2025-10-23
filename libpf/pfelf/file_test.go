@@ -109,3 +109,16 @@ func TestGetGoBuildID(t *testing.T) {
 	expectedBuildID := strings.TrimRight(string(out), "\n")
 	assert.Equal(t, expectedBuildID, buildID)
 }
+
+func getNodeBinary(t *testing.T) {
+	cmd := exec.Command("sh", "-c", "curl https://nodejs.org/download/nightly/v26.0.0-nightly20251023f819aec288/node-v26.0.0-nightly20251023f819aec288-linux-x64.tar.gz | tar xzf - --wildcards --strip-components=2 -C testdata node'*'/bin/node")
+	_, err := cmd.Output()
+	require.NoError(t, err)
+}
+
+func TestReadSymbols(t *testing.T) {
+	getNodeBinary(t)
+	ef := getPFELF("testdata/node", t)
+	_, err := ef.ReadSymbols()
+	require.NoError(t, err)
+}
