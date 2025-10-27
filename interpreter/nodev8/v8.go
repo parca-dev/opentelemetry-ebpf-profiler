@@ -2096,12 +2096,6 @@ func (d *v8Data) readIntrospectionData(ef *pfelf.File) error {
 
 // loadNodeClData loads various offsets that are needed for custom labels handling.
 func (d *v8Data) loadNodeClData(ef *pfelf.File) error {
-	offset, err := ef.LookupTLSSymbolOffset("_ZN2v88internal18g_current_isolate_E")
-	if err != nil {
-		return err
-	}
-	d.isolateSym = libpf.Address(offset)
-
 	syms, err := ef.ReadSymbols()
 	if err != nil {
 		return fmt.Errorf("failed to read symbols: %w", err)
@@ -2141,9 +2135,31 @@ func (d *v8Data) loadNodeClData(ef *pfelf.File) error {
 			d.cpedOffset = 640
 			d.wrappedObjectOffset = 32
 		}
-		return nil
+	} else {
+		return fmt.Errorf("Unsupported Node major version: %d", major)
 	}
-	return fmt.Errorf("Unsupported Node major version: %d", major)
+
+	var offset int64
+
+	if major < 26 {
+		offset, err = ef.LookupTLSSymbolOffset("_ZN2v88internal18g_current_isolate_E")
+		if err != nil {
+			return fmt.Errorf("failed to look up g_current_isolate: %w", err)
+		}
+	} else {
+		// Node started building v8 without external dynamic symbols
+		// in major version v26.
+		sym, err = syms.LookupSymbol("_ZN2v88internal18g_current_isolate_E")
+		if err != nil {
+			return fmt.Errorf("failed to look up g_current_isolate (in major 26): %w", err)
+		}
+		offset, err = ef.AdjustTLSSymbol(sym)
+		if err != nil {
+			return fmt.Errorf("failed to adjust TLS symbol: %w", err)
+		}
+	}
+	d.isolateSym = libpf.Address(offset)
+	return nil
 }
 
 func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpreter.Data, error) {
