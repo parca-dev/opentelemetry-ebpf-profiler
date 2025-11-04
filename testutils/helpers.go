@@ -16,8 +16,10 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
 	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
+	"go.opentelemetry.io/otel/metric/noop"
 )
 
 type MockIntervals struct{}
@@ -34,6 +36,11 @@ func (f MockReporter) ExecutableKnown(_ libpf.FileID) bool {
 
 func StartTracer(ctx context.Context, t *testing.T, et tracertypes.IncludedTracers,
 	printBpfLogs bool) (chan *host.Trace, *tracer.Tracer) {
+
+	// Silence metrics warnings.
+	meter := noop.NewMeterProvider().Meter("test")
+	metrics.Start(meter)
+
 	trc, err := tracer.NewTracer(ctx, &tracer.Config{
 		Intervals:              &MockIntervals{},
 		IncludeTracers:         et,
