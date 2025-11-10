@@ -26,8 +26,8 @@ func (is *InstanceStubs) Detach(EbpfHandler, libpf.PID) error {
 	return nil
 }
 
-func (is *InstanceStubs) SynchronizeMappings(EbpfHandler, reporter.SymbolReporter, process.Process,
-	[]process.Mapping) error {
+func (is *InstanceStubs) SynchronizeMappings(EbpfHandler, reporter.ExecutableReporter,
+	process.Process, []process.Mapping) error {
 	return nil
 }
 
@@ -80,4 +80,8 @@ func (mockup *EbpfHandlerStubs) AttachUSDTProbes(libpf.PID, string, string, []pf
 func (mockup *EbpfHandlerStubs) AttachUprobe(
 	libpf.PID, string, uint64, string) (LinkCloser, error) {
 	return nil, nil
+}
+
+func (is *InstanceStubs) ReleaseResources() error {
+	return nil
 }

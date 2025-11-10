@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
 )
 
@@ -84,7 +85,7 @@ type proto struct {
 // newProto creates a proto from a GCproto* by reading memory remotely.
 func newProto(rm remotememory.RemoteMemory, pt libpf.Address) (*proto, error) {
 	p := &proto{ptAddr: pt}
-	if err := rm.Read(pt+8, libpf.SliceFrom(&p.protoRaw)); err != nil {
+	if err := rm.Read(pt+8, pfunsafe.FromPointer(&p.protoRaw)); err != nil {
 		return nil, err
 	}
 
@@ -117,23 +118,23 @@ func newProto(rm remotememory.RemoteMemory, pt libpf.Address) (*proto, error) {
 	p.bc = make([]uint32, p.sizebc)
 	// bytecode starts at end of GCproto object
 	// https://github.com/openresty/luajit2/blob/7952882d/src/lj_obj.h#L420
-	if err := rm.Read(p.ptAddr+sizeofGCproto, libpf.SliceFrom(p.bc)); err != nil {
+	if err := rm.Read(p.ptAddr+sizeofGCproto, pfunsafe.FromSlice(p.bc)); err != nil {
 		return nil, err
 	}
 	if p.lineinfo != 0 {
 		if p.numline < 256 {
 			p.lineinfo8 = make([]uint8, p.sizebc)
-			if err := rm.Read(p.lineinfo, libpf.SliceFrom(p.lineinfo8)); err != nil {
+			if err := rm.Read(p.lineinfo, pfunsafe.FromSlice(p.lineinfo8)); err != nil {
 				return nil, err
 			}
 		} else if p.numline < 65536 {
 			p.lineinfo16 = make([]uint16, p.sizebc)
-			if err := rm.Read(p.lineinfo, libpf.SliceFrom(p.lineinfo16)); err != nil {
+			if err := rm.Read(p.lineinfo, pfunsafe.FromSlice(p.lineinfo16)); err != nil {
 				return nil, err
 			}
 		} else {
 			p.lineinfo32 = make([]uint32, p.sizebc)
-			if err := rm.Read(p.lineinfo, libpf.SliceFrom(p.lineinfo32)); err != nil {
+			if err := rm.Read(p.lineinfo, pfunsafe.FromSlice(p.lineinfo32)); err != nil {
 				return nil, err
 			}
 		}
@@ -142,12 +143,12 @@ func newProto(rm remotememory.RemoteMemory, pt libpf.Address) (*proto, error) {
 	if p.sizekgc > 0 {
 		objs := make([]libpf.Address, p.sizekgc)
 		p.constants = make([]string, p.sizekgc)
-		if err := rm.Read(p.k-libpf.Address(p.sizekgc*8), libpf.SliceFrom(objs)); err != nil {
+		if err := rm.Read(p.k-libpf.Address(p.sizekgc*8), pfunsafe.FromSlice(objs)); err != nil {
 			return nil, err
 		}
 		for i, c := range objs {
 			var gco GCobj
-			if err := rm.Read(c, libpf.SliceFrom(&gco)); err != nil {
+			if err := rm.Read(c, pfunsafe.FromPointer(&gco)); err != nil {
 				return nil, err
 			}
 			if gco.gct == stringGCType {
@@ -162,7 +163,7 @@ func newProto(rm remotememory.RemoteMemory, pt libpf.Address) (*proto, error) {
 		// lineinfo/uvinfo/varinfo are all either null or set so we can calculate lengths from them
 		lenuv := p.varinfo - p.uvinfo
 		b := make([]byte, lenuv)
-		if err := rm.Read(p.uvinfo, libpf.SliceFrom(b)); err != nil {
+		if err := rm.Read(p.uvinfo, pfunsafe.FromSlice(b)); err != nil {
 			return nil, err
 		}
 		p.upvalueNames = []string{}
@@ -183,7 +184,7 @@ func newProto(rm remotememory.RemoteMemory, pt libpf.Address) (*proto, error) {
 	if p.varinfo != 0 {
 		varinfolen := (p.ptAddr + libpf.Address(p.sizept)) - p.varinfo
 		p.varinforaw = make([]byte, varinfolen)
-		if err := rm.Read(p.varinfo, libpf.SliceFrom(p.varinforaw)); err != nil {
+		if err := rm.Read(p.varinfo, pfunsafe.FromSlice(p.varinforaw)); err != nil {
 			return nil, err
 		}
 	}

@@ -56,8 +56,7 @@ func runTest(t *testing.T, ctx context.Context, host string, port nat.Port) {
 	enabledTracers, err := tracertypes.Parse("labels,v8")
 	require.NoError(t, err)
 
-	r := &testutils.MockReporter{}
-	traceCh, trc := testutils.StartTracer(ctx, t, enabledTracers, r, false)
+	traceCh, trc := testutils.StartTracer(ctx, t, enabledTracers, false)
 
 	testHTTPEndpoint(t, host, port)
 	framesPerWorkerId := make(map[int]int)

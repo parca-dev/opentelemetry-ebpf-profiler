@@ -18,8 +18,6 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/ebpf-profiler/host"
-	"go.opentelemetry.io/ebpf-profiler/libpf"
-	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
 	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
 )
@@ -33,6 +31,9 @@ var (
 
 	//go:embed pprof_1_24_cgo
 	pprof_1_24_cgo []byte
+
+	//go:embed pprof_1_24_cgo_pie
+	pprof_1_24_cgo_pie []byte
 )
 
 type mockIntervals struct{}
@@ -40,11 +41,6 @@ type mockIntervals struct{}
 func (mockIntervals) MonitorInterval() time.Duration    { return 1 * time.Second }
 func (mockIntervals) TracePollInterval() time.Duration  { return 250 * time.Millisecond }
 func (mockIntervals) PIDCleanupInterval() time.Duration { return 1 * time.Second }
-
-type mockReporter struct{}
-
-func (mockReporter) ExecutableKnown(_ libpf.FileID) bool                   { return true }
-func (mockReporter) ExecutableMetadata(_ *reporter.ExecutableMetadataArgs) {}
 
 func isRoot() bool {
 	return os.Geteuid() == 0
@@ -58,9 +54,10 @@ func Test_Golabels(t *testing.T) {
 	tests := map[string]struct {
 		bin []byte
 	}{
-		"pprof_1_23":     {bin: pprof_1_23},
-		"pprof_1_24":     {bin: pprof_1_24},
-		"pprof_1_24_cgo": {bin: pprof_1_24_cgo},
+		"pprof_1_23":         {bin: pprof_1_23},
+		"pprof_1_24":         {bin: pprof_1_24},
+		"pprof_1_24_cgo":     {bin: pprof_1_24_cgo},
+		"pprof_1_24_cgo_pie": {bin: pprof_1_24_cgo_pie},
 	}
 
 	for name, tc := range tests {
@@ -90,7 +87,6 @@ func Test_Golabels(t *testing.T) {
 			enabledTracers.Enable(tracertypes.GoTracer)
 
 			trc, err := tracer.NewTracer(ctx, &tracer.Config{
-				Reporter:               &mockReporter{},
 				Intervals:              &mockIntervals{},
 				IncludeTracers:         enabledTracers,
 				SamplesPerSecond:       20,
@@ -121,7 +117,12 @@ func Test_Golabels(t *testing.T) {
 
 			go func() {
 				if err := exec.CommandContext(ctx, exe.Name()).Run(); err != nil {
-					t.Log(err)
+					select {
+					case <-ctx.Done():
+						// Context is canceled, meaning the test is done.
+					default:
+						t.Log(err)
+					}
 				}
 			}()
 

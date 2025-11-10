@@ -40,18 +40,6 @@ func (b *baseReporter) Stop() {
 	b.runLoop.Stop()
 }
 
-func (b *baseReporter) ExecutableKnown(fileID libpf.FileID) bool {
-	_, known := b.pdata.Executables.GetAndRefresh(fileID, pdata.ExecutableCacheLifetime)
-	return known
-}
-
-func (b *baseReporter) ExecutableMetadata(args *ExecutableMetadataArgs) {
-	b.pdata.Executables.Add(args.FileID, samples.ExecInfo{
-		FileName:   args.FileName,
-		GnuBuildID: args.GnuBuildID,
-	})
-}
-
 func (b *baseReporter) ReportTraceEvent(trace *libpf.Trace, meta *samples.TraceEventMeta) error {
 	switch meta.Origin {
 	case support.TraceOriginSampling:
@@ -74,7 +62,6 @@ func (b *baseReporter) ReportTraceEvent(trace *libpf.Trace, meta *samples.TraceE
 		ProcessName:    meta.ProcessName,
 		ExecutablePath: meta.ExecutablePath,
 		ApmServiceName: meta.APMServiceName,
-		ContainerID:    containerID,
 		Pid:            int64(meta.PID),
 		Tid:            int64(meta.TID),
 		ExtraMeta:      extraMeta,

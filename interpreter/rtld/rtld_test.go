@@ -35,7 +35,6 @@ func TestIntegration(t *testing.T) {
 	// Start the tracer with all tracers enabled
 	traceCh, trc := testutils.StartTracer(ctx, t,
 		tracertypes.AllTracers(),
-		&testutils.MockReporter{},
 		false)
 	defer trc.Close()
 
@@ -73,7 +72,7 @@ func TestIntegration(t *testing.T) {
 
 		// Check that the metric was incremented
 		return finalCount > initialCount
-	}, 10*time.Second, 50*time.Millisecond)
+	}, 20*time.Second, 100*time.Millisecond)
 }
 
 func TestIntegrationSingleShot(t *testing.T) {
@@ -98,7 +97,6 @@ func TestIntegrationSingleShot(t *testing.T) {
 	// Start the tracer with all tracers enabled
 	traceCh, trc := testutils.StartTracer(ctx, t,
 		tracertypes.AllTracers(),
-		&testutils.MockReporter{},
 		false)
 	defer trc.Close()
 
