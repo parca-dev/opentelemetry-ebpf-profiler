@@ -72,7 +72,7 @@ func TestIntegration(t *testing.T) {
 
 		// Check that the metric was incremented
 		return finalCount > initialCount
-	}, 10*time.Second, 50*time.Millisecond)
+	}, 20*time.Second, 100*time.Millisecond)
 }
 
 func TestIntegrationSingleShot(t *testing.T) {

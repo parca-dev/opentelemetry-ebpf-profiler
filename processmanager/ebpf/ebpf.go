@@ -351,7 +351,7 @@ func (impl *ebpfMapsImpl) AttachUprobe(pid libpf.PID, path string, offset uint64
 			path, offset, err)
 	}
 
-	log.Infof("Attached uprobe %s to %s at offset 0x%x in PID %d", progName, path, offset, pid)
+	log.Debugf("Attached uprobe %s to %s at offset 0x%x in PID %d", progName, path, offset, pid)
 	return &linkCloser{detachLink: []link.Link{lnk}}, nil
 }
 
