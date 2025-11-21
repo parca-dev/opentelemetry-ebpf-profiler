@@ -1193,6 +1193,13 @@ func (t *Tracer) GetEbpfMaps() map[string]*cebpf.Map {
 	return t.ebpfMaps
 }
 
+// GetEbpfHandler returns the EbpfHandler interface for direct access to eBPF operations.
+// This is primarily used for testing and advanced use cases that need to attach USDT probes
+// or manipulate eBPF maps directly.
+func (t *Tracer) GetEbpfHandler() interpreter.EbpfHandler {
+	return t.processManager.GetEbpfHandler()
+}
+
 // GetInterpretersForPID returns all interpreter instances for the given PID.
 func (t *Tracer) GetInterpretersForPID(pid libpf.PID) []interpreter.Instance {
 	return t.processManager.GetInterpretersForPID(pid)

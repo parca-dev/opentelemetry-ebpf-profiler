@@ -237,14 +237,15 @@ jobs:
           uname -a
           sudo go test ./interpreter/... -v -run TestIntegration
 
-  rtld-qemu-tests:
-    name: RTLD QEMU tests (kernel ${{ matrix.kernel }})
+  distro-qemu-tests:
+    name: Full distro QEMU tests (kernel ${{ matrix.kernel }})
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       matrix:
         kernel:
-          - 5.10.217  # Pre-6.6, uses single-shot mode
+          #- 5.10.217  # 5.10 doesn't have bpf cookies suppor
+          - 5.15.159
           - 6.8.10    # Post-6.6, supports multi-uprobe
     steps:
       - name: Clone code
@@ -257,12 +258,12 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y qemu-system-x86 debootstrap
+          sudo apt-get install -y qemu-system-x86 debootstrap systemtap-sdt-dev
       - name: Download kernel
         run: |
-          cd test/rtld-qemu
+          cd test/distro-qemu
           ./download-kernel.sh ${{ matrix.kernel }}
       - name: Run RTLD tests in QEMU
         run: |
-          cd test/rtld-qemu
+          cd test/distro-qemu
           ./build-and-run.sh ${{ matrix.kernel }}

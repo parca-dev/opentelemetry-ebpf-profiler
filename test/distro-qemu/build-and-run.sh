@@ -14,7 +14,7 @@ CACHE_DIR="${CACHE_DIR:-/tmp/debootstrap-cache}"
 echo "Building rootfs with $DISTRO $RELEASE..."
 
 # Clean up previous builds
-rm -rf "$ROOTFS_DIR" "$OUTPUT_DIR"
+sudo rm -rf "$ROOTFS_DIR" "$OUTPUT_DIR"
 mkdir -p "$ROOTFS_DIR" "$OUTPUT_DIR" "$CACHE_DIR"
 
 # Determine debootstrap architecture
@@ -34,7 +34,7 @@ if [[ "$DISTRO" == "ubuntu" ]]; then
     if [[ "$DEBOOTSTRAP_ARCH" == "arm64" ]]; then
         MIRROR="http://ports.ubuntu.com/ubuntu-ports/"
     else
-        MIRROR="http://archive.ubuntu.com/ubuntu/"
+        MIRROR="http://mirrors.layeronline.com/ubuntu/"
     fi
 else
     MIRROR="http://deb.debian.org/debian/"
@@ -50,8 +50,8 @@ sudo debootstrap --variant=minbase \
 # Change ownership of rootfs to current user to avoid needing sudo for subsequent operations
 sudo chown -R "$(id -u):$(id -g)" "$ROOTFS_DIR"
 
-# Build the rtld test binary (must be dynamic for dlopen to work)
-echo "Building rtld test binary for $DISTRO $RELEASE $DEBOOTSTRAP_ARCH..."
+# Build the test binary (must be dynamic for dlopen to work)
+echo "Building test binary for $DISTRO $RELEASE $DEBOOTSTRAP_ARCH..."
 
 # Determine Go architecture
 GOARCH="amd64"
@@ -78,24 +78,22 @@ if [[ "${USE_DOCKER}" == "1" ]] && command -v docker &> /dev/null; then
     echo "Using Docker to build with matching glibc version..."
     docker run --rm \
         -v "$(pwd)/../..:/workspace" \
-        -w /workspace/test/rtld-qemu \
+        -w /workspace/test/distro-qemu \
         --platform "linux/${DEBOOTSTRAP_ARCH}" \
         "$BASE_IMAGE" \
         bash -c "apt-get update -qq && apt-get install -y -qq wget libc6-dev gcc > /dev/null 2>&1 && \
                  wget -q https://go.dev/dl/go1.24.7.linux-${GOARCH}.tar.gz && \
                  tar -C /usr/local -xzf go1.24.7.linux-${GOARCH}.tar.gz && \
                  export PATH=/usr/local/go/bin:\$PATH && \
-                 CGO_ENABLED=1 go test -c -o rtld.test ../../interpreter/rtld"
+                 CGO_ENABLED=1 go test -c ../../interpreter/rtld ../../support/usdt"
 else
     # Local build with cross-compilation if needed
     echo "Building locally for ${GOARCH}..."
-    CGO_ENABLED=1 GOARCH=${GOARCH} go test -c -o rtld.test \
-        ../../interpreter/rtld
+    CGO_ENABLED=1 GOARCH=${GOARCH} go test -c ../../interpreter/rtld ../../support/usdt
 fi
 
 # Copy test binary into rootfs
-cp rtld.test "$ROOTFS_DIR/rtld.test"
-chmod +x "$ROOTFS_DIR/rtld.test"
+cp *.test "$ROOTFS_DIR/"
 
 # List dynamic dependencies for debugging
 echo "Test binary dependencies:"
@@ -104,7 +102,7 @@ ldd rtld.test || true
 # Create init script
 cat << 'EOF' > "$ROOTFS_DIR/init"
 #!/bin/sh
-echo "===== RTLD Test Environment ====="
+echo "===== Test Environment ====="
 echo "Kernel: $(uname -r)"
 echo "Hostname: $(hostname)"
 
@@ -129,10 +127,9 @@ mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null || true
 # Enable debug logging
 export DEBUG_TEST=1
 
-# Run the TestIntegrationSingleShot test specifically
+# Run the tests
 echo ""
-echo "Running RTLD TestIntegrationSingleShot test..."
-timeout -s KILL 60 /rtld.test -test.v -test.run='TestIntegrationSingleShot' -test.timeout=30s
+/rtld.test -test.v && /usdt.test -test.v
 RESULT=$?
 
 if [ $RESULT -eq 0 ]; then

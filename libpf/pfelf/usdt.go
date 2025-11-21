@@ -8,24 +8,46 @@ import (
 	"strings"
 )
 
-// USDTProbe represents a USDT probe found in ELF
+// USDTProbe represents a USDT probe found in ELF with file-offset-adjusted addresses
 type USDTProbe struct {
 	Provider        string
 	Name            string
-	Location        uint64
-	Base            uint64
-	SemaphoreOffset uint64
+	Location        uint64 // File offset for uprobe attachment
+	Base            uint64 // Original base address from note
+	SemaphoreOffset uint64 // File offset for semaphore
 	Arguments       string
 }
 
-// ParseUSDTProbes reads USDT probe information from ELF .note.stapsdt section
-func ParseUSDTProbes(section *Section) ([]USDTProbe, error) {
+// ParseUSDTProbes reads USDT probe information from ELF .note.stapsdt section.
+// It applies prelink adjustments if .stapsdt.base section exists, and converts
+// virtual addresses to file offsets suitable for uprobe attachment.
+func (f *File) ParseUSDTProbes() ([]USDTProbe, error) {
 	var probes []USDTProbe
 
 	// Find .note.stapsdt section
-	data, err := section.Data(16 * 1024)
+	var stapsdt *Section
+	for i := range f.Sections {
+		if f.Sections[i].Name == ".note.stapsdt" {
+			stapsdt = &f.Sections[i]
+			break
+		}
+	}
+	if stapsdt == nil {
+		return nil, nil // No USDT probes in this binary
+	}
+
+	data, err := stapsdt.Data(16 * 1024)
 	if err != nil {
 		return nil, err
+	}
+
+	// Find .stapsdt.base section address for prelink adjustment
+	var baseAddr uint64
+	for i := range f.Sections {
+		if f.Sections[i].Name == ".stapsdt.base" {
+			baseAddr = f.Sections[i].Addr
+			break
+		}
 	}
 
 	// Parse note entries
@@ -64,8 +86,33 @@ func ParseUSDTProbes(section *Section) ([]USDTProbe, error) {
 		}
 
 		location := binary.LittleEndian.Uint64(desc[0:8])
-		base := binary.LittleEndian.Uint64(desc[8:16])
+		noteBase := binary.LittleEndian.Uint64(desc[8:16])
 		semaphore := binary.LittleEndian.Uint64(desc[16:24])
+
+		// Apply prelink adjustment if .stapsdt.base section exists
+		// See: https://sourceware.org/systemtap/wiki/UserSpaceProbeImplementation
+		if baseAddr != 0 && noteBase != 0 {
+			diff := baseAddr - noteBase
+			location += diff
+			if semaphore != 0 {
+				semaphore += diff
+			}
+		}
+
+		// Convert virtual address to file offset for uprobe attachment
+		prog := f.findVirtualAddressProg(location)
+		if prog != nil {
+			location = location - prog.Vaddr + prog.Off
+		}
+
+		// Convert semaphore virtual address to file offset
+		var semaphoreFileOffset uint64
+		if semaphore != 0 {
+			semaProg := f.findVirtualAddressProg(semaphore)
+			if semaProg != nil {
+				semaphoreFileOffset = semaphore - semaProg.Vaddr + semaProg.Off
+			}
+		}
 
 		// Parse strings: provider\0probe\0arguments\0
 		stringData := desc[24:]
@@ -75,8 +122,8 @@ func ParseUSDTProbes(section *Section) ([]USDTProbe, error) {
 				Provider:        strings[0],
 				Name:            strings[1],
 				Location:        location,
-				Base:            base,
-				SemaphoreOffset: semaphore,
+				Base:            noteBase,
+				SemaphoreOffset: semaphoreFileOffset,
 				Arguments:       strings[2],
 			}
 			probes = append(probes, probe)
