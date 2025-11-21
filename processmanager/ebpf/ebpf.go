@@ -75,6 +75,14 @@ type ebpfMapsImpl struct {
 	perfProgsFD   int
 	probeProgsMap *cebpf.Map
 	userProgs     map[string]*cebpf.Program
+
+	// USDT argument specification maps
+	usdtSpecsMap *cebpf.Map
+	nextSpecID   uint32
+	specIDLock   sync.Mutex
+
+	// processSyncTrigger is a function to trigger process synchronization
+	processSyncTrigger func(pid libpf.PID)
 }
 
 // Compile time check to make sure ebpfMapsImpl satisfies the interface .
@@ -91,6 +99,8 @@ func LoadMaps(ctx context.Context, maps map[string]*cebpf.Map,
 		coll:          coll,
 		perfProgsFD:   maps["perf_progs"].FD(),
 		probeProgsMap: maps["kprobe_progs"],
+		usdtSpecsMap:  maps["__bpf_usdt_specs"],
+		nextSpecID:    0,
 	}
 	impl.errCounter = make(map[metrics.MetricID]int64)
 
@@ -140,6 +150,44 @@ type linkCloser struct {
 	unloadLink link.Link
 }
 
+// populateUSDTSpecMaps parses USDT probe arguments and populates the BPF spec maps.
+// It returns the assigned spec IDs for each probe.
+// If a probe has no arguments or parsing fails, it receives spec ID 0.
+func populateUSDTSpecMaps(probes []pfelf.USDTProbe, specMap *cebpf.Map, startSpecID uint32) ([]uint32, error) {
+	specIDs := make([]uint32, len(probes))
+	currentSpecID := startSpecID
+
+	for i, probe := range probes {
+		if probe.Arguments == "" {
+			// No arguments, use spec ID 0
+			specIDs[i] = 0
+			continue
+		}
+
+		// Parse the argument specification
+		spec, err := pfelf.ParseUSDTArguments(probe.Arguments)
+		if err != nil {
+			log.Warnf("Failed to parse USDT arguments for %s:%s (%s): %v",
+				probe.Provider, probe.Name, probe.Arguments, err)
+			specIDs[i] = 0
+			continue
+		}
+
+		// Assign a spec ID
+		specID := currentSpecID
+		currentSpecID++
+		specIDs[i] = specID
+
+		// Store the spec in the map
+		if err := specMap.Put(&specID, pfelf.USDTSpecToBytes(spec)); err != nil {
+			return nil, fmt.Errorf("failed to store USDT spec for %s:%s: %w",
+				probe.Provider, probe.Name, err)
+		}
+	}
+
+	return specIDs, nil
+}
+
 func (lc *linkCloser) Detach() error {
 	var errs []error
 	if lc.detachLink != nil {
@@ -179,6 +227,34 @@ func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName st
 		impl.userProgs = make(map[string]*cebpf.Program)
 	}
 
+	// Parse USDT arguments and populate spec maps using the helper
+	var specIDs []uint32
+	if impl.usdtSpecsMap != nil {
+		// Get the starting spec ID and update nextSpecID under lock
+		startSpecID := func() uint32 {
+			impl.specIDLock.Lock()
+			defer impl.specIDLock.Unlock()
+			specID := impl.nextSpecID
+			impl.nextSpecID += uint32(len(probes))
+			return specID
+		}()
+
+		// Populate USDT spec maps directly
+		var err error
+		specIDs, err = populateUSDTSpecMaps(probes, impl.usdtSpecsMap, startSpecID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to populate USDT spec maps: %w", err)
+		}
+
+		// Log successful spec population
+		for i, specID := range specIDs {
+			if specID != 0 {
+				log.Debugf("Stored USDT spec %d for %s:%s",
+					specID, probes[i].Provider, probes[i].Name)
+			}
+		}
+	}
+
 	names := make([]string, 0, len(probes))
 	addresses := make([]uint64, 0, len(probes))
 	offsets := make([]uint64, 0, len(probes))
@@ -188,17 +264,44 @@ func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName st
 		offsets = append(offsets, p.SemaphoreOffset)
 	}
 
+	// Merge spec IDs (high 32 bits) with user cookies (low 32 bits)
+	// BPF cookie format: [spec_id (32 bits) | user_cookie (32 bits)]
+	var finalCookies []uint64
+	if len(specIDs) > 0 {
+		finalCookies = make([]uint64, len(specIDs))
+		for i, specID := range specIDs {
+			// Spec ID goes in high 32 bits
+			finalCookies[i] = uint64(specID) << 32
+			// If user provided cookies, merge them into low 32 bits
+			if cookies != nil && i < len(cookies) {
+				userCookie := uint32(cookies[i] & 0xFFFFFFFF)
+				finalCookies[i] |= uint64(userCookie)
+			}
+		}
+		// Note: IP-to-spec-ID map is already populated by PopulateUSDTSpecMaps
+	} else if cookies != nil {
+		// No spec IDs, just use user cookies in low 32 bits
+		finalCookies = make([]uint64, len(cookies))
+		for i, cookie := range cookies {
+			finalCookies[i] = cookie & 0xFFFFFFFF
+		}
+	}
+
 	useMulti := util.HasMultiUprobeSupport()
 
-	// If singleProgNames provided and we're not using multi-probe, use individual programs
-	if singleProgNames != nil && !useMulti {
+	// If multiProgName is empty or multi-probe not supported, use individual programs (one per probe)
+	if multiProgName == "" || !useMulti {
+		if singleProgNames == nil {
+			return nil, fmt.Errorf("singleProgNames required when multiProgName is empty or multi-probe not supported")
+		}
 		if len(singleProgNames) != len(probes) {
 			return nil, fmt.Errorf(
 				"number of single program names %d does not match number of probes %d",
 				len(singleProgNames), len(probes))
 		}
 		// Single-shot mode with multiple programs
-		var links []link.Link
+		// Load all programs first
+		progs := make([]*cebpf.Program, len(probes))
 		for i := range probes {
 			prog := impl.userProgs[singleProgNames[i]]
 			if prog == nil {
@@ -207,16 +310,46 @@ func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName st
 				}
 				prog = impl.userProgs[singleProgNames[i]]
 			}
-			lnk, err := exe.Uprobe(names[i], prog, &link.UprobeOptions{
-				Address:      addresses[i],
-				RefCtrOffset: offsets[i],
-				PID:          int(pid),
-			})
-			if err != nil {
-				return nil, fmt.Errorf("failed to attach usdt probe %s: %w", names[i], err)
-			}
-			links = append(links, lnk)
+			progs[i] = prog
 		}
+
+		// Attach individual probes with their own programs
+		var links []link.Link
+		for i, probe := range probes {
+			prog := progs[i]
+			if prog == nil {
+				// Clean up already attached probes
+				for _, l := range links {
+					l.Close()
+				}
+				return nil, fmt.Errorf("program %d is nil for probe %s", i, probe.Name)
+			}
+
+			// Prepare uprobe options
+			uprobeOpts := &link.UprobeOptions{
+				Address:      probe.Location,
+				RefCtrOffset: probe.SemaphoreOffset,
+				PID:          int(pid),
+			}
+
+			// Set cookie if provided
+			if finalCookies != nil && i < len(finalCookies) {
+				uprobeOpts.Cookie = finalCookies[i]
+			}
+
+			// Attach uprobe at the probe location
+			l, err := exe.Uprobe(probe.Name, prog, uprobeOpts)
+			if err != nil {
+				// Clean up already attached probes
+				for _, lnk := range links {
+					lnk.Close()
+				}
+				return nil, fmt.Errorf("failed to attach USDT probe %s at location 0x%x: %w",
+					probe.Name, probe.Location, err)
+			}
+			links = append(links, l)
+		}
+
 		log.Infof("Attached %d individual probes to %s in PID %d", len(links), path, pid)
 		return &linkCloser{detachLink: links}, nil
 	}
@@ -233,38 +366,51 @@ func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName st
 		return nil, errors.New("attaching multiple probes requires multi support (kernel 6.6+)")
 	}
 
-	if useMulti {
-		// If probeAll is false use the pid
-		var probePid uint32
-		if !probeAll {
-			probePid = uint32(pid)
+	// Determine PID for attachment
+	attachPID := int(pid)
+	if probeAll {
+		attachPID = 0 // 0 means all processes
+	}
+
+	// Single probe with single program - use single uprobe
+	if len(probes) == 1 {
+		uprobeOpts := &link.UprobeOptions{
+			Address:      probes[0].Location,
+			RefCtrOffset: probes[0].SemaphoreOffset,
+			PID:          attachPID,
+		}
+		if finalCookies != nil && len(finalCookies) > 0 {
+			uprobeOpts.Cookie = finalCookies[0]
 		}
 
-		lnk, err := exe.UprobeMulti(names, prog, &link.UprobeMultiOptions{
-			Addresses:     addresses,
-			RefCtrOffsets: offsets,
-			Cookies:       cookies,
-			PID:           probePid,
-		})
+		l, err := exe.Uprobe(probes[0].Name, prog, uprobeOpts)
 		if err != nil {
-			return nil, fmt.Errorf("failed to attach usdt probes to %s: %s %w",
-				path, multiProgName, err)
+			return nil, fmt.Errorf("failed to attach USDT probe %s at location 0x%x: %w",
+				probes[0].Name, probes[0].Location, err)
 		}
-		log.Infof("Attached probe %s to udst %s in PID %d", multiProgName, path, pid)
-		return &linkCloser{unloadLink: lnk}, nil
-	} else {
-		lnk, err := exe.Uprobe(names[0], prog, &link.UprobeOptions{
-			Address:      addresses[0],
-			RefCtrOffset: offsets[0],
-			PID:          int(pid),
-		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to attach usdt probes to %s: %s %w",
-				path, multiProgName, err)
-		}
-		log.Infof("Attached probe %s to udst %s in PID %d", multiProgName, path, pid)
-		return &linkCloser{detachLink: []link.Link{lnk}}, nil
+		log.Infof("Attached probe %s to usdt %s in PID %d", multiProgName, path, pid)
+		return &linkCloser{unloadLink: l}, nil
 	}
+
+	// Multiple probes - use UprobeMulti
+	var probePid uint32
+	if attachPID != 0 {
+		probePid = uint32(attachPID)
+	}
+
+	lnk, err := exe.UprobeMulti(names, prog, &link.UprobeMultiOptions{
+		Addresses:     addresses,
+		RefCtrOffsets: offsets,
+		Cookies:       finalCookies,
+		PID:           probePid,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to attach USDT probes with UprobeMulti to %s: %s %w",
+			path, multiProgName, err)
+	}
+
+	log.Infof("Attached probe %s to usdt %s in PID %d", multiProgName, path, pid)
+	return &linkCloser{unloadLink: lnk}, nil
 }
 
 // loadProgram loads an eBPF program from progSpec and populates the related maps.
@@ -280,6 +426,7 @@ func (impl *ebpfMapsImpl) loadUSDTProgram(progName string, useMulti bool) error 
 	defer restoreRlimit()
 
 	if useMulti {
+		log.Infof("Loading USDT multi-probe program %s", progName)
 		progSpec.AttachType = cebpf.AttachTraceUprobeMulti
 	}
 

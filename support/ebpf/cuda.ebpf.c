@@ -145,11 +145,13 @@ static EBPF_INLINE int cuda_kernel_exec(struct pt_regs *ctx)
 SEC("usdt/cuda_probe")
 int cuda_probe(struct pt_regs *ctx)
 {
-  u64 cookie = bpf_get_attach_cookie(ctx);
+  // Extract user cookie from low 32 bits (high 32 bits contain spec ID)
+  u64 full_cookie = bpf_get_attach_cookie(ctx);
+  u32 cookie      = (u32)(full_cookie & 0xFFFFFFFF);
   switch (cookie) {
   case 'c': return cuda_correlation(ctx);
   case 'k': return cuda_kernel_exec(ctx);
-  default: DEBUG_PRINT("cuda_probe: unknown cookie %llu", cookie); break;
+  default: DEBUG_PRINT("cuda_probe: unknown cookie %u", cookie); break;
   }
   return 0;
 }

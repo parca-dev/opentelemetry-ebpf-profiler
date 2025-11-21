@@ -1,6 +1,6 @@
-# RTLD QEMU Testing
+# Distro QEMU Testing
 
-This directory contains scripts to test USDT/RTLD (runtime linker) mechanisms on different kernel versions using QEMU.
+This directory contains scripts to test USDT/RTLD (runtime linker) mechanisms on different kernel versions using QEMU. These tests need a libc with dlopen and systemtap support.
 
 ## Prerequisites
 

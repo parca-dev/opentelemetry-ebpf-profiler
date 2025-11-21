@@ -72,11 +72,11 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 	// We use the existence of the .note.stapsdt section to determine if this is a
 	// process that has libparcagpucupti.so loaded. Its cheaper and more reliable than loading
 	// the symbol table.
-	if sec := ef.Section(".note.stapsdt"); sec != nil {
-		probes, err := pfelf.ParseUSDTProbes(sec)
-		if err != nil {
-			return nil, err
-		}
+	probes, err := ef.ParseUSDTProbes()
+	if err != nil {
+		return nil, err
+	}
+	if len(probes) > 0 {
 		var parcagpuProbes []pfelf.USDTProbe
 		for _, probe := range probes {
 			if probe.Provider == "parcagpu" {
