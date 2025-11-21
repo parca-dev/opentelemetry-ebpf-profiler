@@ -30,6 +30,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/processmanager/ebpfapi"
 	"go.opentelemetry.io/ebpf-profiler/rlimit"
 	"go.opentelemetry.io/ebpf-profiler/support"
+	"go.opentelemetry.io/ebpf-profiler/support/usdt"
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
@@ -75,6 +76,15 @@ type ebpfMapsImpl struct {
 	perfProgsFD   int
 	probeProgsMap *cebpf.Map
 	userProgs     map[string]*cebpf.Program
+
+	// USDT argument specification maps
+	usdtSpecsMap      *cebpf.Map
+	usdtIPToSpecIDMap *cebpf.Map
+	nextSpecID        uint32
+	specIDLock        sync.Mutex
+
+	// processSyncTrigger is a function to trigger process synchronization
+	processSyncTrigger func(pid libpf.PID)
 }
 
 // Compile time check to make sure ebpfMapsImpl satisfies the interface .
@@ -88,9 +98,12 @@ var _ ebpfapi.EbpfHandler = &ebpfMapsImpl{}
 func LoadMaps(ctx context.Context, maps map[string]*cebpf.Map,
 	progs map[string]*cebpf.Program, coll *cebpf.CollectionSpec) (ebpfapi.EbpfHandler, error) {
 	impl := &ebpfMapsImpl{
-		coll:          coll,
-		perfProgsFD:   maps["perf_progs"].FD(),
-		probeProgsMap: maps["kprobe_progs"],
+		coll:              coll,
+		perfProgsFD:       maps["perf_progs"].FD(),
+		probeProgsMap:     maps["kprobe_progs"],
+		usdtSpecsMap:      maps["__bpf_usdt_specs"],
+		usdtIPToSpecIDMap: maps["__bpf_usdt_ip_to_spec_id"],
+		nextSpecID:        0,
 	}
 	impl.errCounter = make(map[metrics.MetricID]int64)
 
@@ -179,6 +192,47 @@ func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName st
 		impl.userProgs = make(map[string]*cebpf.Program)
 	}
 
+	// Parse USDT arguments and populate spec maps
+	hasArguments := false
+	for _, p := range probes {
+		if p.Arguments != "" {
+			hasArguments = true
+			break
+		}
+	}
+
+	// Generate spec IDs and populate maps if we have arguments
+	var specIDs []uint32
+	if hasArguments && impl.usdtSpecsMap != nil {
+		impl.specIDLock.Lock()
+		defer impl.specIDLock.Unlock()
+
+		specIDs = make([]uint32, len(probes))
+		for i, p := range probes {
+			// Parse the argument specification
+			spec, err := pfelf.ParseUSDTArguments(p.Arguments)
+			if err != nil {
+				log.Warnf("Failed to parse USDT arguments for %s:%s (%s): %v",
+					p.Provider, p.Name, p.Arguments, err)
+				// Continue with empty spec
+				spec = &usdt.Spec{}
+			}
+
+			// Assign a spec ID
+			specID := impl.nextSpecID
+			impl.nextSpecID++
+			specIDs[i] = specID
+
+			// Store the spec in the map
+			if err := impl.usdtSpecsMap.Put(&specID, pfelf.USDTSpecToBytes(spec)); err != nil {
+				log.Warnf("Failed to store USDT spec for %s:%s: %v", p.Provider, p.Name, err)
+			} else {
+				log.Debugf("Stored USDT spec %d for %s:%s with %d args",
+					specID, p.Provider, p.Name, spec.Arg_cnt)
+			}
+		}
+	}
+
 	names := make([]string, 0, len(probes))
 	addresses := make([]uint64, 0, len(probes))
 	offsets := make([]uint64, 0, len(probes))
@@ -186,6 +240,28 @@ func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName st
 		names = append(names, p.Name)
 		addresses = append(addresses, p.Location)
 		offsets = append(offsets, p.SemaphoreOffset)
+	}
+
+	// If we generated spec IDs, use them as cookies (for BPF cookie support)
+	// Otherwise, use the provided cookies
+	var finalCookies []uint64
+	if len(specIDs) > 0 {
+		finalCookies = make([]uint64, len(specIDs))
+		for i, specID := range specIDs {
+			finalCookies[i] = uint64(specID)
+		}
+
+		// For older kernels without BPF cookie support, populate IP-to-spec-ID map
+		if impl.usdtIPToSpecIDMap != nil {
+			for i, addr := range addresses {
+				ip := int64(addr)
+				if err := impl.usdtIPToSpecIDMap.Put(&ip, &specIDs[i]); err != nil {
+					log.Warnf("Failed to store IP->spec_id mapping for address 0x%x: %v", addr, err)
+				}
+			}
+		}
+	} else if cookies != nil {
+		finalCookies = cookies
 	}
 
 	useMulti := util.HasMultiUprobeSupport()
@@ -243,7 +319,7 @@ func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName st
 		lnk, err := exe.UprobeMulti(names, prog, &link.UprobeMultiOptions{
 			Addresses:     addresses,
 			RefCtrOffsets: offsets,
-			Cookies:       cookies,
+			Cookies:       finalCookies,
 			PID:           probePid,
 		})
 		if err != nil {

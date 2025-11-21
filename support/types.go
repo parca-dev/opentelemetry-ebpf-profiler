@@ -397,6 +397,69 @@ const (
 	LJFileId  = 0x2a
 )
 
+const (
+	USDTArgConst    = 0x0
+	USDTArgReg      = 0x1
+	USDTArgRegDeref = 0x2
+)
+
+const (
+	USDTRegNone = 0x0
+	USDTRegRax  = 0x1
+	USDTRegRbx  = 0x2
+	USDTRegRcx  = 0x3
+	USDTRegRdx  = 0x4
+	USDTRegRsi  = 0x5
+	USDTRegRdi  = 0x6
+	USDTRegRbp  = 0x7
+	USDTRegRsp  = 0x8
+	USDTRegR8   = 0x9
+	USDTRegR9   = 0xa
+	USDTRegR10  = 0xb
+	USDTRegR11  = 0xc
+	USDTRegR12  = 0xd
+	USDTRegR13  = 0xe
+	USDTRegR14  = 0xf
+	USDTRegR15  = 0x10
+	USDTRegRip  = 0x11
+)
+
+const (
+	USDTRegX0  = 0x20
+	USDTRegX1  = 0x21
+	USDTRegX2  = 0x22
+	USDTRegX3  = 0x23
+	USDTRegX4  = 0x24
+	USDTRegX5  = 0x25
+	USDTRegX6  = 0x26
+	USDTRegX7  = 0x27
+	USDTRegX8  = 0x28
+	USDTRegX9  = 0x29
+	USDTRegX10 = 0x2a
+	USDTRegX11 = 0x2b
+	USDTRegX12 = 0x2c
+	USDTRegX13 = 0x2d
+	USDTRegX14 = 0x2e
+	USDTRegX15 = 0x2f
+	USDTRegX16 = 0x30
+	USDTRegX17 = 0x31
+	USDTRegX18 = 0x32
+	USDTRegX19 = 0x33
+	USDTRegX20 = 0x34
+	USDTRegX21 = 0x35
+	USDTRegX22 = 0x36
+	USDTRegX23 = 0x37
+	USDTRegX24 = 0x38
+	USDTRegX25 = 0x39
+	USDTRegX26 = 0x3a
+	USDTRegX27 = 0x3b
+	USDTRegX28 = 0x3c
+	USDTRegX29 = 0x3d
+	USDTRegX30 = 0x3e
+	USDTRegSP  = 0x3f
+	USDTRegPC  = 0x40
+)
+
 var MetricsTranslation = []metrics.MetricID{
 	0x0:  metrics.IDUnwindCallInterpreter,
 	0x1:  metrics.IDUnwindErrZeroPC,
