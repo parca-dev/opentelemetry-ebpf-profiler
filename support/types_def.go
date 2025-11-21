@@ -15,6 +15,7 @@ import (
 #include "./ebpf/stackdeltatypes.h"
 #include "./ebpf/v8_tracer.h"
 #include "./ebpf/luajit.h"
+#include "./ebpf/usdt.h"
 */
 import "C"
 
@@ -207,6 +208,76 @@ const (
 const (
 	LJFFIFunc = C.LUAJIT_FFI_FUNC
 	LJFileId  = C.LUAJIT_JIT_FILE_ID
+)
+
+// USDT argument types
+const (
+	USDTArgConst    = C.BPF_USDT_ARG_CONST
+	USDTArgReg      = C.BPF_USDT_ARG_REG
+	USDTArgRegDeref = C.BPF_USDT_ARG_REG_DEREF
+)
+
+// USDT register IDs - x86_64
+// NOTE: These are kept in sync with libpf/pfelf/usdt_args.go via tests.
+// The pfelf package defines its own constants to avoid circular dependencies,
+// but these C-derived values serve as the source of truth for verification.
+const (
+	USDTRegNone = C.BPF_USDT_REG_NONE
+	USDTRegRax  = C.BPF_USDT_REG_RAX
+	USDTRegRbx  = C.BPF_USDT_REG_RBX
+	USDTRegRcx  = C.BPF_USDT_REG_RCX
+	USDTRegRdx  = C.BPF_USDT_REG_RDX
+	USDTRegRsi  = C.BPF_USDT_REG_RSI
+	USDTRegRdi  = C.BPF_USDT_REG_RDI
+	USDTRegRbp  = C.BPF_USDT_REG_RBP
+	USDTRegRsp  = C.BPF_USDT_REG_RSP
+	USDTRegR8   = C.BPF_USDT_REG_R8
+	USDTRegR9   = C.BPF_USDT_REG_R9
+	USDTRegR10  = C.BPF_USDT_REG_R10
+	USDTRegR11  = C.BPF_USDT_REG_R11
+	USDTRegR12  = C.BPF_USDT_REG_R12
+	USDTRegR13  = C.BPF_USDT_REG_R13
+	USDTRegR14  = C.BPF_USDT_REG_R14
+	USDTRegR15  = C.BPF_USDT_REG_R15
+	USDTRegRip  = C.BPF_USDT_REG_RIP
+)
+
+// USDT register IDs - ARM64
+// NOTE: These are kept in sync with libpf/pfelf/usdt_args.go via tests.
+const (
+	USDTRegX0  = C.BPF_USDT_REG_X0
+	USDTRegX1  = C.BPF_USDT_REG_X1
+	USDTRegX2  = C.BPF_USDT_REG_X2
+	USDTRegX3  = C.BPF_USDT_REG_X3
+	USDTRegX4  = C.BPF_USDT_REG_X4
+	USDTRegX5  = C.BPF_USDT_REG_X5
+	USDTRegX6  = C.BPF_USDT_REG_X6
+	USDTRegX7  = C.BPF_USDT_REG_X7
+	USDTRegX8  = C.BPF_USDT_REG_X8
+	USDTRegX9  = C.BPF_USDT_REG_X9
+	USDTRegX10 = C.BPF_USDT_REG_X10
+	USDTRegX11 = C.BPF_USDT_REG_X11
+	USDTRegX12 = C.BPF_USDT_REG_X12
+	USDTRegX13 = C.BPF_USDT_REG_X13
+	USDTRegX14 = C.BPF_USDT_REG_X14
+	USDTRegX15 = C.BPF_USDT_REG_X15
+	USDTRegX16 = C.BPF_USDT_REG_X16
+	USDTRegX17 = C.BPF_USDT_REG_X17
+	USDTRegX18 = C.BPF_USDT_REG_X18
+	USDTRegX19 = C.BPF_USDT_REG_X19
+	USDTRegX20 = C.BPF_USDT_REG_X20
+	USDTRegX21 = C.BPF_USDT_REG_X21
+	USDTRegX22 = C.BPF_USDT_REG_X22
+	USDTRegX23 = C.BPF_USDT_REG_X23
+	USDTRegX24 = C.BPF_USDT_REG_X24
+	USDTRegX25 = C.BPF_USDT_REG_X25
+	USDTRegX26 = C.BPF_USDT_REG_X26
+	USDTRegX27 = C.BPF_USDT_REG_X27
+	USDTRegX28 = C.BPF_USDT_REG_X28
+	USDTRegX29 = C.BPF_USDT_REG_X29 // FP
+	USDTRegX30 = C.BPF_USDT_REG_X30 // LR
+	USDTRegSP  = C.BPF_USDT_REG_SP
+	USDTRegPC  = C.BPF_USDT_REG_PC
 )
 
 var MetricsTranslation = []metrics.MetricID{
