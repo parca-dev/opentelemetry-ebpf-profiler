@@ -25,22 +25,12 @@ static EBPF_INLINE void record_result(UNUSED u32 probe_id, u64 value)
 // These are called by both individual SEC probes and the multi-probe dispatcher
 // ============================================================================
 
-// Test probe logic: simple_probe with args: s32 x=42, s64 y=1234567890, u64 z=0xDEADBEEF
-static EBPF_INLINE int handle_simple_probe(struct pt_regs *ctx)
+SEC("usdt/testprov/simple_probe")
+int BPF_USDT(simple_probe, s32 x, s64 y, u64 z)
 {
   u32 probe_id = 1;
-  long arg0    = 0;
-  long arg1    = 0;
-  long arg2    = 0;
-  bpf_usdt_arg(ctx, 0, &arg0);
-  bpf_usdt_arg(ctx, 1, &arg1);
-  bpf_usdt_arg(ctx, 2, &arg2);
 
-  int specid = __bpf_usdt_spec_id(ctx); // For debugging
-  DEBUG_PRINT("simple_probe called: spec=%d, arg0=%ld arg1=%ld", specid, arg0, arg1);
-  DEBUG_PRINT("simple_probe arg2=0x%lx", arg2);
-
-  if (arg0 == 42 && arg1 == 1234567890 && arg2 == 0xDEADBEEF) {
+  if (x == 42 && y == 1234567890 && z == 0xDEADBEEF) {
     record_result(probe_id, 1);
   } else {
     record_result(probe_id, 0);
@@ -48,22 +38,13 @@ static EBPF_INLINE int handle_simple_probe(struct pt_regs *ctx)
   return 0;
 }
 
-SEC("usdt/testprov/simple_probe")
-int usdt_simple_probe(struct pt_regs *ctx)
-{
-  return handle_simple_probe(ctx);
-}
-
 // Test probe logic: memory_probe with args: s32 *x, s64 *y
-static EBPF_INLINE int handle_memory_probe(struct pt_regs *ctx)
+SEC("usdt/testprov/memory_probe")
+int BPF_USDT(memory_probe, u64 ptr0, u64 ptr1)
 {
   u32 probe_id = 2;
-  long ptr0    = 0;
-  long ptr1    = 0;
-  bpf_usdt_arg(ctx, 0, &ptr0);
-  bpf_usdt_arg(ctx, 1, &ptr1);
 
-  DEBUG_PRINT("memory_probe called: ptr0=0x%lx ptr1=0x%lx", ptr0, ptr1);
+  DEBUG_PRINT("memory_probe called: ptr0=0x%llx ptr1=0x%llx", ptr0, ptr1);
 
   s32 val0;
   s64 val1;
@@ -86,20 +67,13 @@ static EBPF_INLINE int handle_memory_probe(struct pt_regs *ctx)
   return 0;
 }
 
-SEC("usdt/testprov/memory_probe")
-int usdt_memory_probe(struct pt_regs *ctx)
-{
-  return handle_memory_probe(ctx);
-}
-
 // Test probe logic: const_probe with arg: constant 100
-static EBPF_INLINE int handle_const_probe(struct pt_regs *ctx)
+SEC("usdt/testprov/const_probe")
+int BPF_USDT(const_probe, s64 arg0)
 {
   u32 probe_id = 3;
-  long arg0    = 0;
-  bpf_usdt_arg(ctx, 0, &arg0);
 
-  DEBUG_PRINT("const_probe called: arg0=%ld", arg0);
+  DEBUG_PRINT("const_probe called: arg0=%lld", arg0);
 
   if (arg0 == 100) {
     DEBUG_PRINT("const_probe: SUCCESS");
@@ -111,24 +85,13 @@ static EBPF_INLINE int handle_const_probe(struct pt_regs *ctx)
   return 0;
 }
 
-SEC("usdt/testprov/const_probe")
-int usdt_const_probe(struct pt_regs *ctx)
-{
-  return handle_const_probe(ctx);
-}
-
 // Test probe logic: mixed_probe with args: s32 x, s64 *y, int c, double *f
-static EBPF_INLINE int handle_mixed_probe(struct pt_regs *ctx)
+SEC("usdt/testprov/mixed_probe")
+int BPF_USDT(mixed_probe, s32 arg0, u64 ptr1, s32 arg2)
 {
   u32 probe_id = 4;
-  long arg0    = 0;
-  long ptr1    = 0;
-  long arg2    = 0;
-  bpf_usdt_arg(ctx, 0, &arg0);
-  bpf_usdt_arg(ctx, 1, &ptr1);
-  bpf_usdt_arg(ctx, 2, &arg2);
 
-  DEBUG_PRINT("mixed_probe called: arg0=%ld ptr1=0x%lx arg2=%ld", arg0, ptr1, arg2);
+  DEBUG_PRINT("mixed_probe called: arg0=%d ptr1=0x%llx arg2=%d", arg0, ptr1, arg2);
 
   s64 val1;
   if (bpf_probe_read_user(&val1, sizeof(val1), (void *)ptr1)) {
@@ -148,24 +111,13 @@ static EBPF_INLINE int handle_mixed_probe(struct pt_regs *ctx)
   return 0;
 }
 
-SEC("usdt/testprov/mixed_probe")
-int usdt_mixed_probe(struct pt_regs *ctx)
-{
-  return handle_mixed_probe(ctx);
-}
-
 // Test probe logic: int32_args with args: s32 a=10, b=20, c=30
-static EBPF_INLINE int handle_int32_args(struct pt_regs *ctx)
+SEC("usdt/testprov/int32_args")
+int BPF_USDT(int32_args, s32 arg0, s32 arg1, s32 arg2)
 {
   u32 probe_id = 5;
-  long arg0    = 0;
-  long arg1    = 0;
-  long arg2    = 0;
-  bpf_usdt_arg(ctx, 0, &arg0);
-  bpf_usdt_arg(ctx, 1, &arg1);
-  bpf_usdt_arg(ctx, 2, &arg2);
 
-  DEBUG_PRINT("int32_args called: arg0=%ld arg1=%ld arg2=%ld", arg0, arg1, arg2);
+  DEBUG_PRINT("int32_args called: arg0=%d arg1=%d arg2=%d", arg0, arg1, arg2);
 
   if (arg0 == 10 && arg1 == 20 && arg2 == 30) {
     DEBUG_PRINT("int32_args: SUCCESS");
@@ -177,22 +129,13 @@ static EBPF_INLINE int handle_int32_args(struct pt_regs *ctx)
   return 0;
 }
 
-SEC("usdt/testprov/int32_args")
-int usdt_int32_args(struct pt_regs *ctx)
-{
-  return handle_int32_args(ctx);
-}
-
 // Test probe logic: int64_args with args: s64 a=100, b=200
-static EBPF_INLINE int handle_int64_args(struct pt_regs *ctx)
+SEC("usdt/testprov/int64_args")
+int BPF_USDT(int64_args, s64 arg0, s64 arg1)
 {
   u32 probe_id = 6;
-  long arg0    = 0;
-  long arg1    = 0;
-  bpf_usdt_arg(ctx, 0, &arg0);
-  bpf_usdt_arg(ctx, 1, &arg1);
 
-  DEBUG_PRINT("int64_args called: arg0=%ld arg1=%ld", arg0, arg1);
+  DEBUG_PRINT("int64_args called: arg0=%lld arg1=%lld", arg0, arg1);
 
   if (arg0 == 100 && arg1 == 200) {
     DEBUG_PRINT("int64_args: SUCCESS");
@@ -204,24 +147,13 @@ static EBPF_INLINE int handle_int64_args(struct pt_regs *ctx)
   return 0;
 }
 
-SEC("usdt/testprov/int64_args")
-int usdt_int64_args(struct pt_regs *ctx)
-{
-  return handle_int64_args(ctx);
-}
-
 // Test probe logic: mixed_refs with args: s32 *a, s64 *b, s32 c
-static EBPF_INLINE int handle_mixed_refs(struct pt_regs *ctx)
+SEC("usdt/testprov/mixed_refs")
+int BPF_USDT(mixed_refs, u64 ptr0, u64 ptr1, s32 arg2)
 {
   u32 probe_id = 7;
-  long ptr0    = 0;
-  long ptr1    = 0;
-  long arg2    = 0;
-  bpf_usdt_arg(ctx, 0, &ptr0);
-  bpf_usdt_arg(ctx, 1, &ptr1);
-  bpf_usdt_arg(ctx, 2, &arg2);
 
-  DEBUG_PRINT("mixed_refs called: ptr0=0x%lx ptr1=0x%lx arg2=%ld", ptr0, ptr1, arg2);
+  DEBUG_PRINT("mixed_refs called: ptr0=0x%llx ptr1=0x%llx arg2=%d", ptr0, ptr1, arg2);
 
   s32 val0;
   s64 val1;
@@ -244,22 +176,13 @@ static EBPF_INLINE int handle_mixed_refs(struct pt_regs *ctx)
   return 0;
 }
 
-SEC("usdt/testprov/mixed_refs")
-int usdt_mixed_refs(struct pt_regs *ctx)
-{
-  return handle_mixed_refs(ctx);
-}
-
 // Test probe logic: uint8_args with args: uint8_t a=5, b=10
-static EBPF_INLINE int handle_uint8_args(struct pt_regs *ctx)
+SEC("usdt/testprov/uint8_args")
+int BPF_USDT(uint8_args, u8 arg0, u8 arg1)
 {
   u32 probe_id = 8;
-  long arg0    = 0;
-  long arg1    = 0;
-  bpf_usdt_arg(ctx, 0, &arg0);
-  bpf_usdt_arg(ctx, 1, &arg1);
 
-  DEBUG_PRINT("uint8_args called: arg0=%ld arg1=%ld", arg0, arg1);
+  DEBUG_PRINT("uint8_args called: arg0=%u arg1=%u", arg0, arg1);
 
   if (arg0 == 5 && arg1 == 10) {
     DEBUG_PRINT("uint8_args: SUCCESS");
@@ -269,12 +192,6 @@ static EBPF_INLINE int handle_uint8_args(struct pt_regs *ctx)
     record_result(probe_id, 0);
   }
   return 0;
-}
-
-SEC("usdt/testprov/uint8_args")
-int usdt_uint8_args(struct pt_regs *ctx)
-{
-  return handle_uint8_args(ctx);
 }
 
 // ============================================================================
@@ -294,14 +211,14 @@ int usdt_test_multi(struct pt_regs *ctx)
 
   // Dispatch to inline helper functions (not SEC entry points)
   switch (probe_id) {
-  case 1: return handle_simple_probe(ctx);
-  case 2: return handle_memory_probe(ctx);
-  case 3: return handle_const_probe(ctx);
-  case 4: return handle_mixed_probe(ctx);
-  case 5: return handle_int32_args(ctx);
-  case 6: return handle_int64_args(ctx);
-  case 7: return handle_mixed_refs(ctx);
-  case 8: return handle_uint8_args(ctx);
+  case 1: return BPF_USDT_CALL(simple_probe, x, y, z);
+  case 2: return BPF_USDT_CALL(memory_probe, ptr0, ptr1);
+  case 3: return BPF_USDT_CALL(const_probe, arg0);
+  case 4: return BPF_USDT_CALL(mixed_probe, arg0, ptr1, arg2);
+  case 5: return BPF_USDT_CALL(int32_args, arg0, arg1, arg2);
+  case 6: return BPF_USDT_CALL(int64_args, arg0, arg1);
+  case 7: return BPF_USDT_CALL(mixed_refs, ptr0, ptr1, arg2);
+  case 8: return BPF_USDT_CALL(uint8_args, arg0, arg1);
   default: DEBUG_PRINT("usdt_test_multi: unknown probe_id %u", probe_id); return 0;
   }
 }
