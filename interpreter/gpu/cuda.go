@@ -3,7 +3,6 @@ package gpu // import "go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 import (
 	"errors"
 	"fmt"
-	"runtime"
 	"slices"
 	"strconv"
 	"sync"
@@ -87,11 +86,6 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 			return nil, nil
 		}
 
-		// Validate probe arguments match what cuda.ebpf.c expects
-		if err := validateProbeArguments(parcagpuProbes, info.FileName()); err != nil {
-			return nil, err
-		}
-
 		d := &data{
 			path:   info.FileName(),
 			probes: parcagpuProbes,
@@ -102,46 +96,6 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 	return nil, nil
 }
 
-// validateProbeArguments checks that the USDT probe arguments match the expectations
-// in cuda.ebpf.c and returns an error if they don't match.
-func validateProbeArguments(probes []pfelf.USDTProbe, path string) error {
-	var expectedProbes map[string]string
-
-	switch runtime.GOARCH {
-	case "amd64":
-		expectedProbes = map[string]string{
-			"cuda_correlation": "4@-44(%rbp) 4@-64(%rbp) 8@-40(%rbp)",
-			"kernel_executed":  "8@%rax 8@%rdx 4@%ecx 4@%esi 4@%edi 4@%r8d 8@%r9 8@%r10",
-		}
-	case "arm64":
-		expectedProbes = map[string]string{
-			"cuda_correlation": "4@[sp, 60] 4@[sp, 32] 8@[sp, 64]",
-			"kernel_executed":  "8@x1 8@x2 4@x3 4@x4 4@x5 4@x6 8@x7 8@x0",
-		}
-	default:
-		return fmt.Errorf("unknown architecture %s, cannot validate USDT probe arguments for %s",
-			runtime.GOARCH, path)
-	}
-
-	probeMap := make(map[string]string)
-	for _, probe := range probes {
-		probeMap[probe.Name] = probe.Arguments
-	}
-
-	for name, expectedArgs := range expectedProbes {
-		actualArgs, ok := probeMap[name]
-		if !ok {
-			return fmt.Errorf("missing expected USDT probe '%s' in %s", name, path)
-		}
-		if actualArgs != expectedArgs {
-			return fmt.Errorf("USDT probe '%s' in %s has incorrect arguments: "+
-				"expected: %s"+
-				"actual: %s",
-				name, path, expectedArgs, actualArgs)
-		}
-	}
-	return nil
-}
 
 func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Address,
 	_ remotememory.RemoteMemory) (interpreter.Instance, error) {
