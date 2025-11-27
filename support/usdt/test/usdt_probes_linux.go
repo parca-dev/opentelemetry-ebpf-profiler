@@ -3,7 +3,7 @@
 
 //go:build linux
 
-package usdt // import "go.opentelemetry.io/ebpf-profiler/support/usdt"
+package test // import "go.opentelemetry.io/ebpf-profiler/support/usdt/test"
 
 /*
 #cgo CFLAGS: -I/usr/include

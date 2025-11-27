@@ -90,7 +90,7 @@ func lookupRegister(regName string) (usdt.Register, bool) {
 // Regex patterns for parsing USDT argument specifications
 // USDT argument format: SIZE@LOCATION where:
 //   SIZE: byte size (negative for signed)
-//   LOCATION: register (%rax), memory offset(%reg) or [reg, offset], or constant ($123)
+//   LOCATION: register (%rax), memory offset(%reg) or [reg, offset], or constant ($123 or 123)
 var (
 	// Memory dereference with offset - x86_64 syntax: -4@-1204(%rbp) or -4f@-1204(%rbp)
 	regexRegDerefWithOffset = regexp.MustCompile(
@@ -101,15 +101,18 @@ var (
 	// Memory dereference without offset: 8@(%rsp) or 8f@(%rsp)
 	regexRegDerefNoOffset = regexp.MustCompile(
 		`^\s*(-?\d+)(f?)\s*@\s*\(\s*%([a-z0-9]+)\s*\)\s*$`)
+	// Immediate constant with dollar sign: -4@$5 or -4@$-9 or -4f@$5
+	regexConst = regexp.MustCompile(`^\s*(-?\d+)(f?)\s*@\s*\$(-?\d+)\s*$`)
+	// Bare constant (no dollar sign): -4@100 or 4@0 or -4f@100
+	// Note: Must be checked BEFORE regexReg since regexReg would also match bare numbers
+	regexBareConst = regexp.MustCompile(`^\s*(-?\d+)(f?)\s*@\s*(-?\d+)\s*$`)
 	// Register value: 8@%rax or -4@%edi or -4f@%edi or 8@x0 (ARM64)
 	regexReg = regexp.MustCompile(`^\s*(-?\d+)(f?)\s*@\s*%?([a-z0-9]+)\s*$`)
-	// Immediate constant: -4@$5 or -4@$-9 or -4f@$5
-	regexConst = regexp.MustCompile(`^\s*(-?\d+)(f?)\s*@\s*\$(-?\d+)\s*$`)
 )
 
 // https://sourceware.org/systemtap/wiki/UserSpaceProbeImplementation
 // ParseUSDTArgSpec parses a single USDT argument specification string
-// Examples: "-4@-1204(%rbp)", "8@%rax", "-4@$5", "8@(%rsp)", "-8f@%xmm0"
+// Examples: "-4@-1204(%rbp)", "8@%rax", "-4@$5", "-4@100", "8@(%rsp)", "-8f@%xmm0"
 func ParseUSDTArgSpec(argStr string) (*usdt.ArgSpec, error) {
 	argStr = strings.TrimSpace(argStr)
 	if argStr == "" {
@@ -201,6 +204,54 @@ func ParseUSDTArgSpec(argStr string) (*usdt.ArgSpec, error) {
 		return spec, nil
 	}
 
+	// Try immediate constant with dollar sign
+	if matches := regexConst.FindStringSubmatch(argStr); matches != nil {
+		argSz, err := strconv.ParseInt(matches[1], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid arg size: %w", err)
+		}
+		isFloat := matches[2] == "f"
+		constVal, err := strconv.ParseInt(matches[3], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid constant value: %w", err)
+		}
+
+		spec.Arg_type = usdt.ArgConst
+		spec.Val_off = uint64(constVal)
+		spec.Reg_id = usdt.RegNone
+		spec.Arg_signed = argSz < 0
+		spec.Arg_is_float = isFloat
+		if argSz < 0 {
+			argSz = -argSz
+		}
+		spec.Arg_bitshift = int8(64 - argSz*8)
+		return spec, nil
+	}
+
+	// Try bare constant (no dollar sign) - must be checked before regexReg
+	if matches := regexBareConst.FindStringSubmatch(argStr); matches != nil {
+		argSz, err := strconv.ParseInt(matches[1], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid arg size: %w", err)
+		}
+		isFloat := matches[2] == "f"
+		constVal, err := strconv.ParseInt(matches[3], 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid constant value: %w", err)
+		}
+
+		spec.Arg_type = usdt.ArgConst
+		spec.Val_off = uint64(constVal)
+		spec.Reg_id = usdt.RegNone
+		spec.Arg_signed = argSz < 0
+		spec.Arg_is_float = isFloat
+		if argSz < 0 {
+			argSz = -argSz
+		}
+		spec.Arg_bitshift = int8(64 - argSz*8)
+		return spec, nil
+	}
+
 	// Try register value
 	if matches := regexReg.FindStringSubmatch(argStr); matches != nil {
 		argSz, err := strconv.ParseInt(matches[1], 10, 64)
@@ -217,30 +268,6 @@ func ParseUSDTArgSpec(argStr string) (*usdt.ArgSpec, error) {
 			return nil, fmt.Errorf("unknown register: %s", regName)
 		}
 		spec.Reg_id = regID
-		spec.Arg_signed = argSz < 0
-		spec.Arg_is_float = isFloat
-		if argSz < 0 {
-			argSz = -argSz
-		}
-		spec.Arg_bitshift = int8(64 - argSz*8)
-		return spec, nil
-	}
-
-	// Try immediate constant
-	if matches := regexConst.FindStringSubmatch(argStr); matches != nil {
-		argSz, err := strconv.ParseInt(matches[1], 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("invalid arg size: %w", err)
-		}
-		isFloat := matches[2] == "f"
-		constVal, err := strconv.ParseInt(matches[3], 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("invalid constant value: %w", err)
-		}
-
-		spec.Arg_type = usdt.ArgConst
-		spec.Val_off = uint64(constVal)
-		spec.Reg_id = usdt.RegNone
 		spec.Arg_signed = argSz < 0
 		spec.Arg_is_float = isFloat
 		if argSz < 0 {

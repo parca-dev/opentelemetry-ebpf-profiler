@@ -290,6 +290,30 @@ func TestParseUSDTArgSpec(t *testing.T) {
 			},
 		},
 		{
+			name:        "bare constant without dollar sign",
+			argStr:      "-4@100",
+			expectError: false,
+			expected: &usdt.ArgSpec{
+				Val_off:      100,
+				Arg_type:     usdt.ArgConst,
+				Reg_id:       usdt.RegNone,
+				Arg_signed:   true,
+				Arg_bitshift: 32, // 64 - 4*8 = 32
+			},
+		},
+		{
+			name:        "bare constant zero",
+			argStr:      "4@0",
+			expectError: false,
+			expected: &usdt.ArgSpec{
+				Val_off:      0,
+				Arg_type:     usdt.ArgConst,
+				Reg_id:       usdt.RegNone,
+				Arg_signed:   false,
+				Arg_bitshift: 32, // 64 - 4*8 = 32
+			},
+		},
+		{
 			name:        "ARM64 bracket syntax with positive offset",
 			argStr:      "4@[sp, 60]",
 			expectError: false,
