@@ -20,9 +20,13 @@ static EBPF_INLINE void record_result(UNUSED u32 probe_id, u64 value)
   bpf_map_update_elem(&usdt_test_results, &probe_id, &value, BPF_ANY);
 }
 
-// Test probe: simple_probe with args: int32_t x=42, int64_t y=1234567890, uint64_t z=0xDEADBEEF
-SEC("usdt/testprov/simple_probe")
-int usdt_simple_probe(struct pt_regs *ctx)
+// ============================================================================
+// EBPF_INLINE helper functions containing probe logic
+// These are called by both individual SEC probes and the multi-probe dispatcher
+// ============================================================================
+
+// Test probe logic: simple_probe with args: int32_t x=42, int64_t y=1234567890, uint64_t z=0xDEADBEEF
+static EBPF_INLINE int handle_simple_probe(struct pt_regs *ctx)
 {
   u32 probe_id = 1;
   long arg0    = 0;
@@ -44,9 +48,14 @@ int usdt_simple_probe(struct pt_regs *ctx)
   return 0;
 }
 
-// Test probe: memory_probe with args: int32_t *x, int64_t *y
-SEC("usdt/testprov/memory_probe")
-int usdt_memory_probe(struct pt_regs *ctx)
+SEC("usdt/testprov/simple_probe")
+int usdt_simple_probe(struct pt_regs *ctx)
+{
+  return handle_simple_probe(ctx);
+}
+
+// Test probe logic: memory_probe with args: int32_t *x, int64_t *y
+static EBPF_INLINE int handle_memory_probe(struct pt_regs *ctx)
 {
   u32 probe_id = 2;
   long ptr0    = 0;
@@ -77,9 +86,14 @@ int usdt_memory_probe(struct pt_regs *ctx)
   return 0;
 }
 
-// Test probe: const_probe with arg: constant 100
-SEC("usdt/testprov/const_probe")
-int usdt_const_probe(struct pt_regs *ctx)
+SEC("usdt/testprov/memory_probe")
+int usdt_memory_probe(struct pt_regs *ctx)
+{
+  return handle_memory_probe(ctx);
+}
+
+// Test probe logic: const_probe with arg: constant 100
+static EBPF_INLINE int handle_const_probe(struct pt_regs *ctx)
 {
   u32 probe_id = 3;
   long arg0    = 0;
@@ -97,9 +111,14 @@ int usdt_const_probe(struct pt_regs *ctx)
   return 0;
 }
 
-// Test probe: mixed_probe with args: int32_t x, int64_t *y, int c, double *f
-SEC("usdt/testprov/mixed_probe")
-int usdt_mixed_probe(struct pt_regs *ctx)
+SEC("usdt/testprov/const_probe")
+int usdt_const_probe(struct pt_regs *ctx)
+{
+  return handle_const_probe(ctx);
+}
+
+// Test probe logic: mixed_probe with args: int32_t x, int64_t *y, int c, double *f
+static EBPF_INLINE int handle_mixed_probe(struct pt_regs *ctx)
 {
   u32 probe_id = 4;
   long arg0    = 0;
@@ -129,9 +148,14 @@ int usdt_mixed_probe(struct pt_regs *ctx)
   return 0;
 }
 
-// Test probe: int32_args with args: int32_t a=10, b=20, c=30
-SEC("usdt/testprov/int32_args")
-int usdt_int32_args(struct pt_regs *ctx)
+SEC("usdt/testprov/mixed_probe")
+int usdt_mixed_probe(struct pt_regs *ctx)
+{
+  return handle_mixed_probe(ctx);
+}
+
+// Test probe logic: int32_args with args: int32_t a=10, b=20, c=30
+static EBPF_INLINE int handle_int32_args(struct pt_regs *ctx)
 {
   u32 probe_id = 5;
   long arg0    = 0;
@@ -153,9 +177,14 @@ int usdt_int32_args(struct pt_regs *ctx)
   return 0;
 }
 
-// Test probe: int64_args with args: int64_t a=100, b=200
-SEC("usdt/testprov/int64_args")
-int usdt_int64_args(struct pt_regs *ctx)
+SEC("usdt/testprov/int32_args")
+int usdt_int32_args(struct pt_regs *ctx)
+{
+  return handle_int32_args(ctx);
+}
+
+// Test probe logic: int64_args with args: int64_t a=100, b=200
+static EBPF_INLINE int handle_int64_args(struct pt_regs *ctx)
 {
   u32 probe_id = 6;
   long arg0    = 0;
@@ -175,9 +204,14 @@ int usdt_int64_args(struct pt_regs *ctx)
   return 0;
 }
 
-// Test probe: mixed_refs with args: int32_t *a, int64_t *b, int32_t c
-SEC("usdt/testprov/mixed_refs")
-int usdt_mixed_refs(struct pt_regs *ctx)
+SEC("usdt/testprov/int64_args")
+int usdt_int64_args(struct pt_regs *ctx)
+{
+  return handle_int64_args(ctx);
+}
+
+// Test probe logic: mixed_refs with args: int32_t *a, int64_t *b, int32_t c
+static EBPF_INLINE int handle_mixed_refs(struct pt_regs *ctx)
 {
   u32 probe_id = 7;
   long ptr0    = 0;
@@ -210,9 +244,14 @@ int usdt_mixed_refs(struct pt_regs *ctx)
   return 0;
 }
 
-// Test probe: uint8_args with args: uint8_t a=5, b=10
-SEC("usdt/testprov/uint8_args")
-int usdt_uint8_args(struct pt_regs *ctx)
+SEC("usdt/testprov/mixed_refs")
+int usdt_mixed_refs(struct pt_regs *ctx)
+{
+  return handle_mixed_refs(ctx);
+}
+
+// Test probe logic: uint8_args with args: uint8_t a=5, b=10
+static EBPF_INLINE int handle_uint8_args(struct pt_regs *ctx)
 {
   u32 probe_id = 8;
   long arg0    = 0;
@@ -232,6 +271,16 @@ int usdt_uint8_args(struct pt_regs *ctx)
   return 0;
 }
 
+SEC("usdt/testprov/uint8_args")
+int usdt_uint8_args(struct pt_regs *ctx)
+{
+  return handle_uint8_args(ctx);
+}
+
+// ============================================================================
+// Multi-probe dispatcher
+// ============================================================================
+
 // Multi-probe entrypoint that dispatches to individual handlers based on cookie
 // Similar to cuda.ebpf.c, uses the low 32 bits of cookie for dispatch
 SEC("usdt/usdt_test_multi")
@@ -243,16 +292,16 @@ int usdt_test_multi(struct pt_regs *ctx)
 
   DEBUG_PRINT("usdt_test_multi called with probe_id=%u", probe_id);
 
-  // Dispatch based on probe ID
+  // Dispatch to inline helper functions (not SEC entry points)
   switch (probe_id) {
-  case 1: return usdt_simple_probe(ctx);
-  case 2: return usdt_memory_probe(ctx);
-  case 3: return usdt_const_probe(ctx);
-  case 4: return usdt_mixed_probe(ctx);
-  case 5: return usdt_int32_args(ctx);
-  case 6: return usdt_int64_args(ctx);
-  case 7: return usdt_mixed_refs(ctx);
-  case 8: return usdt_uint8_args(ctx);
+  case 1: return handle_simple_probe(ctx);
+  case 2: return handle_memory_probe(ctx);
+  case 3: return handle_const_probe(ctx);
+  case 4: return handle_mixed_probe(ctx);
+  case 5: return handle_int32_args(ctx);
+  case 6: return handle_int64_args(ctx);
+  case 7: return handle_mixed_refs(ctx);
+  case 8: return handle_uint8_args(ctx);
   default: DEBUG_PRINT("usdt_test_multi: unknown probe_id %u", probe_id); return 0;
   }
 }

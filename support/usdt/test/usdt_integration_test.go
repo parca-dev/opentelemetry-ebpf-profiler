@@ -3,7 +3,7 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-package usdt_test
+package test
 
 import (
 	"context"
@@ -19,7 +19,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
-	"go.opentelemetry.io/ebpf-profiler/support/usdt"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
 	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
 )
@@ -168,7 +167,7 @@ func (s *testSetup) triggerProbes() {
 
 	// Call probes multiple times to ensure they fire
 	for i := 0; i < 10; i++ {
-		usdt.CallTestProbes()
+		CallTestProbes()
 		time.Sleep(10 * time.Millisecond)
 	}
 	s.t.Logf("CallTestProbes() completed 10 iterations")
