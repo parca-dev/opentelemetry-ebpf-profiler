@@ -244,7 +244,7 @@ jobs:
     strategy:
       matrix:
         kernel:
-          #- 5.10.217  # 5.10 doesn't have bpf cookies suppor
+          #- 5.10.217  # 5.10 doesn't have bpf cookies
           - 5.15.159
           - 6.8.10    # Post-6.6, supports multi-uprobe
     steps:
