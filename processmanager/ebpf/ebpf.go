@@ -80,9 +80,6 @@ type ebpfMapsImpl struct {
 	usdtSpecsMap *cebpf.Map
 	nextSpecID   uint32
 	specIDLock   sync.Mutex
-
-	// processSyncTrigger is a function to trigger process synchronization
-	processSyncTrigger func(pid libpf.PID)
 }
 
 // Compile time check to make sure ebpfMapsImpl satisfies the interface .
