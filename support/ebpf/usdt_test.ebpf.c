@@ -25,7 +25,7 @@ static EBPF_INLINE void record_result(UNUSED u32 probe_id, u64 value)
 // These are called by both individual SEC probes and the multi-probe dispatcher
 // ============================================================================
 
-// Test probe logic: simple_probe with args: int32_t x=42, int64_t y=1234567890, uint64_t z=0xDEADBEEF
+// Test probe logic: simple_probe with args: s32 x=42, s64 y=1234567890, u64 z=0xDEADBEEF
 static EBPF_INLINE int handle_simple_probe(struct pt_regs *ctx)
 {
   u32 probe_id = 1;
@@ -54,7 +54,7 @@ int usdt_simple_probe(struct pt_regs *ctx)
   return handle_simple_probe(ctx);
 }
 
-// Test probe logic: memory_probe with args: int32_t *x, int64_t *y
+// Test probe logic: memory_probe with args: s32 *x, s64 *y
 static EBPF_INLINE int handle_memory_probe(struct pt_regs *ctx)
 {
   u32 probe_id = 2;
@@ -117,7 +117,7 @@ int usdt_const_probe(struct pt_regs *ctx)
   return handle_const_probe(ctx);
 }
 
-// Test probe logic: mixed_probe with args: int32_t x, int64_t *y, int c, double *f
+// Test probe logic: mixed_probe with args: s32 x, s64 *y, int c, double *f
 static EBPF_INLINE int handle_mixed_probe(struct pt_regs *ctx)
 {
   u32 probe_id = 4;
@@ -154,7 +154,7 @@ int usdt_mixed_probe(struct pt_regs *ctx)
   return handle_mixed_probe(ctx);
 }
 
-// Test probe logic: int32_args with args: int32_t a=10, b=20, c=30
+// Test probe logic: int32_args with args: s32 a=10, b=20, c=30
 static EBPF_INLINE int handle_int32_args(struct pt_regs *ctx)
 {
   u32 probe_id = 5;
@@ -183,7 +183,7 @@ int usdt_int32_args(struct pt_regs *ctx)
   return handle_int32_args(ctx);
 }
 
-// Test probe logic: int64_args with args: int64_t a=100, b=200
+// Test probe logic: int64_args with args: s64 a=100, b=200
 static EBPF_INLINE int handle_int64_args(struct pt_regs *ctx)
 {
   u32 probe_id = 6;
@@ -210,7 +210,7 @@ int usdt_int64_args(struct pt_regs *ctx)
   return handle_int64_args(ctx);
 }
 
-// Test probe logic: mixed_refs with args: int32_t *a, int64_t *b, int32_t c
+// Test probe logic: mixed_refs with args: s32 *a, s64 *b, s32 c
 static EBPF_INLINE int handle_mixed_refs(struct pt_regs *ctx)
 {
   u32 probe_id = 7;
