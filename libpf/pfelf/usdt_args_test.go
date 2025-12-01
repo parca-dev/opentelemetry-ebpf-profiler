@@ -432,6 +432,12 @@ func TestParseUSDTArguments(t *testing.T) {
 			expectedCnt: 4,
 		},
 		{
+			name:        "ARM64 brackets with spaces",
+			argString:   "4@[sp, 44] 4@[sp, 16] 8@[sp, 48]",
+			expectError: false,
+			expectedCnt: 3,
+		},
+		{
 			name: "too many arguments",
 			argString: "8@%rax 8@%rbx 8@%rcx 8@%rdx 8@%rsi 8@%rdi " +
 				"8@%rbp 8@%rsp 8@%r8 8@%r9 8@%r10 8@%r11 8@%r12",

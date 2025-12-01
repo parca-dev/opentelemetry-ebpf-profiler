@@ -280,8 +280,46 @@ func ParseUSDTArgSpec(argStr string) (*usdt.ArgSpec, error) {
 	return nil, fmt.Errorf("unrecognized argument format: %s", argStr)
 }
 
+// splitUSDTArgs splits a USDT argument string into individual argument specifications.
+// Unlike strings.Fields, this preserves spaces inside brackets for ARM64 syntax like "4@[sp, 44]".
+func splitUSDTArgs(argString string) []string {
+	var args []string
+	var current strings.Builder
+	inBrackets := false
+
+	for _, ch := range argString {
+		switch ch {
+		case '[':
+			inBrackets = true
+			current.WriteRune(ch)
+		case ']':
+			inBrackets = false
+			current.WriteRune(ch)
+		case ' ', '\t', '\n', '\r':
+			if inBrackets {
+				// Preserve spaces inside brackets
+				current.WriteRune(ch)
+			} else if current.Len() > 0 {
+				// End of argument outside brackets
+				args = append(args, current.String())
+				current.Reset()
+			}
+		default:
+			current.WriteRune(ch)
+		}
+	}
+
+	// Add final argument if any
+	if current.Len() > 0 {
+		args = append(args, current.String())
+	}
+
+	return args
+}
+
 // ParseUSDTArguments parses a USDT argument specification string into a usdt.Spec.
 // The argument string is space-separated (e.g., "-4@%esi -4@-24(%rbp) -4@%ecx").
+// For ARM64, brackets can contain spaces (e.g., "4@[sp, 44] 8@[x0, -8]").
 func ParseUSDTArguments(argString string) (*usdt.Spec, error) {
 	argString = strings.TrimSpace(argString)
 	if argString == "" {
@@ -289,8 +327,8 @@ func ParseUSDTArguments(argString string) (*usdt.Spec, error) {
 		return &usdt.Spec{Arg_cnt: 0}, nil
 	}
 
-	// Split by whitespace
-	argStrs := strings.Fields(argString)
+	// Split by whitespace, but preserve spaces inside brackets
+	argStrs := splitUSDTArgs(argString)
 	if len(argStrs) > 12 {
 		return nil, fmt.Errorf("too many arguments: %d (max 12)", len(argStrs))
 	}
