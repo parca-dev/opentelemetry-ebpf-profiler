@@ -14,6 +14,12 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
 )
 
+func init() {
+	// Set the pfelf-based ELF reader as the default for oomprof.
+	// This provides optimized ELF file reading compared to debug/elf.
+	oomprof.SetELFReader(&pfelfReader{})
+}
+
 // oomWatcherData holds per-executable data for the OOM watcher observer.
 type oomWatcherData struct {
 	state *oomprof.State
