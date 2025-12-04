@@ -4,16 +4,166 @@
 package pfelf
 
 import (
+	"runtime"
 	"testing"
 
 	"go.opentelemetry.io/ebpf-profiler/support/usdt"
 )
 
-func TestParseUSDTArgSpec(t *testing.T) {
-	negOffset := int64(-1204)
+// Common test cases that work on all architectures
+func TestParseUSDTArgSpec_Common(t *testing.T) {
 	negConst := int64(-9)
+
+	tests := []struct {
+		name        string
+		argStr      string
+		expectError bool
+		expected    *usdt.ArgSpec
+	}{
+		{
+			name:        "constant value",
+			argStr:      "-4@$5",
+			expectError: false,
+			expected: &usdt.ArgSpec{
+				Val_off:      5,
+				Arg_type:     usdt.ArgConst,
+				Reg_id:       usdt.RegNone,
+				Arg_signed:   true,
+				Arg_bitshift: 32, // 64 - 4*8 = 32
+			},
+		},
+		{
+			name:        "negative constant",
+			argStr:      "-4@$-9",
+			expectError: false,
+			expected: &usdt.ArgSpec{
+				Val_off:      uint64(negConst),
+				Arg_type:     usdt.ArgConst,
+				Reg_id:       usdt.RegNone,
+				Arg_signed:   true,
+				Arg_bitshift: 32, // 64 - 4*8 = 32
+			},
+		},
+		{
+			name:        "large positive constant",
+			argStr:      "8@$1000000",
+			expectError: false,
+			expected: &usdt.ArgSpec{
+				Val_off:      1000000,
+				Arg_type:     usdt.ArgConst,
+				Reg_id:       usdt.RegNone,
+				Arg_signed:   false,
+				Arg_bitshift: 0, // 64 - 8*8 = 0
+			},
+		},
+		{
+			name:        "unsigned constant with max int32 value",
+			argStr:      "4@$2147483647",
+			expectError: false,
+			expected: &usdt.ArgSpec{
+				Val_off:      2147483647,
+				Arg_type:     usdt.ArgConst,
+				Reg_id:       usdt.RegNone,
+				Arg_signed:   false,
+				Arg_bitshift: 32, // 64 - 4*8 = 32
+			},
+		},
+		{
+			name:        "floating-point constant",
+			argStr:      "4f@$100",
+			expectError: false,
+			expected: &usdt.ArgSpec{
+				Val_off:      100,
+				Arg_type:     usdt.ArgConst,
+				Reg_id:       usdt.RegNone,
+				Arg_signed:   false,
+				Arg_bitshift: 32, // 64 - 4*8 = 32
+				Arg_is_float: true,
+			},
+		},
+		{
+			name:        "bare constant without dollar sign",
+			argStr:      "-4@100",
+			expectError: false,
+			expected: &usdt.ArgSpec{
+				Val_off:      100,
+				Arg_type:     usdt.ArgConst,
+				Reg_id:       usdt.RegNone,
+				Arg_signed:   true,
+				Arg_bitshift: 32, // 64 - 4*8 = 32
+			},
+		},
+		{
+			name:        "bare constant zero",
+			argStr:      "4@0",
+			expectError: false,
+			expected: &usdt.ArgSpec{
+				Val_off:      0,
+				Arg_type:     usdt.ArgConst,
+				Reg_id:       usdt.RegNone,
+				Arg_signed:   false,
+				Arg_bitshift: 32, // 64 - 4*8 = 32
+			},
+		},
+		{
+			name:        "invalid format",
+			argStr:      "invalid",
+			expectError: true,
+		},
+		{
+			name:        "unknown register",
+			argStr:      "8@%xyz",
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ParseUSDTArgSpec(tt.argStr)
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("expected error but got none")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				return
+			}
+
+			if result.Val_off != tt.expected.Val_off {
+				t.Errorf("Val_off: got %d, want %d", result.Val_off, tt.expected.Val_off)
+			}
+			if result.Arg_type != tt.expected.Arg_type {
+				t.Errorf("Arg_type: got %d, want %d", result.Arg_type, tt.expected.Arg_type)
+			}
+			if result.Reg_id != tt.expected.Reg_id {
+				t.Errorf("Reg_id: got %d, want %d", result.Reg_id, tt.expected.Reg_id)
+			}
+			if result.Arg_signed != tt.expected.Arg_signed {
+				t.Errorf("Arg_signed: got %v, want %v", result.Arg_signed, tt.expected.Arg_signed)
+			}
+			if result.Arg_bitshift != tt.expected.Arg_bitshift {
+				t.Errorf("Arg_bitshift: got %d, want %d",
+					result.Arg_bitshift, tt.expected.Arg_bitshift)
+			}
+			if result.Arg_is_float != tt.expected.Arg_is_float {
+				t.Errorf("Arg_is_float: got %v, want %v",
+					result.Arg_is_float, tt.expected.Arg_is_float)
+			}
+		})
+	}
+}
+
+// AMD64-specific test cases
+func TestParseUSDTArgSpec_AMD64(t *testing.T) {
+	if runtime.GOARCH != "amd64" {
+		t.Skip("Skipping AMD64-specific tests on non-AMD64 platform")
+	}
+
+	negOffset := int64(-1204)
 	negOffset16 := int64(-16)
-	negOffset8 := int64(-8)
 
 	tests := []struct {
 		name        string
@@ -89,54 +239,6 @@ func TestParseUSDTArgSpec(t *testing.T) {
 				Val_off:      0,
 				Arg_type:     usdt.ArgRegDeref,
 				Reg_id:       usdt.RegRbp,
-				Arg_signed:   false,
-				Arg_bitshift: 32, // 64 - 4*8 = 32
-			},
-		},
-		{
-			name:        "constant value",
-			argStr:      "-4@$5",
-			expectError: false,
-			expected: &usdt.ArgSpec{
-				Val_off:      5,
-				Arg_type:     usdt.ArgConst,
-				Reg_id:       usdt.RegNone,
-				Arg_signed:   true,
-				Arg_bitshift: 32, // 64 - 4*8 = 32
-			},
-		},
-		{
-			name:        "negative constant",
-			argStr:      "-4@$-9",
-			expectError: false,
-			expected: &usdt.ArgSpec{
-				Val_off:      uint64(negConst),
-				Arg_type:     usdt.ArgConst,
-				Reg_id:       usdt.RegNone,
-				Arg_signed:   true,
-				Arg_bitshift: 32, // 64 - 4*8 = 32
-			},
-		},
-		{
-			name:        "large positive constant",
-			argStr:      "8@$1000000",
-			expectError: false,
-			expected: &usdt.ArgSpec{
-				Val_off:      1000000,
-				Arg_type:     usdt.ArgConst,
-				Reg_id:       usdt.RegNone,
-				Arg_signed:   false,
-				Arg_bitshift: 0, // 64 - 8*8 = 0
-			},
-		},
-		{
-			name:        "unsigned constant with max int32 value",
-			argStr:      "4@$2147483647",
-			expectError: false,
-			expected: &usdt.ArgSpec{
-				Val_off:      2147483647,
-				Arg_type:     usdt.ArgConst,
-				Reg_id:       usdt.RegNone,
 				Arg_signed:   false,
 				Arg_bitshift: 32, // 64 - 4*8 = 32
 			},
@@ -276,43 +378,61 @@ func TestParseUSDTArgSpec(t *testing.T) {
 				Arg_is_float: true,
 			},
 		},
-		{
-			name:        "floating-point constant",
-			argStr:      "4f@$100",
-			expectError: false,
-			expected: &usdt.ArgSpec{
-				Val_off:      100,
-				Arg_type:     usdt.ArgConst,
-				Reg_id:       usdt.RegNone,
-				Arg_signed:   false,
-				Arg_bitshift: 32, // 64 - 4*8 = 32
-				Arg_is_float: true,
-			},
-		},
-		{
-			name:        "bare constant without dollar sign",
-			argStr:      "-4@100",
-			expectError: false,
-			expected: &usdt.ArgSpec{
-				Val_off:      100,
-				Arg_type:     usdt.ArgConst,
-				Reg_id:       usdt.RegNone,
-				Arg_signed:   true,
-				Arg_bitshift: 32, // 64 - 4*8 = 32
-			},
-		},
-		{
-			name:        "bare constant zero",
-			argStr:      "4@0",
-			expectError: false,
-			expected: &usdt.ArgSpec{
-				Val_off:      0,
-				Arg_type:     usdt.ArgConst,
-				Reg_id:       usdt.RegNone,
-				Arg_signed:   false,
-				Arg_bitshift: 32, // 64 - 4*8 = 32
-			},
-		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ParseUSDTArgSpec(tt.argStr)
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("expected error but got none")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				return
+			}
+
+			if result.Val_off != tt.expected.Val_off {
+				t.Errorf("Val_off: got %d, want %d", result.Val_off, tt.expected.Val_off)
+			}
+			if result.Arg_type != tt.expected.Arg_type {
+				t.Errorf("Arg_type: got %d, want %d", result.Arg_type, tt.expected.Arg_type)
+			}
+			if result.Reg_id != tt.expected.Reg_id {
+				t.Errorf("Reg_id: got %d, want %d", result.Reg_id, tt.expected.Reg_id)
+			}
+			if result.Arg_signed != tt.expected.Arg_signed {
+				t.Errorf("Arg_signed: got %v, want %v", result.Arg_signed, tt.expected.Arg_signed)
+			}
+			if result.Arg_bitshift != tt.expected.Arg_bitshift {
+				t.Errorf("Arg_bitshift: got %d, want %d",
+					result.Arg_bitshift, tt.expected.Arg_bitshift)
+			}
+			if result.Arg_is_float != tt.expected.Arg_is_float {
+				t.Errorf("Arg_is_float: got %v, want %v",
+					result.Arg_is_float, tt.expected.Arg_is_float)
+			}
+		})
+	}
+}
+
+// ARM64-specific test cases
+func TestParseUSDTArgSpec_ARM64(t *testing.T) {
+	if runtime.GOARCH != "arm64" {
+		t.Skip("Skipping ARM64-specific tests on non-ARM64 platform")
+	}
+
+	negOffset8 := int64(-8)
+
+	tests := []struct {
+		name        string
+		argStr      string
+		expectError bool
+		expected    *usdt.ArgSpec
+	}{
 		{
 			name:        "ARM64 bracket syntax with positive offset",
 			argStr:      "4@[sp, 60]",
@@ -320,7 +440,7 @@ func TestParseUSDTArgSpec(t *testing.T) {
 			expected: &usdt.ArgSpec{
 				Val_off:      60,
 				Arg_type:     usdt.ArgRegDeref,
-				Reg_id:       usdt.RegRsp, // Note: "sp" matches x86's sp on x86, ARM64's sp on ARM64
+				Reg_id:       usdt.RegSP, // ARM64 bracket syntax uses ARM64 registers
 				Arg_signed:   false,
 				Arg_bitshift: 32, // 64 - 4*8 = 32
 			},
@@ -348,16 +468,6 @@ func TestParseUSDTArgSpec(t *testing.T) {
 				Arg_signed:   false,
 				Arg_bitshift: 0, // 64 - 8*8 = 0
 			},
-		},
-		{
-			name:        "invalid format",
-			argStr:      "invalid",
-			expectError: true,
-		},
-		{
-			name:        "unknown register",
-			argStr:      "8@%xyz",
-			expectError: true,
 		},
 	}
 
@@ -400,7 +510,8 @@ func TestParseUSDTArgSpec(t *testing.T) {
 	}
 }
 
-func TestParseUSDTArguments(t *testing.T) {
+// Common tests for ParseUSDTArguments
+func TestParseUSDTArguments_Common(t *testing.T) {
 	tests := []struct {
 		name        string
 		argString   string
@@ -413,6 +524,42 @@ func TestParseUSDTArguments(t *testing.T) {
 			expectError: false,
 			expectedCnt: 0,
 		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ParseUSDTArguments(tt.argString)
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("expected error but got none")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				return
+			}
+
+			if result.Arg_cnt != tt.expectedCnt {
+				t.Errorf("Arg_cnt: got %d, want %d", result.Arg_cnt, tt.expectedCnt)
+			}
+		})
+	}
+}
+
+// AMD64-specific tests for ParseUSDTArguments
+func TestParseUSDTArguments_AMD64(t *testing.T) {
+	if runtime.GOARCH != "amd64" {
+		t.Skip("Skipping AMD64-specific tests on non-AMD64 platform")
+	}
+
+	tests := []struct {
+		name        string
+		argString   string
+		expectError bool
+		expectedCnt int16
+	}{
 		{
 			name:        "single argument",
 			argString:   "8@%rax",
@@ -432,16 +579,52 @@ func TestParseUSDTArguments(t *testing.T) {
 			expectedCnt: 4,
 		},
 		{
-			name:        "ARM64 brackets with spaces",
-			argString:   "4@[sp, 44] 4@[sp, 16] 8@[sp, 48]",
-			expectError: false,
-			expectedCnt: 3,
-		},
-		{
 			name: "too many arguments",
 			argString: "8@%rax 8@%rbx 8@%rcx 8@%rdx 8@%rsi 8@%rdi " +
 				"8@%rbp 8@%rsp 8@%r8 8@%r9 8@%r10 8@%r11 8@%r12",
 			expectError: true, // More than 12 args
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ParseUSDTArguments(tt.argString)
+			if tt.expectError {
+				if err == nil {
+					t.Errorf("expected error but got none")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("unexpected error: %v", err)
+				return
+			}
+
+			if result.Arg_cnt != tt.expectedCnt {
+				t.Errorf("Arg_cnt: got %d, want %d", result.Arg_cnt, tt.expectedCnt)
+			}
+		})
+	}
+}
+
+// ARM64-specific tests for ParseUSDTArguments
+func TestParseUSDTArguments_ARM64(t *testing.T) {
+	if runtime.GOARCH != "arm64" {
+		t.Skip("Skipping ARM64-specific tests on non-ARM64 platform")
+	}
+
+	tests := []struct {
+		name        string
+		argString   string
+		expectError bool
+		expectedCnt int16
+	}{
+		{
+			name:        "ARM64 brackets with spaces",
+			argString:   "4@[sp, 44] 4@[sp, 16] 8@[sp, 48]",
+			expectError: false,
+			expectedCnt: 3,
 		},
 	}
 
