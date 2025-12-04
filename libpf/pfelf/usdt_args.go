@@ -25,7 +25,7 @@ var x86_64RegNameToID = map[string]usdt.Register{
 	"rsi": usdt.RegRsi, "esi": usdt.RegRsi, "si": usdt.RegRsi, "sil": usdt.RegRsi,
 	"rdi": usdt.RegRdi, "edi": usdt.RegRdi, "di": usdt.RegRdi, "dil": usdt.RegRdi,
 	"rbp": usdt.RegRbp, "ebp": usdt.RegRbp, "bp": usdt.RegRbp, "bpl": usdt.RegRbp,
-	"rsp": usdt.RegRsp, "esp": usdt.RegRsp, "spl": usdt.RegRsp,
+	"rsp": usdt.RegRsp, "esp": usdt.RegRsp, "sp": usdt.RegRsp, "spl": usdt.RegRsp,
 	"r8": usdt.RegR8, "r8d": usdt.RegR8, "r8w": usdt.RegR8, "r8b": usdt.RegR8,
 	"r9": usdt.RegR9, "r9d": usdt.RegR9, "r9w": usdt.RegR9, "r9b": usdt.RegR9,
 	"r10": usdt.RegR10, "r10d": usdt.RegR10, "r10w": usdt.RegR10, "r10b": usdt.RegR10,
