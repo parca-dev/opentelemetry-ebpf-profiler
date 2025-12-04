@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"unsafe"
@@ -24,7 +25,7 @@ var x86_64RegNameToID = map[string]usdt.Register{
 	"rsi": usdt.RegRsi, "esi": usdt.RegRsi, "si": usdt.RegRsi, "sil": usdt.RegRsi,
 	"rdi": usdt.RegRdi, "edi": usdt.RegRdi, "di": usdt.RegRdi, "dil": usdt.RegRdi,
 	"rbp": usdt.RegRbp, "ebp": usdt.RegRbp, "bp": usdt.RegRbp, "bpl": usdt.RegRbp,
-	"rsp": usdt.RegRsp, "esp": usdt.RegRsp, "sp": usdt.RegRsp, "spl": usdt.RegRsp,
+	"rsp": usdt.RegRsp, "esp": usdt.RegRsp, "spl": usdt.RegRsp,
 	"r8": usdt.RegR8, "r8d": usdt.RegR8, "r8w": usdt.RegR8, "r8b": usdt.RegR8,
 	"r9": usdt.RegR9, "r9d": usdt.RegR9, "r9w": usdt.RegR9, "r9b": usdt.RegR9,
 	"r10": usdt.RegR10, "r10d": usdt.RegR10, "r10w": usdt.RegR10, "r10b": usdt.RegR10,
@@ -74,15 +75,17 @@ var arm64RegNameToID = map[string]usdt.Register{
 	"pc": usdt.RegPC,
 }
 
-// lookupRegister tries to find a register ID by name, checking both x86_64 and ARM64 maps
+// lookupRegister looks up a register ID by name based on the runtime architecture
 func lookupRegister(regName string) (usdt.Register, bool) {
-	// Try x86_64 first
-	if regID, ok := x86_64RegNameToID[regName]; ok {
-		return regID, true
-	}
-	// Try ARM64
-	if regID, ok := arm64RegNameToID[regName]; ok {
-		return regID, true
+	switch runtime.GOARCH {
+	case "amd64":
+		if regID, ok := x86_64RegNameToID[regName]; ok {
+			return regID, true
+		}
+	case "arm64":
+		if regID, ok := arm64RegNameToID[regName]; ok {
+			return regID, true
+		}
 	}
 	return 0, false
 }
@@ -150,7 +153,7 @@ func ParseUSDTArgSpec(argStr string) (*usdt.ArgSpec, error) {
 		return spec, nil
 	}
 
-	// Try memory dereference with offset (ARM64 syntax)
+	// Try memory dereference with offset (ARM64 bracket syntax)
 	if matches := regexRegDerefWithOffsetARM.FindStringSubmatch(argStr); matches != nil {
 		argSz, err := strconv.ParseInt(matches[1], 10, 64)
 		if err != nil {
