@@ -18,6 +18,7 @@ import (
 	"hash/fnv"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
 )
 
@@ -57,7 +58,7 @@ type traceMap map[uint16]trace
 func getAndHashTraceAddrs(tracesAddr libpf.Address, rm remotememory.RemoteMemory) (
 	hash uint64, sizetrace int, traceAddrs []libpf.Address, err error) {
 	j := jitStatePart{}
-	if err := rm.Read(tracesAddr, libpf.SliceFrom(&j)); err != nil {
+	if err := rm.Read(tracesAddr, pfunsafe.FromPointer(&j)); err != nil {
 		return 0, 0, nil, err
 	}
 	if j.sizetrace > 65535 {
@@ -69,7 +70,7 @@ func getAndHashTraceAddrs(tracesAddr libpf.Address, rm remotememory.RemoteMemory
 	binary.LittleEndian.PutUint32(b, j.sizetrace)
 	_, _ = h.Write(b[:4])
 	addrs := make([]libpf.Address, j.sizetrace)
-	if err := rm.Read(j.trace, libpf.SliceFrom(addrs)); err != nil {
+	if err := rm.Read(j.trace, pfunsafe.FromSlice(addrs)); err != nil {
 		return 0, 0, nil, err
 	}
 	for _, addr := range addrs {
@@ -91,7 +92,7 @@ func loadTraces(tracesAddr libpf.Address, rm remotememory.RemoteMemory) (uint64,
 	traces := traceMap{}
 	for _, addr := range traceAddrs {
 		t := trace{}
-		if err := rm.Read(addr+tracePartOffset, libpf.SliceFrom(&t)); err != nil {
+		if err := rm.Read(addr+tracePartOffset, pfunsafe.FromPointer(&t)); err != nil {
 			return 0, nil, err
 		}
 		if t.traceno > uint16(sztrace) {

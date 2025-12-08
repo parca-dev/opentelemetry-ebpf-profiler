@@ -11,14 +11,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"slices"
 	"sync/atomic"
 	"time"
-	"unsafe"
 
 	"github.com/elastic/go-freelru"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	"go.opentelemetry.io/ebpf-profiler/libpf/readatbuf"
 	"go.opentelemetry.io/ebpf-profiler/process"
 	"go.opentelemetry.io/ebpf-profiler/util"
@@ -257,7 +258,7 @@ const (
 type peInfo struct {
 	err          error
 	lastModified int64
-	fileID       libpf.FileID
+	file         libpf.FrameMappingFile
 	simpleName   libpf.String
 	guid         string
 	typeSpecs    []peTypeSpec
@@ -569,7 +570,7 @@ func (pp *peParser) parseCLI() error {
 				break
 			}
 		}
-		switch unsafe.String(unsafe.SliceData(name), len(name)) {
+		switch pfunsafe.ToString(name) {
 		case "#Strings":
 			// ECMA-335 II.24.2.3 #Strings heap
 			pp.dotnetStrings = io.NewSectionReader(r, int64(hdr.Offset), int64(hdr.Size))
@@ -615,7 +616,7 @@ func (pp *peParser) readDotnetString(offs uint32) libpf.String {
 
 		zeroIdx := bytes.IndexByte(chunk[:n], 0)
 		if zeroIdx >= 0 {
-			return libpf.Intern(unsafe.String(unsafe.SliceData(str[:]), i+zeroIdx))
+			return libpf.Intern(pfunsafe.ToString(str[:i+zeroIdx]))
 		}
 	}
 
@@ -1240,18 +1241,22 @@ func (pc *peCache) Get(pr process.Process, mapping *process.Mapping) *peInfo {
 	}
 	defer file.Close()
 
-	info := &peInfo{
-		err:          err,
-		lastModified: lastModified,
-	}
-	err = info.parse(file)
-	if err == nil {
-		info.fileID, err = pr.CalculateMappingFileID(mapping)
-	}
+	fileID, err := pr.CalculateMappingFileID(mapping)
 	if err != nil {
-		info.err = err
+		return &peInfo{err: err}
 	}
 
+	info := &peInfo{
+		lastModified: lastModified,
+	}
+	info.err = info.parse(file)
+	if info.err == nil {
+		info.file = libpf.NewFrameMappingFile(libpf.FrameMappingFileData{
+			FileID:     fileID,
+			FileName:   libpf.Intern(path.Base(mapping.Path.String())),
+			GnuBuildID: info.guid,
+		})
+	}
 	pc.peInfoCache.Add(key, info)
 	return info
 }

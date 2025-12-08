@@ -24,6 +24,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	"go.opentelemetry.io/ebpf-profiler/lpm"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	sdtypes "go.opentelemetry.io/ebpf-profiler/nativeunwind/stackdeltatypes"
@@ -494,7 +495,7 @@ func (impl *ebpfMapsImpl) AttachUprobe(pid libpf.PID, path string, offset uint64
 			path, offset, err)
 	}
 
-	log.Infof("Attached uprobe %s to %s at offset 0x%x in PID %d", progName, path, offset, pid)
+	log.Debugf("Attached uprobe %s to %s at offset 0x%x in PID %d", progName, path, offset, pid)
 	return &linkCloser{detachLink: []link.Link{lnk}}, nil
 }
 
@@ -1068,7 +1069,7 @@ func (impl *ebpfMapsImpl) SupportsLPMTrieBatchOperations() bool {
 type ptrCastMarshaler[T any] []T
 
 func (r ptrCastMarshaler[T]) MarshalBinary() (data []byte, err error) {
-	return libpf.SliceFrom(r), nil
+	return pfunsafe.FromSlice(r), nil
 }
 
 // generateSlice returns a slice of type T and populates every value with its index.

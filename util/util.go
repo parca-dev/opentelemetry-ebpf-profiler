@@ -12,12 +12,12 @@ import (
 	"sync/atomic"
 	"unicode"
 	"unicode/utf8"
-	"unsafe"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/asm"
 	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/ebpf-profiler/libpf/hash"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	"golang.org/x/sys/unix"
 )
 
@@ -190,5 +190,5 @@ func GoString(cstr []byte) string {
 	if index < 0 {
 		index = len(cstr)
 	}
-	return strings.Clone(unsafe.String(unsafe.SliceData(cstr), index))
+	return strings.Clone(pfunsafe.ToString(cstr[:index]))
 }

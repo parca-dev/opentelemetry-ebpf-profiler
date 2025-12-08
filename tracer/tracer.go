@@ -107,9 +107,6 @@ type Tracer struct {
 
 	hasBatchOperations bool
 
-	// reporter allows swapping out the reporter implementation.
-	reporter reporter.SymbolReporter
-
 	// samplesPerSecond holds the configured number of samples per second.
 	samplesPerSecond int
 
@@ -121,8 +118,9 @@ type Tracer struct {
 }
 
 type Config struct {
-	// Reporter allows swapping out the reporter implementation.
-	Reporter reporter.SymbolReporter
+	// ExecutableReporter allows to configure a ExecutableReporter to hook seen executables.
+	// NOTE: This is used by external implementations embedding opentelemtry-ebpf-profiler.
+	ExecutableReporter reporter.ExecutableReporter
 	// Intervals provides access to globally configured timers and counters.
 	Intervals Intervals
 	// IncludeTracers holds information about which tracers are enabled.
@@ -211,7 +209,7 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 	hasBatchOperations := ebpfHandler.SupportsGenericBatchOperations()
 
 	processManager, err := pm.New(ctx, cfg.IncludeTracers, cfg.Intervals.MonitorInterval(),
-		ebpfHandler, nil, cfg.Reporter, elfunwindinfo.NewStackDeltaProvider(),
+		ebpfHandler, nil, cfg.ExecutableReporter, elfunwindinfo.NewStackDeltaProvider(),
 		cfg.FilterErrorFrames, cfg.IncludeEnvVars)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create processManager: %v", err)
@@ -230,7 +228,6 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 		intervals:              cfg.Intervals,
 		hasBatchOperations:     hasBatchOperations,
 		perfEntrypoints:        xsync.NewRWMutex(perfEventList),
-		reporter:               cfg.Reporter,
 		samplesPerSecond:       cfg.SamplesPerSecond,
 		probabilisticInterval:  cfg.ProbabilisticInterval,
 		probabilisticThreshold: cfg.ProbabilisticThreshold,
@@ -716,23 +713,16 @@ func (t *Tracer) readKernelFrames(kstackID int32) (libpf.Frames, error) {
 		address := libpf.Address(kstackVal[i])
 		frame := libpf.Frame{
 			Type:            libpf.KernelFrame,
-			FileID:          libpf.UnknownKernelFileID,
 			AddressOrLineno: libpf.AddressOrLineno(address - 1),
 		}
 
 		kmod, err := t.kernelSymbolizer.GetModuleByAddress(address)
 		if err == nil {
-			frame.FileID = kmod.FileID()
+			frame.MappingFile = kmod.MappingFile()
 			frame.AddressOrLineno -= libpf.AddressOrLineno(kmod.Start())
 
 			if funcName, _, err := kmod.LookupSymbolByAddress(address); err == nil {
 				frame.FunctionName = libpf.Intern(funcName)
-				t.reporter.ExecutableMetadata(&reporter.ExecutableMetadataArgs{
-					FileID:     kmod.FileID(),
-					FileName:   kmod.Name(),
-					GnuBuildID: kmod.BuildID(),
-					Interp:     libpf.Kernel,
-				})
 			}
 		}
 		frames.Append(&frame)
