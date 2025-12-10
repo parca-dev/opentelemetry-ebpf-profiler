@@ -176,9 +176,9 @@ static EBPF_INLINE int go_labels(struct pt_regs *ctx)
     DEBUG_PRINT("cl: no offsets, %d not recognized as a go binary", pid);
   else {
     DEBUG_PRINT(
-                "cl: go offsets found, %d recognized as a go binary: m_ptr: %lx",
-                pid,
-                (unsigned long)record->customLabelsState.go_m_ptr);
+      "cl: go offsets found, %d recognized as a go binary: m_ptr: %lx",
+      pid,
+      (unsigned long)record->customLabelsState.go_m_ptr);
     bool success = get_go_custom_labels(record, offsets);
     if (!success) {
       increment_metric(metricID_UnwindGoLabelsFailures);
