@@ -703,9 +703,6 @@ typedef struct UnwindState {
   // Consider calling unwinder_mark_nonleaf_frame rather than setting this directly.
   bool return_address;
 
-  // Make sure we only do this once.
-  bool processed_go_labels;
-
 #if defined(__aarch64__)
   // On aarch64, whether to forbid LR-based unwinding.
   // LR unwinding is only allowed for leaf user-mode frames. Frames making a syscall

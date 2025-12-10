@@ -215,28 +215,24 @@ static EBPF_INLINE void *get_m_ptr(struct GoLabelsOffsets *offs, UNUSED UnwindSt
 
 static EBPF_INLINE void maybe_add_go_custom_labels_legacy(struct pt_regs *ctx, PerCPURecord *record)
 {
-  u32 pid = record->trace.pid;
+  u32 pid                        = record->trace.pid;
   // The Go label extraction code is too big to fit in this program, so we need to
-  // tail call it, in order to keep the hashing and clearing code in this program it
-  // will tail call back to us with this bool set.
-  if (!record->state.processed_go_labels) {
-    GoCustomLabelsOffsets *offsets = bpf_map_lookup_elem(&go_labels_procs, &pid);
-    if (!offsets) {
-      DEBUG_PRINT("cl: no offsets, %d not recognized as a go binary", pid);
-      return;
-    }
-
-    void *m_ptr_addr = get_m_ptr_legacy(offsets, &record->state);
-    if (!m_ptr_addr) {
-      return;
-    }
-    record->customLabelsState.go_m_ptr = m_ptr_addr;
-
-    DEBUG_PRINT("cl: trace is within a process with Go custom labels enabled");
-    increment_metric(metricID_UnwindGoCustomLabelsAttempts);
-    record->state.processed_go_labels = true;
-    tail_call(ctx, PROG_GO_LABELS);
+  // tail call it
+  GoCustomLabelsOffsets *offsets = bpf_map_lookup_elem(&go_labels_procs, &pid);
+  if (!offsets) {
+    DEBUG_PRINT("cl: no offsets, %d not recognized as a go binary", pid);
+    return;
   }
+
+  void *m_ptr_addr = get_m_ptr_legacy(offsets, &record->state);
+  if (!m_ptr_addr) {
+    return;
+  }
+  record->customLabelsState.go_m_ptr = m_ptr_addr;
+
+  DEBUG_PRINT("cl: trace is within a process with Go custom labels enabled");
+  increment_metric(metricID_UnwindGoCustomLabelsAttempts);
+  tail_call(ctx, PROG_GO_LABELS);
 }
 
 static EBPF_INLINE void maybe_add_go_custom_labels(struct pt_regs *ctx, PerCPURecord *record)
@@ -770,12 +766,8 @@ static EBPF_INLINE int unwind_stop(struct pt_regs *ctx)
   Trace *trace       = &record->trace;
   UnwindState *state = &record->state;
 
-  // Do Go first since we might tail call out and back again.
-  // Try legacy Go custom labels first, then new Go labels implementation
   // TODO: maybe instead of adding a per-language call here, we
   // should have "path to CLs" be a standard part of some per-pid map?
-  maybe_add_go_custom_labels_legacy(ctx, record);
-  maybe_add_go_custom_labels(ctx, record);
   maybe_add_native_custom_labels(record);
   if (!maybe_add_node_custom_labels(record))
     increment_metric(metricID_UnwindNodeCustomLabelsFailures);
@@ -832,6 +824,11 @@ static EBPF_INLINE int unwind_stop(struct pt_regs *ctx)
     }
   }
   // TEMPORARY HACK END
+
+  // Try legacy Go custom labels first, then new Go labels implementation
+  // Must be last since it may not return (it will call send_trace).
+  maybe_add_go_custom_labels_legacy(ctx, record);
+  maybe_add_go_custom_labels(ctx, record);
 
   send_trace(ctx, trace);
 
