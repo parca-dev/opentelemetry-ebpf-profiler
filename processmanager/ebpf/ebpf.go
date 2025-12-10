@@ -143,8 +143,11 @@ func LoadMaps(ctx context.Context, maps map[string]*cebpf.Map,
 }
 
 type linkCloser struct {
-	detachLink []link.Link
-	unloadLink link.Link
+	detachLink    []link.Link
+	unloadLink    link.Link
+	detachSpecIDs []uint32       // spec IDs to delete when detach happens
+	unloadSpecIDs []uint32       // spec IDs to delete when unload happens
+	specMap       *cebpf.Map     // reference to the spec map for cleanup
 }
 
 // populateUSDTSpecMaps parses USDT probe arguments and populates the BPF spec maps.
@@ -194,14 +197,43 @@ func (lc *linkCloser) Detach() error {
 			}
 		}
 	}
+	// Clean up spec IDs associated with detach
+	if lc.specMap != nil && len(lc.detachSpecIDs) > 0 {
+		for _, specID := range lc.detachSpecIDs {
+			if specID != 0 {
+				if err := lc.specMap.Delete(&specID); err != nil {
+					log.Debugf("Failed to delete spec ID %d from map: %v", specID, err)
+					errs = append(errs, err)
+				} else {
+					log.Debugf("Deleted spec ID %d from map during detach", specID)
+				}
+			}
+		}
+	}
 	return errors.Join(errs...)
 }
 
 func (lc *linkCloser) Unload() error {
+	var errs []error
 	if lc.unloadLink != nil {
-		return lc.unloadLink.Close()
+		if err := lc.unloadLink.Close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
-	return nil
+	// Clean up spec IDs associated with unload
+	if lc.specMap != nil && len(lc.unloadSpecIDs) > 0 {
+		for _, specID := range lc.unloadSpecIDs {
+			if specID != 0 {
+				if err := lc.specMap.Delete(&specID); err != nil {
+					log.Debugf("Failed to delete spec ID %d from map: %v", specID, err)
+					errs = append(errs, err)
+				} else {
+					log.Debugf("Deleted spec ID %d from map during unload", specID)
+				}
+			}
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // AttachUSDTProbes allows interpreters to attach to usdt probes.
@@ -348,7 +380,11 @@ func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName st
 		}
 
 		log.Infof("Attached %d individual probes to %s in PID %d", len(links), path, pid)
-		return &linkCloser{detachLink: links}, nil
+		return &linkCloser{
+			detachLink:    links,
+			detachSpecIDs: specIDs,
+			specMap:       impl.usdtSpecsMap,
+		}, nil
 	}
 
 	prog := impl.userProgs[multiProgName]
@@ -386,7 +422,11 @@ func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName st
 				probes[0].Name, probes[0].Location, err)
 		}
 		log.Infof("Attached probe %s to usdt %s in PID %d", multiProgName, path, pid)
-		return &linkCloser{unloadLink: l}, nil
+		return &linkCloser{
+			unloadLink:    l,
+			unloadSpecIDs: specIDs,
+			specMap:       impl.usdtSpecsMap,
+		}, nil
 	}
 
 	// Multiple probes - use UprobeMulti
@@ -407,7 +447,11 @@ func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName st
 	}
 
 	log.Infof("Attached probe %s to usdt %s in PID %d", multiProgName, path, pid)
-	return &linkCloser{unloadLink: lnk}, nil
+	return &linkCloser{
+		unloadLink:    lnk,
+		unloadSpecIDs: specIDs,
+		specMap:       impl.usdtSpecsMap,
+	}, nil
 }
 
 // loadProgram loads an eBPF program from progSpec and populates the related maps.
