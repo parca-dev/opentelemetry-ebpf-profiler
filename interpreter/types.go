@@ -117,17 +117,13 @@ type EbpfHandler interface {
 	// AttachUSDTProbes attaches an eBPF program to USDT probes in the specified binary.
 	//
 	// Parameters:
-	//  - pid: The process ID. Required for older kernels (pre-6.6) that cannot attach to shared
-	//    libraries without a PID. On newer kernels with multi-uprobe support, this is ignored
-	//    when probeAll is true.
+	//  - pid: The process ID. Required for getting path to exe via procfs.
 	//  - path: Full path to the binary containing the USDT probes.
 	//  - multiProgName: Name of eBPF program to use for multi-uprobe attachment (newer kernels).
 	//  - probes: The USDT probe definitions to attach to.
 	//  - cookies: Optional cookies to pass to the eBPF program (one per probe, or nil).
 	//  - singleProgNames: eBPF program names for single-shot attachment (older kernels, one
 	//    per probe).
-	//  - probeAll: If true and the kernel supports it, attach to all processes using this
-	//    binary. If false, only attach to the specified pid.
 	//
 	// Returns:
 	//  - LinkCloser: A handle to the attached probes. The caller must:
@@ -136,14 +132,13 @@ type EbpfHandler interface {
 	//    2. Call LinkCloser.Detach() from Instance.Detach() to detach from the specific PID
 	//    3. Call LinkCloser.Unload() from Data.Unload() to fully clean up the eBPF program
 	AttachUSDTProbes(pid libpf.PID, path, multiProgName string, probes []pfelf.USDTProbe,
-		cookies []uint64, singleProgNames []string, probeAll bool) (LinkCloser, error)
+		cookies []uint64, singleProgNames []string) (LinkCloser, error)
 
 	// AttachUprobe attaches an eBPF uprobe to a function at a specific offset in a binary
 	AttachUprobe(pid libpf.PID, path string, offset uint64, progName string) (LinkCloser, error)
 }
 
 type LinkCloser interface {
-	Detach() error
 	Unload() error
 }
 

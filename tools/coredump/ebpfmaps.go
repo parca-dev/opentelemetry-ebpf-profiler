@@ -266,7 +266,7 @@ func (emc *ebpfMapsCoredump) SupportsLPMTrieBatchOperations() bool {
 }
 
 func (emc *ebpfMapsCoredump) AttachUSDTProbes(_ libpf.PID, _, _ string, _ []pfelf.USDTProbe,
-	_ []uint64, _ []string, _ bool) (interpreter.LinkCloser, error) {
+	_ []uint64, _ []string) (interpreter.LinkCloser, error) {
 	return nil, nil
 }
 
