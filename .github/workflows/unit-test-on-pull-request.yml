@@ -237,13 +237,13 @@ jobs:
         if: matrix.test_type == 'stable'
         run: |
           uname -a
-          sudo go test ./interpreter/... -v -run TestIntegration -skip node-local-nightly
+          sudo go test ./interpreter/... -v -run TestIntegration -skip "node-local-nightly|node-latest"
       - name: Test interpreter integration (known failing tests)
         if: matrix.test_type == 'known-failing'
         continue-on-error: true
         run: |
           uname -a
-          sudo go test ./interpreter/... -v -run TestIntegration/node-local-nightly
+          sudo go test ./interpreter/... -v -run "TestIntegration/(node-local-nightly|node-latest)"
 
   distro-qemu-tests:
     name: Full distro QEMU tests (kernel ${{ matrix.kernel }})
