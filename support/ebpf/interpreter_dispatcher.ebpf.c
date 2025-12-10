@@ -766,11 +766,8 @@ static EBPF_INLINE int unwind_stop(struct pt_regs *ctx)
   Trace *trace       = &record->trace;
   UnwindState *state = &record->state;
 
-  // Try legacy Go custom labels first, then new Go labels implementation
   // TODO: maybe instead of adding a per-language call here, we
   // should have "path to CLs" be a standard part of some per-pid map?
-  maybe_add_go_custom_labels_legacy(ctx, record);
-  maybe_add_go_custom_labels(ctx, record);
   maybe_add_native_custom_labels(record);
   if (!maybe_add_node_custom_labels(record))
     increment_metric(metricID_UnwindNodeCustomLabelsFailures);
@@ -827,6 +824,11 @@ static EBPF_INLINE int unwind_stop(struct pt_regs *ctx)
     }
   }
   // TEMPORARY HACK END
+
+  // Try legacy Go custom labels first, then new Go labels implementation
+  // Must be last since it may not return (it will call send_trace).
+  maybe_add_go_custom_labels_legacy(ctx, record);
+  maybe_add_go_custom_labels(ctx, record);
 
   send_trace(ctx, trace);
 
