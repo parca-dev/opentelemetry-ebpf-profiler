@@ -230,7 +230,6 @@ static inline EBPF_INLINE PerCPURecord *get_pristine_per_cpu_record()
   record->state.return_address             = false;
   record->state.error_metric               = -1;
   record->state.unwind_error               = ERR_OK;
-  record->state.processed_go_labels        = false;
   record->perlUnwindState.stackinfo        = 0;
   record->perlUnwindState.cop              = 0;
   record->pythonUnwindState.py_frame       = 0;
