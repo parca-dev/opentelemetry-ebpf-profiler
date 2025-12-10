@@ -190,6 +190,6 @@ static EBPF_INLINE int go_labels(struct pt_regs *ctx)
   }
 
   send_trace(ctx, &record->trace);
-  return -1;
+  return 0;
 }
 MULTI_USE_FUNC(go_labels)
