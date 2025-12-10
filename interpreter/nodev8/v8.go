@@ -208,6 +208,10 @@ const (
 	// lruMapTypeCacheSize is the LRU size for caching the Map.InstanceType field.
 	lruMapTypeCacheSize = 32
 
+	// lruFileToDebugIDCacheSize is the LRU size for caching file name to debug ID mappings.
+	// Node.js applications (including dependencies) can typically have a large number of JS files.
+	lruFileToDebugIDCacheSize = 128 * 1024
+
 	// The native pointer size in bytes for 64-bit architectures
 	pointerSize = 8
 )
@@ -511,6 +515,15 @@ type v8Instance struct {
 	addrToSource *freelru.LRU[libpf.Address, *v8Source]
 	addrToType   *freelru.LRU[libpf.Address, uint16]
 
+	// fileToDebugID maps JavaScript file paths to their debug IDs (extracted from //# debugId= comment)
+	fileToDebugID *freelru.LRU[libpf.String, libpf.FileID]
+
+	// reporter is used to report executable metadata for JavaScript files with debug IDs
+	reporter reporter.SymbolReporter
+
+	// pid is the process ID, used to access files via /proc/PID/root/ for containerized processes
+	pid libpf.PID
+
 	// mappings is indexed by the Mapping to its generation
 	mappings map[process.Mapping]*uint32
 	// prefixes is indexed by the prefix added to ebpf maps (to be cleaned up) to its generation
@@ -566,8 +579,12 @@ func (i *v8Instance) Detach(ebpf interpreter.EbpfHandler, pid libpf.PID) error {
 }
 
 func (i *v8Instance) SynchronizeMappings(ebpf interpreter.EbpfHandler,
-	_ reporter.SymbolReporter, pr process.Process, mappings []process.Mapping) error {
-	pid := pr.PID()
+	symbolReporter reporter.SymbolReporter, pr process.Process, mappings []process.Mapping,
+) error {
+	i.reporter = symbolReporter
+	i.pid = pr.PID()
+
+	pid := i.pid
 	i.mappingGeneration++
 	for idx := range mappings {
 		m := &mappings[idx]
@@ -785,7 +802,8 @@ func (i *v8Instance) getObjectAddrAndType(taggedPtr libpf.Address) (libpf.Addres
 
 // getTypedObject checks the object's type, and returns its address or error.
 func (i *v8Instance) getTypedObject(taggedPtr libpf.Address, expectedType uint16) (
-	libpf.Address, error) {
+	libpf.Address, error,
+) {
 	addr, tag, err := i.getObjectAddrAndType(taggedPtr)
 	if err != nil {
 		return 0, err
@@ -803,7 +821,8 @@ func (i *v8Instance) readObjectPtr(addr libpf.Address) (libpf.Address, uint16, e
 
 // readTypedObjectPtr reads an object pointer and makes sure it is a HeapObject of expected type
 func (i *v8Instance) readTypedObjectPtr(addr libpf.Address, expectedType uint16) (
-	libpf.Address, error) {
+	libpf.Address, error,
+) {
 	addr, tag, err := i.readObjectPtr(addr)
 	if err != nil {
 		return 0, err
@@ -921,7 +940,8 @@ func (i *v8Instance) getStringPtr(ptr libpf.Address) (libpf.String, error) {
 // analyzeScopeInfo reads and heuristically analyzes V8 ScopeInfo data. It tries to
 // extract the function name, and its start and end line.
 func (i *v8Instance) analyzeScopeInfo(ptr libpf.Address) (name libpf.String,
-	startPos, endPos int) {
+	startPos, endPos int,
+) {
 	vms := &i.d.vmStructs
 	var data libpf.Address
 	if vms.ScopeInfo.HeapObject {
@@ -999,7 +1019,8 @@ func (i *v8Instance) readFixedTable(addr libpf.Address, itemSize, maxItems uint3
 
 // readFixedTablePtr read the data of a FixedArray object.
 func (i *v8Instance) readFixedTablePtr(taggedPtr libpf.Address, tag uint16,
-	itemSize, maxItems uint32) ([]byte, error) {
+	itemSize, maxItems uint32,
+) ([]byte, error) {
 	addr, err := i.readTypedObjectPtr(taggedPtr, tag)
 	if err != nil {
 		return nil, err
@@ -1205,14 +1226,11 @@ func (i *v8Instance) readCode(taggedPtr libpf.Address, cookie uint32, sfi *v8SFI
 	// Read the deoptimization data
 	deoptimizationDataPtr := npsr.Ptr(code, uint(vms.Code.DeoptimizationData))
 	if vms.DeoptimizationData.ProtectedFixedArray {
-		deoptimizationDataPtr, err =
-			i.getTypedObject(deoptimizationDataPtr, vms.Type.ProtectedFixedArray)
+		deoptimizationDataPtr, err = i.getTypedObject(deoptimizationDataPtr, vms.Type.ProtectedFixedArray)
 	} else if vms.DeoptimizationData.TrustedFixedArray {
-		deoptimizationDataPtr, err =
-			i.getTypedObject(deoptimizationDataPtr, vms.Type.TrustedFixedArray)
+		deoptimizationDataPtr, err = i.getTypedObject(deoptimizationDataPtr, vms.Type.TrustedFixedArray)
 	} else {
-		deoptimizationDataPtr, err =
-			i.getTypedObject(deoptimizationDataPtr, vms.Type.FixedArray)
+		deoptimizationDataPtr, err = i.getTypedObject(deoptimizationDataPtr, vms.Type.FixedArray)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("deoptimization data pointer read: %v", err)
@@ -1502,13 +1520,18 @@ func (i *v8Instance) appendFrame(frames *libpf.Frames, sfi *v8SFI, lineNo libpf.
 	if lineNo > sfi.funcStartLine {
 		funcOffset = uint32(lineNo - sfi.funcStartLine)
 	}
+
+	fileName := sfi.source.fileName
+	fileID := i.extractDebugID(fileName)
+
 	frames.Append(&libpf.Frame{
 		Type:           libpf.V8Frame,
 		FunctionName:   sfi.funcName,
-		SourceFile:     sfi.source.fileName,
+		SourceFile:     fileName,
 		SourceLine:     lineNo,
 		SourceColumn:   column,
 		FunctionOffset: funcOffset,
+		FileID:         fileID,
 	})
 }
 
@@ -1516,7 +1539,8 @@ var externalFunctionTag = libpf.Intern("<external-file>")
 
 // generateNativeFrame and conditionally symbolizes a native frame.
 func (i *v8Instance) generateNativeFrame(sourcePos sourcePosition, sfi *v8SFI,
-	frames *libpf.Frames) {
+	frames *libpf.Frames,
+) {
 	if sourcePos.isExternal() {
 		frames.Append(&libpf.Frame{
 			Type:         libpf.V8Frame,
@@ -1659,7 +1683,8 @@ func (i *v8Instance) symbolizeBaselineCode(code *v8Code, delta uint32, frames *l
 
 // symbolizeCode symbolizes and records to a trace a Code based frame.
 func (i *v8Instance) symbolizeCode(code *v8Code, delta uint64, returnAddress bool,
-	frames *libpf.Frames) error {
+	frames *libpf.Frames,
+) error {
 	var err error
 	sfi := code.sfi
 	delta &= support.V8LineDeltaMask
@@ -1780,7 +1805,8 @@ func mapFramePointerOffset(relBytes uint8) uint8 {
 }
 
 func (d *v8Data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Address,
-	rm remotememory.RemoteMemory) (interpreter.Instance, error) {
+	rm remotememory.RemoteMemory,
+) (interpreter.Instance, error) {
 	vms := &d.vmStructs
 	data := support.V8ProcInfo{
 		Version: d.version,
@@ -1839,17 +1865,23 @@ func (d *v8Data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Add
 	if err != nil {
 		return nil, err
 	}
+	fileToDebugID, err := freelru.New[libpf.String, libpf.FileID](lruFileToDebugIDCacheSize,
+		libpf.StringHashCRC32)
+	if err != nil {
+		return nil, err
+	}
 
 	return &v8Instance{
-		d:            d,
-		rm:           rm,
-		mappings:     make(map[process.Mapping]*uint32),
-		prefixes:     make(map[lpm.Prefix]*uint32),
-		addrToString: addrToString,
-		addrToCode:   addrToCode,
-		addrToSFI:    addrToSFI,
-		addrToSource: addrToSource,
-		addrToType:   addrToType,
+		d:             d,
+		rm:            rm,
+		mappings:      make(map[process.Mapping]*uint32),
+		prefixes:      make(map[lpm.Prefix]*uint32),
+		addrToString:  addrToString,
+		addrToCode:    addrToCode,
+		addrToSFI:     addrToSFI,
+		addrToSource:  addrToSource,
+		addrToType:    addrToType,
+		fileToDebugID: fileToDebugID,
 	}, nil
 }
 
