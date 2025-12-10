@@ -185,6 +185,7 @@ static EBPF_INLINE int go_labels(struct pt_regs *ctx)
     }
   }
 
+  record->state.processed_go_labels = true;
   tail_call(ctx, PROG_UNWIND_STOP);
   return -1;
 }
