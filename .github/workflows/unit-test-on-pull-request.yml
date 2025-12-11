@@ -243,7 +243,7 @@ jobs:
     timeout-minutes: 15
     strategy:
       matrix:
-        kernel:
+        include:
           - { target_arch: amd64, kernel: 5.4.276 }
           - { target_arch: amd64, kernel: 5.10.217 }
           - { target_arch: amd64, kernel: 5.15.159 }
