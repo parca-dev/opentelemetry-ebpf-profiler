@@ -22,7 +22,6 @@ type data struct {
 // instance represents a per-PID instance of the dlopen interpreter
 type instance struct {
 	interpreter.InstanceStubs
-	lc interpreter.LinkCloser
 }
 
 // Loader detects if the ELF file contains the dlopen symbol in its dynamic symbol table
@@ -37,7 +36,6 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 	// Look for the dlopen symbol in the dynamic symbol table
 	sym, err := ef.LookupSymbol("dlopen")
 	if err != nil || sym == nil {
-		// No dlopen symbol found, this library doesn't support dynamic loading
 		return nil, nil
 	}
 

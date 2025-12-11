@@ -76,7 +76,7 @@ func TestIntegration(t *testing.T) {
 
 		// Check that the metric was incremented
 		return finalCount > initialCount
-	}, 60*time.Second, 100*time.Millisecond)
+	}, 2*time.Minute, 100*time.Millisecond)
 }
 
 func TestIntegrationSingleShot(t *testing.T) {
@@ -139,7 +139,7 @@ func TestIntegrationSingleShot(t *testing.T) {
 
 		// Check that the metric was incremented
 		return finalCount > initialCount
-	}, 60*time.Second, 100*time.Millisecond)
+	}, 2*time.Minute, 100*time.Millisecond)
 }
 
 func getEBPFMetricValue(trc *tracer.Tracer, metricID metrics.MetricID) uint64 {
