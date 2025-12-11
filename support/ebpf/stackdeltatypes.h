@@ -26,6 +26,8 @@
 #define UNWIND_COMMAND_SIGNAL        3
 // Unwind using standard frame pointer
 #define UNWIND_COMMAND_FRAME_POINTER 4
+// Unwind past the Go runtime.morestack function
+#define UNWIND_COMMAND_GO_MORESTACK  5
 
 // If opcode has UNWIND_OPCODEF_DEREF set, the lowest bits of 'param' are used
 // as second adder as post-deref operation. This contains the mask for that.

@@ -357,8 +357,9 @@ static EBPF_INLINE u64 unwind_register_address(UnwindState *state, u64 cfa, u8 o
 // is marked with UNWIND_COMMAND_STOP which marks entry points (main function,
 // thread spawn function, signal handlers, ...).
 #if defined(__x86_64__)
-static EBPF_INLINE ErrorCode unwind_one_frame(UnwindState *state, bool *stop)
+static EBPF_INLINE ErrorCode unwind_one_frame(PerCPURecord *record, bool *stop)
 {
+  UnwindState *state = &record->state;
   *stop = false;
 
   u32 unwindInfo = 0;
@@ -408,6 +409,11 @@ static EBPF_INLINE ErrorCode unwind_one_frame(UnwindState *state, bool *stop)
         goto err_native_pc_read;
       }
       goto frame_ok;
+    case UNWIND_COMMAND_GO_MORESTACK:
+      if (!unwinder_unwind_go_morestack(record)) {
+        goto err_native_pc_read;
+      }
+      goto frame_ok;
     default: return ERR_UNREACHABLE;
     }
   } else {
@@ -451,8 +457,9 @@ frame_ok:
   return ERR_OK;
 }
 #elif defined(__aarch64__)
-static EBPF_INLINE ErrorCode unwind_one_frame(struct UnwindState *state, bool *stop)
+static EBPF_INLINE ErrorCode unwind_one_frame(struct PerCPURecord *record, bool *stop)
 {
+  UnwindState *state = &record->state;
   *stop = false;
 
   u32 unwindInfo = 0;
@@ -497,6 +504,11 @@ static EBPF_INLINE ErrorCode unwind_one_frame(struct UnwindState *state, bool *s
         goto err_native_pc_read;
       }
       goto frame_ok;
+    case UNWIND_COMMAND_GO_MORESTACK:
+      if (!unwinder_unwind_go_morestack(record)) {
+        goto err_native_pc_read;
+      }
+      goto frame_ok;      
     default: return ERR_UNREACHABLE;
     }
   }
@@ -618,7 +630,7 @@ static EBPF_INLINE int unwind_native(struct pt_regs *ctx)
 
     // Unwind the native frame using stack deltas. Stop if no next frame.
     bool stop;
-    error = unwind_one_frame(&record->state, &stop);
+    error = unwind_one_frame(record, &stop);
     if (error || stop) {
       break;
     }

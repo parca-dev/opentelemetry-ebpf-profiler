@@ -60,6 +60,13 @@ var UnwindInfoLR = UnwindInfo{
 	FPOpcode: support.UnwindOpcodeBaseLR,
 }
 
+// UnwindInfoGoMorestack contains the description to unwind past the Go
+// "runtime.morestack" function.
+var UnwindInfoGoMorestack = UnwindInfo{
+	Opcode: support.UnwindOpcodeCommand,
+	Param: support.UnwindCommandGoMorestack,
+}
+
 // StackDelta defines the start address for the delta interval, along with
 // the unwind information.
 type StackDelta struct {
