@@ -281,7 +281,7 @@ jobs:
         run: |
           cd test/distro-qemu
           ./download-kernel.sh ${{ matrix.kernel }}
-      - name: Run RTLD tests in QEMU
+      - name: Run Full Distro tests in QEMU
         run: |
           cd test/distro-qemu
           ./build-and-run.sh ${{ matrix.kernel }}
