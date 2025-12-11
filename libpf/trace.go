@@ -19,6 +19,8 @@ type Frame struct {
 	SourceFile String
 	// SourceLine is the source code level line number of this frame.
 	SourceLine SourceLineno
+	// SourceColumn is the source code level column number of this frame.
+	SourceColumn SourceColumn
 
 	// Calculated executable FileID for the backing mapping file.
 	FileID FileID
