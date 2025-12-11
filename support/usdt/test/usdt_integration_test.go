@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
 	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
+	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
 type mockIntervals struct{}
@@ -36,21 +37,25 @@ func (mockReporter) ExecutableMetadata(_ *reporter.ExecutableMetadataArgs) {}
 
 // testSetup encapsulates all the common test setup
 type testSetup struct {
-	t            *testing.T
-	testBinary   string
-	testProbes   map[string]pfelf.USDTProbe
-	probeList    []pfelf.USDTProbe
-	tracer       *tracer.Tracer
-	ebpfHandler  interpreter.EbpfHandler
-	resultsMap   *cebpf.Map
-	ctx          context.Context
-	cancelFunc   context.CancelFunc
+	t           *testing.T
+	testBinary  string
+	testProbes  map[string]pfelf.USDTProbe
+	probeList   []pfelf.USDTProbe
+	tracer      *tracer.Tracer
+	ebpfHandler interpreter.EbpfHandler
+	resultsMap  *cebpf.Map
+	ctx         context.Context
+	cancelFunc  context.CancelFunc
 }
 
 // setupTest performs all common initialization for USDT integration tests
 func setupTest(t *testing.T) *testSetup {
 	if os.Getuid() != 0 {
 		t.Skip("This test requires root privileges to load eBPF programs")
+	}
+
+	if !util.HasBpfGetAttachCookie() {
+		t.Skip("This test requires kernel support for bpf_get_attach_cookie")
 	}
 
 	// Get the test binary path
@@ -218,14 +223,14 @@ func TestUSDTProbeWithEBPFSingle(t *testing.T) {
 
 	// Individual program names for each probe
 	progNames := []string{
-		"usdt_simple_probe",
-		"usdt_memory_probe",
-		"usdt_const_probe",
-		"usdt_mixed_probe",
-		"usdt_int32_args",
-		"usdt_int64_args",
-		"usdt_mixed_refs",
-		"usdt_uint8_args",
+		"simple_probe",
+		"memory_probe",
+		"const_probe",
+		"mixed_probe",
+		"int32_args",
+		"int64_args",
+		"mixed_refs",
+		"uint8_args",
 	}
 
 	// Attach USDT probes with individual programs
@@ -237,12 +242,11 @@ func TestUSDTProbeWithEBPFSingle(t *testing.T) {
 		setup.probeList,
 		nil, // no user cookies, just spec IDs
 		progNames,
-		false, // attach to current PID only
 	)
 	if err != nil {
 		t.Fatalf("failed to attach USDT probes: %v", err)
 	}
-	defer lc.Detach()
+	defer lc.Unload()
 
 	// Log what was attached
 	for i, probe := range setup.probeList {
@@ -260,6 +264,10 @@ func TestUSDTProbeWithEBPFMulti(t *testing.T) {
 	setup := setupTest(t)
 	defer setup.cleanup()
 
+	if !util.HasMultiUprobeSupport() {
+		t.Skip("This test requires kernel support for uprobe multi-attach")
+	}
+
 	// Use probe IDs (1-8) as cookies for dispatch in the multi-probe program
 	cookies := []uint64{1, 2, 3, 4, 5, 6, 7, 8}
 
@@ -272,12 +280,11 @@ func TestUSDTProbeWithEBPFMulti(t *testing.T) {
 		setup.probeList,
 		cookies, // cookies for dispatch (probe IDs 1-8)
 		nil,     // no individual programs
-		false,   // attach to current PID only
 	)
 	if err != nil {
 		t.Fatalf("failed to attach USDT probes: %v", err)
 	}
-	defer lc.Detach()
+	defer lc.Unload()
 
 	// Log what was attached
 	t.Logf("Attached multi-probe program usdt_test_multi to %d probes", len(setup.probeList))

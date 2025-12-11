@@ -5,6 +5,7 @@ package util // import "go.opentelemetry.io/ebpf-profiler/util"
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"math/bits"
 	"strings"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/asm"
+	"github.com/cilium/ebpf/link"
 	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/ebpf-profiler/libpf/hash"
 	"golang.org/x/sys/unix"
@@ -106,6 +108,9 @@ var (
 	// multiUprobeSupportCache caches the result of probing for multi-uprobe support
 	multiUprobeSupportOnce   sync.Once
 	multiUprobeSupportCached bool
+	// bpfGetAttachCookieCache caches the result of probing for bpf_get_attach_cookie support
+	bpfGetAttachCookieOnce   sync.Once
+	bpfGetAttachCookieCached bool
 )
 
 // SetTestOnlyMultiUprobeSupport overrides HasMultiUprobeSupport for testing.
@@ -145,10 +150,99 @@ func probeBpfGetAttachCookie() bool {
 	return true
 }
 
+// HasBpfGetAttachCookie checks if the kernel supports the bpf_get_attach_cookie helper.
+// This function uses a cached, once-calculated value for performance.
+//
+// Note: This function requires CAP_BPF or CAP_SYS_ADMIN capabilities to load the probe
+// program. The profiler should already have these privileges.
+func HasBpfGetAttachCookie() bool {
+	bpfGetAttachCookieOnce.Do(func() {
+		bpfGetAttachCookieCached = probeBpfGetAttachCookie()
+	})
+
+	return bpfGetAttachCookieCached
+}
+
+// probeBpfUprobeMultiLink probes for uprobe_multi link support by attempting to create
+// an invalid uprobe_multi link. This is modeled after libbpf's probe_uprobe_multi_link.
+//
+// The probe works in two steps:
+// 1. Try to create a link to "/" (invalid binary) which should fail with EBADF if supported
+// 2. Verify PID filtering works correctly by testing with pid=-1 (should fail with EINVAL)
+//
+// The second check is important because early kernel versions had broken PID filtering
+// (they did thread filtering instead of process filtering).
+func probeBpfUprobeMultiLink() bool {
+	// Create a minimal program with BPF_TRACE_UPROBE_MULTI expected attach type
+	insns := asm.Instructions{
+		asm.Mov.Imm(asm.R0, 0),
+		asm.Return(),
+	}
+
+	spec := &ebpf.ProgramSpec{
+		Type:         ebpf.Kprobe,
+		Instructions: insns,
+		License:      "GPL",
+		AttachType:   ebpf.AttachTraceUprobeMulti,
+		AttachTo:     "",
+	}
+
+	prog, err := ebpf.NewProgramWithOptions(spec, ebpf.ProgramOptions{
+		LogDisabled: true,
+	})
+	if err != nil {
+		return false
+	}
+	defer func() {
+		if err := prog.Close(); err != nil {
+			log.Warnf("Failed to close probe program: %v", err)
+		}
+	}()
+
+	// Creating uprobe in '/' binary should fail with EBADF if uprobe_multi is supported
+	ex, err := link.OpenExecutable("/")
+	if err != nil {
+		return false
+	}
+
+	offset := uint64(0)
+	opts := &link.UprobeMultiOptions{
+		Addresses: []uint64{offset},
+	}
+
+	lnk, err := ex.UprobeMulti(nil, prog, opts)
+	if err == nil {
+		// Unexpectedly succeeded, clean up and return false
+		_ = lnk.Close()
+		return false
+	}
+	// Check if we got EBADF (expected error for invalid binary with uprobe_multi support)
+	if !errors.Is(err, unix.EBADF) {
+		return false
+	}
+
+	// Verify PID filtering works correctly. Initial multi-uprobe support in kernel
+	// didn't handle PID filtering correctly (it was doing thread filtering, not process
+	// filtering). We need to be conservative here because multi-uprobe selection happens
+	// early at load time, while the use of PID filtering is known late at attachment time.
+	//
+	// Creating uprobe with pid == -1 (invalid PID) for '/' binary should fail with EINVAL
+	// on kernels with fixed PID filtering logic; otherwise ESRCH or EBADF would be returned.
+	opts.PID = ^uint32(0) // -1 as unsigned
+	lnk, err = ex.UprobeMulti(nil, prog, opts)
+	if err == nil {
+		// Unexpectedly succeeded, clean up and return false
+		_ = lnk.Close()
+		return false
+	}
+
+	// We expect EINVAL for invalid PID on kernels with proper PID filtering
+	return errors.Is(err, unix.EINVAL)
+}
+
 // HasMultiUprobeSupport checks if the kernel supports uprobe multi-attach.
 // Multi-uprobes are needed because single-shot uprobes don't work for shared libraries.
-// This function probes for bpf_get_attach_cookie support, which is required for
-// multi-uprobes and was introduced alongside them in kernel 6.6.
+// This function probes for uprobe_multi link support, which was introduced in kernel 6.6.
 //
 // Note: This function requires CAP_BPF or CAP_SYS_ADMIN capabilities to load the probe
 // program. The profiler should already have these privileges.
@@ -158,7 +252,7 @@ func HasMultiUprobeSupport() bool {
 	}
 
 	multiUprobeSupportOnce.Do(func() {
-		multiUprobeSupportCached = probeBpfGetAttachCookie()
+		multiUprobeSupportCached = probeBpfUprobeMultiLink()
 	})
 
 	return multiUprobeSupportCached

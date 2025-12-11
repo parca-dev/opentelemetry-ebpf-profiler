@@ -14,6 +14,16 @@ CACHE_DIR="${CACHE_DIR:-/tmp/debootstrap-cache}"
 echo "Building rootfs with $DISTRO $RELEASE..."
 
 # Clean up previous builds
+# First, unmount any leftover mounts from previous debootstrap runs
+if [ -d "$ROOTFS_DIR" ]; then
+    echo "Cleaning up any mounted filesystems in $ROOTFS_DIR..."
+    # Find all mount points under ROOTFS_DIR and unmount them in reverse order (deepest first)
+    findmnt -o TARGET -n -l | grep "^$(pwd)/$ROOTFS_DIR" | sort -r | while read -r mountpoint; do
+        echo "  Unmounting $mountpoint"
+        sudo umount "$mountpoint" || sudo umount -l "$mountpoint" || true
+    done
+fi
+
 sudo rm -rf "$ROOTFS_DIR" "$OUTPUT_DIR"
 mkdir -p "$ROOTFS_DIR" "$OUTPUT_DIR" "$CACHE_DIR"
 
@@ -85,11 +95,16 @@ if [[ "${USE_DOCKER}" == "1" ]] && command -v docker &> /dev/null; then
                  wget -q https://go.dev/dl/go1.24.7.linux-${GOARCH}.tar.gz && \
                  tar -C /usr/local -xzf go1.24.7.linux-${GOARCH}.tar.gz && \
                  export PATH=/usr/local/go/bin:\$PATH && \
-                 CGO_ENABLED=1 go test -c ../../interpreter/rtld ../../support/usdt"
+                 CGO_ENABLED=1 go test -c ../../interpreter/rtld ../../support/usdt/test"
 else
     # Local build with cross-compilation if needed
     echo "Building locally for ${GOARCH}..."
-    CGO_ENABLED=1 GOARCH=${GOARCH} go test -c ../../interpreter/rtld ../../support/usdt
+    if [ "$GOARCH" = "arm64" ]; then
+        # Cross-compile for ARM64 using aarch64-linux-gnu-gcc
+        CGO_ENABLED=1 GOARCH=${GOARCH} CC=aarch64-linux-gnu-gcc go test -c ../../interpreter/rtld ../../support/usdt/test
+    else
+        CGO_ENABLED=1 GOARCH=${GOARCH} go test -c ../../interpreter/rtld ../../support/usdt/test
+    fi
 fi
 
 # Copy test binary into rootfs
@@ -129,7 +144,7 @@ export DEBUG_TEST=1
 
 # Run the tests
 echo ""
-/rtld.test -test.v && /usdt.test -test.v
+/rtld.test -test.v && /test.test -test.v
 RESULT=$?
 
 if [ $RESULT -eq 0 ]; then
@@ -204,7 +219,8 @@ echo ""
 echo "===== Starting QEMU with kernel ${KERNEL_VERSION} on ${QEMU_ARCH} ====="
 echo ""
 
-# Run QEMU
+# Run QEMU and capture output
+QEMU_OUTPUT=$(mktemp)
 ${sudo} qemu-system-${QEMU_ARCH} ${additionalQemuArgs} \
     -nographic \
     -monitor none \
@@ -214,15 +230,28 @@ ${sudo} qemu-system-${QEMU_ARCH} ${additionalQemuArgs} \
     -initrd "$OUTPUT_DIR/initramfs.gz" \
     -append "${CONSOLE_ARG} init=/init quiet loglevel=3" \
     -no-reboot \
-    -display none
+    -display none \
+    | tee "$QEMU_OUTPUT"
 
-EXIT_CODE=$?
-
-# QEMU with sysrq poweroff returns 0 on clean shutdown
-if [ $EXIT_CODE -eq 0 ]; then
+# Parse output for test result
+if grep -q "===== TEST PASSED =====" "$QEMU_OUTPUT"; then
+    rm -f "$QEMU_OUTPUT"
+    echo ""
     echo "✅ Test completed successfully"
     exit 0
+elif grep -q "===== TEST FAILED" "$QEMU_OUTPUT"; then
+    rm -f "$QEMU_OUTPUT"
+    echo ""
+    echo "❌ Test failed"
+    exit 1
+elif grep -q "===== TEST TIMED OUT =====" "$QEMU_OUTPUT"; then
+    rm -f "$QEMU_OUTPUT"
+    echo ""
+    echo "❌ Test timed out"
+    exit 124
 else
-    echo "❌ Test failed with QEMU exit code $EXIT_CODE"
-    exit $EXIT_CODE
+    rm -f "$QEMU_OUTPUT"
+    echo ""
+    echo "❌ Could not determine test result (QEMU may have crashed)"
+    exit 2
 fi

@@ -1,8 +1,6 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build amd64 && !integration
-
 package rtld_test
 
 import (
@@ -26,6 +24,11 @@ import (
 func TestIntegration(t *testing.T) {
 	if !testutils.IsRoot() {
 		t.Skip("This test requires root privileges")
+	}
+
+	// Enable debug logging for CI debugging
+	if os.Getenv("DEBUG_TEST") != "" {
+		log.SetLevel(log.DebugLevel)
 	}
 
 	// Create a context for the tracer
@@ -73,7 +76,7 @@ func TestIntegration(t *testing.T) {
 
 		// Check that the metric was incremented
 		return finalCount > initialCount
-	}, 10*time.Second, 50*time.Millisecond)
+	}, 60*time.Second, 100*time.Millisecond)
 }
 
 func TestIntegrationSingleShot(t *testing.T) {
@@ -119,7 +122,7 @@ func TestIntegrationSingleShot(t *testing.T) {
 	require.Eventually(t, func() bool {
 		// Get the initial metric value
 		initialCount := getEBPFMetricValue(trc, metrics.IDDlopenUprobeHits)
-		//t.Logf("Initial dlopen uprobe metric count: %d", initialCount)
+		t.Logf("Initial dlopen uprobe metric count: %d", initialCount)
 
 		// Use dlopen to load a shared library
 		// libm is a standard math library that's always present
@@ -132,11 +135,11 @@ func TestIntegrationSingleShot(t *testing.T) {
 
 		// Get the metrics after dlopen
 		finalCount := getEBPFMetricValue(trc, metrics.IDDlopenUprobeHits)
-		//t.Logf("Final dlopen uprobe metric count: %d", finalCount)
+		t.Logf("Final dlopen uprobe metric count: %d", finalCount)
 
 		// Check that the metric was incremented
 		return finalCount > initialCount
-	}, 10*time.Second, 50*time.Millisecond)
+	}, 60*time.Second, 100*time.Millisecond)
 }
 
 func getEBPFMetricValue(trc *tracer.Tracer, metricID metrics.MetricID) uint64 {

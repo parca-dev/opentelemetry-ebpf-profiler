@@ -143,12 +143,19 @@ func LoadMaps(ctx context.Context, maps map[string]*cebpf.Map,
 }
 
 type linkCloser struct {
-	detachLink    []link.Link
-	unloadLink    link.Link
-	detachSpecIDs []uint32       // spec IDs to delete when detach happens
-	unloadSpecIDs []uint32       // spec IDs to delete when unload happens
-	specMap       *cebpf.Map     // reference to the spec map for cleanup
+	//detachLink    []link.Link
+	unloadLink []link.Link
+	//detachSpecIDs []uint32   // spec IDs to delete when detach happens
+	unloadSpecIDs []uint32   // spec IDs to delete when unload happens
+	specMap       *cebpf.Map // reference to the spec map for cleanup
 }
+
+// IsPIDAttached indicates if the LinkCloser is attached to a specific PID.
+// Non-pid attached links can and should be re-used.
+// func (lc *linkCloser) IsPIDAttached() bool {
+// 	// TODO: do any old kernels need this...
+// 	return false
+// }
 
 // populateUSDTSpecMaps parses USDT probe arguments and populates the BPF spec maps.
 // It returns the assigned spec IDs for each probe.
@@ -188,36 +195,39 @@ func populateUSDTSpecMaps(probes []pfelf.USDTProbe, specMap *cebpf.Map, startSpe
 	return specIDs, nil
 }
 
-func (lc *linkCloser) Detach() error {
-	var errs []error
-	if lc.detachLink != nil {
-		for _, l := range lc.detachLink {
-			if err := l.Close(); err != nil {
-				errs = append(errs, err)
-			}
-		}
-	}
-	// Clean up spec IDs associated with detach
-	if lc.specMap != nil && len(lc.detachSpecIDs) > 0 {
-		for _, specID := range lc.detachSpecIDs {
-			if specID != 0 {
-				if err := lc.specMap.Delete(&specID); err != nil {
-					log.Debugf("Failed to delete spec ID %d from map: %v", specID, err)
+/*
+	func (lc *linkCloser) Detach() error {
+		var errs []error
+		if lc.detachLink != nil {
+			for _, l := range lc.detachLink {
+				if err := l.Close(); err != nil {
 					errs = append(errs, err)
-				} else {
-					log.Debugf("Deleted spec ID %d from map during detach", specID)
 				}
 			}
 		}
+		// Clean up spec IDs associated with detach
+		if lc.specMap != nil && len(lc.detachSpecIDs) > 0 {
+			for _, specID := range lc.detachSpecIDs {
+				if specID != 0 {
+					if err := lc.specMap.Delete(&specID); err != nil {
+						log.Debugf("Failed to delete spec ID %d from map: %v", specID, err)
+						errs = append(errs, err)
+					} else {
+						log.Debugf("Deleted spec ID %d from map during detach", specID)
+					}
+				}
+			}
+		}
+		return errors.Join(errs...)
 	}
-	return errors.Join(errs...)
-}
-
+*/
 func (lc *linkCloser) Unload() error {
 	var errs []error
 	if lc.unloadLink != nil {
-		if err := lc.unloadLink.Close(); err != nil {
-			errs = append(errs, err)
+		for _, l := range lc.unloadLink {
+			if err := l.Close(); err != nil {
+				errs = append(errs, err)
+			}
 		}
 	}
 	// Clean up spec IDs associated with unload
@@ -238,8 +248,7 @@ func (lc *linkCloser) Unload() error {
 
 // AttachUSDTProbes allows interpreters to attach to usdt probes.
 func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName string,
-	probes []pfelf.USDTProbe, cookies []uint64, singleProgNames []string,
-	probeAll bool) (interpreter.LinkCloser, error) {
+	probes []pfelf.USDTProbe, cookies []uint64, singleProgNames []string) (interpreter.LinkCloser, error) {
 	containerPath := fmt.Sprintf("/proc/%d/root/%s", pid, path)
 
 	// TODO: This will crack open the exe with debug.elf and read symbols, we should
@@ -318,6 +327,9 @@ func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName st
 
 	useMulti := util.HasMultiUprobeSupport()
 
+	// Determine PID for attachment
+	attachPID := 0
+
 	// If multiProgName is empty or multi-probe not supported, use individual programs (one per probe)
 	if multiProgName == "" || !useMulti {
 		if singleProgNames == nil {
@@ -358,7 +370,7 @@ func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName st
 			uprobeOpts := &link.UprobeOptions{
 				Address:      probe.Location,
 				RefCtrOffset: probe.SemaphoreOffset,
-				PID:          int(pid),
+				PID:          int(attachPID),
 			}
 
 			// Set cookie if provided
@@ -381,8 +393,8 @@ func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName st
 
 		log.Infof("Attached %d individual probes to %s in PID %d", len(links), path, pid)
 		return &linkCloser{
-			detachLink:    links,
-			detachSpecIDs: specIDs,
+			unloadLink:    links,
+			unloadSpecIDs: specIDs,
 			specMap:       impl.usdtSpecsMap,
 		}, nil
 	}
@@ -399,12 +411,6 @@ func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName st
 		return nil, errors.New("attaching multiple probes requires multi support (kernel 6.6+)")
 	}
 
-	// Determine PID for attachment
-	attachPID := int(pid)
-	if probeAll {
-		attachPID = 0 // 0 means all processes
-	}
-
 	// Single probe with single program - use single uprobe
 	if len(probes) == 1 {
 		uprobeOpts := &link.UprobeOptions{
@@ -412,7 +418,7 @@ func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName st
 			RefCtrOffset: probes[0].SemaphoreOffset,
 			PID:          attachPID,
 		}
-		if finalCookies != nil && len(finalCookies) > 0 {
+		if len(finalCookies) > 0 {
 			uprobeOpts.Cookie = finalCookies[0]
 		}
 
@@ -423,7 +429,7 @@ func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName st
 		}
 		log.Infof("Attached probe %s to usdt %s in PID %d", multiProgName, path, pid)
 		return &linkCloser{
-			unloadLink:    l,
+			unloadLink:    []link.Link{l},
 			unloadSpecIDs: specIDs,
 			specMap:       impl.usdtSpecsMap,
 		}, nil
@@ -448,7 +454,7 @@ func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName st
 
 	log.Infof("Attached probe %s to usdt %s in PID %d", multiProgName, path, pid)
 	return &linkCloser{
-		unloadLink:    lnk,
+		unloadLink:    []link.Link{lnk},
 		unloadSpecIDs: specIDs,
 		specMap:       impl.usdtSpecsMap,
 	}, nil
@@ -519,27 +525,38 @@ func (impl *ebpfMapsImpl) AttachUprobe(pid libpf.PID, path string, offset uint64
 		impl.userProgs = make(map[string]*cebpf.Program)
 	}
 
+	useMulti := util.HasMultiUprobeSupport()
 	// Load the program if not already loaded
 	prog := impl.userProgs[progName]
 	if prog == nil {
-		if loadErr := impl.loadUSDTProgram(progName, false); loadErr != nil {
+		if loadErr := impl.loadUSDTProgram(progName, useMulti); loadErr != nil {
 			return nil, loadErr
 		}
 		prog = impl.userProgs[progName]
 	}
 
-	// Attach the uprobe
-	lnk, err := exe.Uprobe("", prog, &link.UprobeOptions{
-		Address: offset,
-		PID:     int(pid),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to attach uprobe to %s at offset 0x%x: %w",
-			path, offset, err)
+	var lnk link.Link
+	if useMulti {
+		// Attach uprobe with multi support
+		lnk, err = exe.UprobeMulti([]string{progName}, prog, &link.UprobeMultiOptions{
+			Addresses: []uint64{offset},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to attach uprobe-multi to %s at offset 0x%x: %w",
+				path, offset, err)
+		}
+	} else {
+		// Attach the uprobe
+		lnk, err = exe.Uprobe("", prog, &link.UprobeOptions{
+			Address: offset,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to attach uprobe to %s at offset 0x%x: %w",
+				path, offset, err)
+		}
 	}
-
 	log.Infof("Attached uprobe %s to %s at offset 0x%x in PID %d", progName, path, offset, pid)
-	return &linkCloser{detachLink: []link.Link{lnk}}, nil
+	return &linkCloser{unloadLink: []link.Link{lnk}}, nil
 }
 
 func (impl *ebpfMapsImpl) CoredumpTest() bool {
