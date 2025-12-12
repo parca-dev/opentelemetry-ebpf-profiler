@@ -242,12 +242,11 @@ func TestUSDTProbeWithEBPFSingle(t *testing.T) {
 		setup.probeList,
 		nil, // no user cookies, just spec IDs
 		progNames,
-		false, // attach to current PID only
 	)
 	if err != nil {
 		t.Fatalf("failed to attach USDT probes: %v", err)
 	}
-	defer lc.Detach()
+	defer lc.Unload()
 
 	// Log what was attached
 	for i, probe := range setup.probeList {
@@ -281,12 +280,11 @@ func TestUSDTProbeWithEBPFMulti(t *testing.T) {
 		setup.probeList,
 		cookies, // cookies for dispatch (probe IDs 1-8)
 		nil,     // no individual programs
-		false,   // attach to current PID only
 	)
 	if err != nil {
 		t.Fatalf("failed to attach USDT probes: %v", err)
 	}
-	defer lc.Detach()
+	defer lc.Unload()
 
 	// Log what was attached
 	t.Logf("Attached multi-probe program usdt_test_multi to %d probes", len(setup.probeList))
