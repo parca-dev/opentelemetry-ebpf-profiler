@@ -208,7 +208,8 @@ func probeBpfUprobeMultiLink() bool {
 }
 
 // HasMultiUprobeSupport checks if the kernel supports uprobe multi-attach.
-// Multi-uprobes are needed because single-shot uprobes don't work for shared libraries.
+// Multi-uprobes allow attaching one BPF program to multiple probe points with a single syscall,
+// which is more efficient than individual uprobe attachments.
 // This function probes for uprobe_multi link support, which was introduced in kernel 6.6.
 //
 // Note: This function requires CAP_BPF or CAP_SYS_ADMIN capabilities to load the probe
