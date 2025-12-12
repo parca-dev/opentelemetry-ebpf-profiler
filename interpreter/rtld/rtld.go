@@ -73,7 +73,6 @@ func (d *data) Unload(_ interpreter.EbpfHandler) {
 		if err := d.lc.Unload(); err != nil {
 			log.Errorf("[dlopen] Failed to unload uprobe link: %v", err)
 		}
-		d.lc = nil
 	}
-	log.Debugf("[dlopen] Unloaded uprobe for %s", d.path)
+	log.Infof("[dlopen] Unloaded uprobe for %s", d.path)
 }

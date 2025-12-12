@@ -334,7 +334,7 @@ func (i *Instance) Symbolize(f *host.Frame, frames *libpf.Frames) error {
 
 func (d *data) Unload(ebpf interpreter.EbpfHandler) {
 	if d.link != nil {
-		log.Debugf("[cuda] parcagpu USDT probes closed for %s", d.path)
+		log.Infof("[cuda] parcagpu USDT probes closed for %s", d.path)
 		if err := d.link.Unload(); err != nil {
 			log.Errorf("error closing cuda usdt link: %s", err)
 		}

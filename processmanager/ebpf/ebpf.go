@@ -200,7 +200,7 @@ func (lc *linkCloser) Unload() error {
 		for _, specID := range lc.unloadSpecIDs {
 			if specID != 0 {
 				if err := lc.specMap.Delete(&specID); err != nil {
-					log.Debugf("Failed to delete spec ID %d from map: %v", specID, err)
+					log.Warnf("Failed to delete spec ID %d from map: %v", specID, err)
 					errs = append(errs, err)
 				} else {
 					log.Debugf("Deleted spec ID %d from map during unload", specID)
@@ -387,7 +387,6 @@ func (impl *ebpfMapsImpl) loadUSDTProgram(progName string, useMulti bool) error 
 	defer restoreRlimit()
 
 	if useMulti {
-		log.Infof("Loading USDT multi-probe program %s", progName)
 		progSpec.AttachType = cebpf.AttachTraceUprobeMulti
 	}
 
