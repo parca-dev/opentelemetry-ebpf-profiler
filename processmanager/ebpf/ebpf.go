@@ -177,7 +177,7 @@ func populateUSDTSpecMaps(probes []pfelf.USDTProbe, specMap *cebpf.Map, startSpe
 		specIDs[i] = specID
 
 		// Store the spec in the map
-		if err := specMap.Put(&specID, pfelf.USDTSpecToBytes(spec)); err != nil {
+		if err := specMap.Put(unsafe.Pointer(&specID), pfelf.USDTSpecToBytes(spec)); err != nil {
 			return nil, fmt.Errorf("failed to store USDT spec for %s:%s: %w",
 				probe.Provider, probe.Name, err)
 		}
@@ -199,7 +199,7 @@ func (lc *linkCloser) Unload() error {
 	if lc.specMap != nil && len(lc.unloadSpecIDs) > 0 {
 		for _, specID := range lc.unloadSpecIDs {
 			if specID != 0 {
-				if err := lc.specMap.Delete(&specID); err != nil {
+				if err := lc.specMap.Delete(unsafe.Pointer(&specID)); err != nil {
 					log.Warnf("Failed to delete spec ID %d from map: %v", specID, err)
 					errs = append(errs, err)
 				} else {
