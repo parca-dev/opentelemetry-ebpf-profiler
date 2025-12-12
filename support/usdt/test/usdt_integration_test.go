@@ -21,6 +21,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
 	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
+	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
 type mockIntervals struct{}
@@ -36,21 +37,25 @@ func (mockReporter) ExecutableMetadata(_ *reporter.ExecutableMetadataArgs) {}
 
 // testSetup encapsulates all the common test setup
 type testSetup struct {
-	t            *testing.T
-	testBinary   string
-	testProbes   map[string]pfelf.USDTProbe
-	probeList    []pfelf.USDTProbe
-	tracer       *tracer.Tracer
-	ebpfHandler  interpreter.EbpfHandler
-	resultsMap   *cebpf.Map
-	ctx          context.Context
-	cancelFunc   context.CancelFunc
+	t           *testing.T
+	testBinary  string
+	testProbes  map[string]pfelf.USDTProbe
+	probeList   []pfelf.USDTProbe
+	tracer      *tracer.Tracer
+	ebpfHandler interpreter.EbpfHandler
+	resultsMap  *cebpf.Map
+	ctx         context.Context
+	cancelFunc  context.CancelFunc
 }
 
 // setupTest performs all common initialization for USDT integration tests
 func setupTest(t *testing.T) *testSetup {
 	if os.Getuid() != 0 {
 		t.Skip("This test requires root privileges to load eBPF programs")
+	}
+
+	if !util.HasBpfGetAttachCookie() {
+		t.Skip("This test requires kernel support for bpf_get_attach_cookie")
 	}
 
 	// Get the test binary path
@@ -218,14 +223,14 @@ func TestUSDTProbeWithEBPFSingle(t *testing.T) {
 
 	// Individual program names for each probe
 	progNames := []string{
-		"usdt_simple_probe",
-		"usdt_memory_probe",
-		"usdt_const_probe",
-		"usdt_mixed_probe",
-		"usdt_int32_args",
-		"usdt_int64_args",
-		"usdt_mixed_refs",
-		"usdt_uint8_args",
+		"simple_probe",
+		"memory_probe",
+		"const_probe",
+		"mixed_probe",
+		"int32_args",
+		"int64_args",
+		"mixed_refs",
+		"uint8_args",
 	}
 
 	// Attach USDT probes with individual programs
@@ -257,6 +262,10 @@ func TestUSDTProbeWithEBPFSingle(t *testing.T) {
 // TestUSDTProbeWithEBPFMulti tests USDT probes using multi-probe attachment with cookies.
 // This mimics how CUDA probes work: one multi-probe program that dispatches based on cookie.
 func TestUSDTProbeWithEBPFMulti(t *testing.T) {
+	if !util.HasMultiUprobeSupport() {
+		t.Skip("This test requires kernel support for uprobe multi-attach")
+	}
+
 	setup := setupTest(t)
 	defer setup.cleanup()
 

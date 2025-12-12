@@ -1,8 +1,6 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-//go:build amd64 && !integration
-
 package rtld_test
 
 import (
@@ -15,6 +13,7 @@ import (
 	"github.com/coreos/pkg/dlopen"
 	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/support"
 	"go.opentelemetry.io/ebpf-profiler/testutils"
@@ -23,9 +22,14 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
-func TestIntegration(t *testing.T) {
+func test(t *testing.T) {
 	if !testutils.IsRoot() {
 		t.Skip("This test requires root privileges")
+	}
+
+	// Enable debug logging for CI debugging
+	if os.Getenv("DEBUG_TEST") != "" {
+		log.SetLevel(log.DebugLevel)
 	}
 
 	// Create a context for the tracer
@@ -34,10 +38,15 @@ func TestIntegration(t *testing.T) {
 
 	// Start the tracer with all tracers enabled
 	traceCh, trc := testutils.StartTracer(ctx, t,
-		tracertypes.AllTracers(),
+		tracertypes.IncludedTracers(0),
 		&testutils.MockReporter{},
 		false)
 	defer trc.Close()
+
+	trc.StartPIDEventProcessor(ctx)
+
+	// tickle tihs process to speed things up
+	trc.ForceProcessPID(libpf.PID(uint32(os.Getpid())))
 
 	// Consume traces to prevent blocking
 	go func() {
@@ -73,70 +82,20 @@ func TestIntegration(t *testing.T) {
 
 		// Check that the metric was incremented
 		return finalCount > initialCount
-	}, 10*time.Second, 50*time.Millisecond)
+	}, 10*time.Second, 100*time.Millisecond)
+}
+
+func TestIntegration(t *testing.T) {
+	test(t)
 }
 
 func TestIntegrationSingleShot(t *testing.T) {
-	if !testutils.IsRoot() {
-		t.Skip("This test requires root privileges")
-	}
-
-	// Enable debug logging for CI debugging
-	if os.Getenv("DEBUG_TEST") != "" {
-		log.SetLevel(log.DebugLevel)
-	}
-
-	// Override HasMultiUprobeSupport to force single-shot mode
+	// Override HasMultiUprobeSupport to force single-shot mode on newer kernels.
 	multiUProbeOverride := false
 	util.SetTestOnlyMultiUprobeSupport(&multiUProbeOverride)
 	defer util.SetTestOnlyMultiUprobeSupport(nil)
 
-	// Create a context for the tracer
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	// Start the tracer with all tracers enabled
-	traceCh, trc := testutils.StartTracer(ctx, t,
-		tracertypes.AllTracers(),
-		&testutils.MockReporter{},
-		false)
-	defer trc.Close()
-
-	// Consume traces to prevent blocking
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-traceCh:
-				// Discard traces
-			}
-		}
-	}()
-
-	// retry a few times to get the metric, our process has to be detected and
-	// the dlopen uprobe has to attach.
-	require.Eventually(t, func() bool {
-		// Get the initial metric value
-		initialCount := getEBPFMetricValue(trc, metrics.IDDlopenUprobeHits)
-		//t.Logf("Initial dlopen uprobe metric count: %d", initialCount)
-
-		// Use dlopen to load a shared library
-		// libm is a standard math library that's always present
-		lib, err := dlopen.GetHandle([]string{
-			"/lib/x86_64-linux-gnu/libm.so.6",
-			"libm.so.6",
-		})
-		require.NoError(t, err, "Failed to open libm.so.6")
-		defer lib.Close()
-
-		// Get the metrics after dlopen
-		finalCount := getEBPFMetricValue(trc, metrics.IDDlopenUprobeHits)
-		//t.Logf("Final dlopen uprobe metric count: %d", finalCount)
-
-		// Check that the metric was incremented
-		return finalCount > initialCount
-	}, 10*time.Second, 50*time.Millisecond)
+	test(t)
 }
 
 func getEBPFMetricValue(trc *tracer.Tracer, metricID metrics.MetricID) uint64 {
