@@ -73,7 +73,7 @@ func (m *EbpfHandlerStubs) DeleteProcData(libpf.InterpreterType, libpf.PID) erro
 }
 
 func (mockup *EbpfHandlerStubs) AttachUSDTProbes(libpf.PID, string, string, []pfelf.USDTProbe,
-	[]uint64, []string, bool) (LinkCloser, error) {
+	[]uint64, []string) (LinkCloser, error) {
 	return nil, nil
 }
 

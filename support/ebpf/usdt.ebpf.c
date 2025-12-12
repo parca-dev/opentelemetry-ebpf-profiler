@@ -8,13 +8,9 @@
   #define BPF_USDT_MAX_SPEC_CNT 256
 #endif
 
-#ifndef BPF_USDT_MAX_IP_CNT
-  #define BPF_USDT_MAX_IP_CNT (4 * BPF_USDT_MAX_SPEC_CNT)
-#endif
-
 // USDT specification maps (libbpf-compatible)
 bpf_map_def SEC("maps") __bpf_usdt_specs = {
-  .type        = BPF_MAP_TYPE_ARRAY,
+  .type        = BPF_MAP_TYPE_HASH,
   .key_size    = sizeof(u32),
   .value_size  = sizeof(struct bpf_usdt_spec),
   .max_entries = BPF_USDT_MAX_SPEC_CNT,

@@ -50,7 +50,6 @@ type data struct {
 type Instance struct {
 	interpreter.InstanceStubs
 	path string
-	link interpreter.LinkCloser
 	pid  libpf.PID
 }
 
@@ -68,9 +67,9 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 	if err != nil {
 		return nil, err
 	}
+
 	// We use the existence of the .note.stapsdt section to determine if this is a
-	// process that has libparcagpucupti.so loaded. Its cheaper and more reliable than loading
-	// the symbol table.
+	// process that has libparcagpucupti.so loaded.
 	probes, err := ef.ParseUSDTProbes()
 	if err != nil {
 		return nil, err
@@ -96,7 +95,6 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 	return nil, nil
 }
 
-
 func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Address,
 	_ remotememory.RemoteMemory) (interpreter.Instance, error) {
 	// Maps usdt probe name to ebpf program name.
@@ -115,12 +113,19 @@ func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Addre
 			progNames[i] = "usdt_parcagpu_cuda_kernel"
 		}
 	}
-	lc, err := ebpf.AttachUSDTProbes(pid, d.path, "cuda_probe", d.probes, cookies, progNames, true)
-	if err != nil {
-		return nil, err
+
+	var lc interpreter.LinkCloser
+	if d.link == nil {
+		var err error
+		lc, err = ebpf.AttachUSDTProbes(pid, d.path, "cuda_probe", d.probes, cookies, progNames)
+		if err != nil {
+			return nil, err
+		}
+		log.Debugf("[cuda] parcagpu USDT probes attached for %s", d.path)
+		d.link = lc
+	} else {
+		log.Debugf("[cuda] parcagpu USDT probes already attached for %s", d.path)
 	}
-	log.Debugf("[cuda] parcagpu USDT probes attached for %s", d.path)
-	d.link = lc
 
 	// Create and register fixer for this PID
 	fixer := &gpuTraceFixer{
@@ -129,24 +134,14 @@ func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Addre
 	}
 
 	gpuFixers.Store(pid, fixer)
-
 	return &Instance{
-		link: lc,
 		path: d.path,
 		pid:  pid,
 	}, nil
 }
 
-// Detach removes the fixer for this PID and closes the link if needed.
 func (i *Instance) Detach(_ interpreter.EbpfHandler, _ libpf.PID) error {
 	gpuFixers.Delete(i.pid)
-
-	if i.link != nil {
-		log.Debugf("[cuda] parcagpu USDT probes closed for %s", i.path)
-		if err := i.link.Detach(); err != nil {
-			return err
-		}
-	}
 	return nil
 }
 
