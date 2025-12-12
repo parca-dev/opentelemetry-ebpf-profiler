@@ -25,6 +25,7 @@ const (
 	LuaJITTracer
 	GoTracer
 	Labels
+	RTLD
 	CUDATracer
 
 	// maxTracers indicates the max. number of different tracers
@@ -42,6 +43,7 @@ var tracerTypeToName = map[tracerType]string{
 	LuaJITTracer:  "luajit",
 	GoTracer:      "go",
 	Labels:        "labels",
+	RTLD:          "rtld",
 	CUDATracer:    "cuda",
 }
 

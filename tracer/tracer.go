@@ -1204,3 +1204,7 @@ func (t *Tracer) GetEbpfHandler() interpreter.EbpfHandler {
 func (t *Tracer) GetInterpretersForPID(pid libpf.PID) []interpreter.Instance {
 	return t.processManager.GetInterpretersForPID(pid)
 }
+
+func (t *Tracer) ForceProcessPID(pid libpf.PID) {
+	t.pidEvents <- libpf.PIDTID(uint64(pid) + uint64(pid)<<32)
+}

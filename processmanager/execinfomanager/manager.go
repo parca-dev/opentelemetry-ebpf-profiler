@@ -140,7 +140,10 @@ func NewExecutableInfoManager(
 	if includeTracers.Has(types.Labels) {
 		interpreterLoaders = append(interpreterLoaders, golabels.Loader, customlabels.Loader)
 	}
-	interpreterLoaders = append(interpreterLoaders, oomwatcher.Loader, rtld.Loader)
+	if includeTracers.Has(types.RTLD) {
+		interpreterLoaders = append(interpreterLoaders, rtld.Loader)
+	}
+	interpreterLoaders = append(interpreterLoaders, oomwatcher.Loader)
 
 	if includeTracers.Has(types.CUDATracer) {
 		// USDT support requires cookies
