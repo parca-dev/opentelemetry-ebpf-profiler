@@ -139,9 +139,7 @@ type EbpfHandler interface {
 }
 
 type LinkCloser interface {
-	//Detach() error
 	Unload() error
-	//IsPIDAttached() bool
 }
 
 // Loader is a function to detect and load data from given interpreter ELF file.

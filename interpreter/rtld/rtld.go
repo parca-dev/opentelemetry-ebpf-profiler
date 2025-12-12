@@ -67,15 +67,6 @@ func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, bias libpf.Ad
 	return &instance{}, nil
 }
 
-// Detach removes the uprobe
-func (i *instance) Detach(_ interpreter.EbpfHandler, pid libpf.PID) error {
-	log.Debugf("[dlopen] Detach called for PID %d", pid)
-	// if i.lc != nil {
-	// 	return i.lc.Detach()
-	// }
-	return nil
-}
-
 // Unload cleans up the uprobe link
 func (d *data) Unload(_ interpreter.EbpfHandler) {
 	if d.lc != nil {

@@ -143,19 +143,10 @@ func LoadMaps(ctx context.Context, maps map[string]*cebpf.Map,
 }
 
 type linkCloser struct {
-	//detachLink    []link.Link
-	unloadLink []link.Link
-	//detachSpecIDs []uint32   // spec IDs to delete when detach happens
+	unloadLink    []link.Link
 	unloadSpecIDs []uint32   // spec IDs to delete when unload happens
 	specMap       *cebpf.Map // reference to the spec map for cleanup
 }
-
-// IsPIDAttached indicates if the LinkCloser is attached to a specific PID.
-// Non-pid attached links can and should be re-used.
-// func (lc *linkCloser) IsPIDAttached() bool {
-// 	// TODO: do any old kernels need this...
-// 	return false
-// }
 
 // populateUSDTSpecMaps parses USDT probe arguments and populates the BPF spec maps.
 // It returns the assigned spec IDs for each probe.
