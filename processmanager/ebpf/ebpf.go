@@ -215,8 +215,8 @@ func (lc *linkCloser) Unload() error {
 func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName string,
 	probes []pfelf.USDTProbe, cookies []uint64, singleProgNames []string) (interpreter.LinkCloser, error) {
 	useMulti := util.HasMultiUprobeSupport()
-	if !useMulti && len(probes) > 1 {
-		return nil, errors.New("attaching multiple probes requires kernel support (kernel 6.6+)")
+	if !useMulti && len(probes) > 1 && multiProgName != "" && len(singleProgNames) == 0 {
+		return nil, errors.New("uprobe multi attach requires kernel support (kernel 6.6+)")
 	}
 
 	containerPath := fmt.Sprintf("/proc/%d/root/%s", pid, path)
