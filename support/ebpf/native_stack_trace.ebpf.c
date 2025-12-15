@@ -360,7 +360,7 @@ static EBPF_INLINE u64 unwind_register_address(UnwindState *state, u64 cfa, u8 o
 static EBPF_INLINE ErrorCode unwind_one_frame(PerCPURecord *record, bool *stop)
 {
   UnwindState *state = &record->state;
-  *stop = false;
+  *stop              = false;
 
   u32 unwindInfo = 0;
   u64 rt_regs[18];
@@ -460,7 +460,7 @@ frame_ok:
 static EBPF_INLINE ErrorCode unwind_one_frame(struct PerCPURecord *record, bool *stop)
 {
   UnwindState *state = &record->state;
-  *stop = false;
+  *stop              = false;
 
   u32 unwindInfo = 0;
   int addrDiff   = 0;
@@ -508,7 +508,7 @@ static EBPF_INLINE ErrorCode unwind_one_frame(struct PerCPURecord *record, bool 
       if (!unwinder_unwind_go_morestack(record)) {
         goto err_native_pc_read;
       }
-      goto frame_ok;      
+      goto frame_ok;
     default: return ERR_UNREACHABLE;
     }
   }

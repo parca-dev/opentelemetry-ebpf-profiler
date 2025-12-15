@@ -7,6 +7,7 @@
 #include "errors.h"
 #include "extmaps.h"
 #include "frametypes.h"
+#include "go_support.h"
 #include "types.h"
 
 #if defined(TESTING_COREDUMP)
@@ -31,17 +32,6 @@
     }
 
 #endif // TESTING_COREDUMP
-
-// increment_metric increments the value of the given metricID by 1
-static inline EBPF_INLINE void increment_metric(u32 metricID)
-{
-  u64 *count = bpf_map_lookup_elem(&metrics, &metricID);
-  if (count) {
-    ++*count;
-  } else {
-    DEBUG_PRINT("Failed to lookup metrics map for metricID %d", metricID);
-  }
-}
 
 // Send immediate notifications for event triggers to Go.
 // Notifications for GENERIC_PID and TRACES_FOR_SYMBOLIZATION will be
@@ -316,76 +306,6 @@ static inline EBPF_INLINE bool unwinder_unwind_frame_pointer(UnwindState *state)
   return true;
 }
 
-// tsd_get_base looks up the base address for TSD variables (TPBASE).
-static inline EBPF_INLINE int tsd_get_base_xxx(void **tsd_base)
-{
-#ifdef TESTING_COREDUMP
-  *tsd_base = (void *)__cgo_ctx->tp_base;
-  return 0;
-#else
-  u32 key              = 0;
-  SystemConfig *syscfg = bpf_map_lookup_elem(&system_config, &key);
-  if (!syscfg) {
-    // Unreachable: array maps are always fully initialized.
-    return -1;
-  }
-
-  struct task_struct *task = (struct task_struct *)bpf_get_current_task();
-
-  // We need to read task->thread.fsbase (on x86_64), but we can't do so because
-  // we might have been compiled with different kernel headers, so the struct layout
-  // is likely to be different.
-  // syscfg->tpbase_offset is populated with the offset of `fsbase` or equivalent field
-  // relative to a `task_struct`, so we use that instead.
-  void *tpbase_ptr = ((char *)task) + syscfg->tpbase_offset;
-  if (bpf_probe_read_kernel(tsd_base, sizeof(void *), tpbase_ptr)) {
-    DEBUG_PRINT("Failed to read tpbase value");
-    increment_metric(metricID_UnwindErrBadTPBaseAddr);
-    return -1;
-  }
-
-  return 0;
-#endif
-}
-
-static EBPF_INLINE void *mptr_xxx_copypasta(struct GoLabelsOffsets *offs, UNUSED UnwindState *state)
-{
-  u64 g_addr     = 0;
-  void *tls_base = NULL;
-  if (tsd_get_base_xxx(&tls_base) < 0) {
-    DEBUG_PRINT("morestack: failed to get tsd base; can't read m_ptr");
-    return NULL;
-  }
-  DEBUG_PRINT(
-    "morestack: read tsd_base at 0x%lx, g offset: %d", (unsigned long)tls_base, offs->tls_offset);
-
-  if (offs->tls_offset == 0) {
-#if defined(__aarch64__)
-    // On aarch64 for !iscgo programs the g is only stored in r28 register.
-    g_addr = state->r28;
-#elif defined(__x86_64__)
-    DEBUG_PRINT("morestack: TLS offset for g pointer missing for amd64");
-    return NULL;
-#endif
-  }
-
-  if (g_addr == 0) {
-    if (bpf_probe_read_user(&g_addr, sizeof(void *), (void *)((s64)tls_base + offs->tls_offset))) {
-      DEBUG_PRINT("morestack: failed to read g_addr, tls_base(%lx)", (unsigned long)tls_base);
-      return NULL;
-    }
-  }
-
-  DEBUG_PRINT("morestack: reading m_ptr_addr at 0x%lx + 0x%x", (unsigned long)g_addr, offs->m_offset);
-  void *m_ptr_addr;
-  if (bpf_probe_read_user(&m_ptr_addr, sizeof(void *), (void *)(g_addr + offs->m_offset))) {
-    DEBUG_PRINT("morestack: failed m_ptr_addr");
-    return NULL;
-  }
-  DEBUG_PRINT("morestack: m_ptr_addr 0x%lx", (unsigned long)m_ptr_addr);
-  return m_ptr_addr;
-}
-
 static inline EBPF_INLINE bool unwinder_unwind_go_morestack(PerCPURecord *record)
 {
   GoLabelsOffsets *offs = bpf_map_lookup_elem(&go_labels_procs, &record->trace.pid);
@@ -393,14 +313,11 @@ static inline EBPF_INLINE bool unwinder_unwind_go_morestack(PerCPURecord *record
     DEBUG_PRINT("morestack: failed to read go labels offsets");
     return false;
   }
-  void *mptr = mptr_xxx_copypasta(offs, &record->state);
+  void *mptr = get_go_m_ptr(offs, &record->state);
   DEBUG_PRINT("morestack: curg offset: %d, mptr: %llx\n", offs->curg, (u64)mptr);
-  // XXX - copied from go_labels.ebpf.c
+
   size_t curg_ptr_addr;
-  if (bpf_probe_read_user(
-        &curg_ptr_addr,
-        sizeof(void *),
-        (void *)(mptr + offs->curg))) {
+  if (bpf_probe_read_user(&curg_ptr_addr, sizeof(void *), (void *)((u64)mptr + offs->curg))) {
     DEBUG_PRINT("morestack: failed to read value for m_ptr->curg");
     return false;
   }
@@ -419,7 +336,11 @@ static inline EBPF_INLINE bool unwinder_unwind_go_morestack(PerCPURecord *record
   record->state.sp = regs[0];
   record->state.pc = regs[1];
   record->state.fp = regs[5];
-  DEBUG_PRINT("morestack: success, sp is %llx, pc is %llx, fp is %llx", record->state.sp, record->state.pc, record->state.fp);
+  DEBUG_PRINT(
+    "morestack: success, sp is %llx, pc is %llx, fp is %llx",
+    record->state.sp,
+    record->state.pc,
+    record->state.fp);
   return true;
 }
 
