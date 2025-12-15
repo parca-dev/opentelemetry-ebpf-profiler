@@ -36,7 +36,13 @@ case "$QEMU_ARCH" in
     aarch64)
         DEBOOTSTRAP_ARCH="arm64"
         ;;
+    *)
+        echo "Unsupported QEMU_ARCH: $QEMU_ARCH"
+        exit 1
+        ;;
 esac
+
+GOARCH=$DEBOOTSTRAP_ARCH
 
 # Choose mirror based on distro and architecture
 if [[ "$DISTRO" == "ubuntu" ]]; then
@@ -62,17 +68,6 @@ sudo chown -R "$(id -u):$(id -g)" "$ROOTFS_DIR"
 
 # Build the test binary (must be dynamic for dlopen to work)
 echo "Building test binary for $DISTRO $RELEASE $DEBOOTSTRAP_ARCH..."
-
-# Determine Go architecture
-GOARCH="amd64"
-case "$QEMU_ARCH" in
-    x86_64)
-        GOARCH="amd64"
-        ;;
-    aarch64)
-        GOARCH="arm64"
-        ;;
-esac
 
 # For cross-compilation or Ubuntu jammy/noble, local build works (host has compatible or newer glibc)
 # For older distros, would need Docker build (disabled by default for speed)
