@@ -37,6 +37,7 @@ type locationInfo struct {
 	frameType     string
 	hasLine       bool
 	lineNumber    int64
+	columnNumber  int64
 	functionIndex int32
 }
 
