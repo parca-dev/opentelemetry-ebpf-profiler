@@ -2,6 +2,8 @@
 #define OPTI_TSD_H
 
 #include "bpfdefs.h"
+#include "types.h"
+#include "util.h"
 
 // tsd_read reads from the Thread Specific Data location associated with the provided key.
 static inline EBPF_INLINE int
