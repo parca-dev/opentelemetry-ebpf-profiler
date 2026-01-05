@@ -377,6 +377,9 @@ func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName st
 // loadProgram loads an eBPF program from progSpec and populates the related maps.
 func (impl *ebpfMapsImpl) loadUSDTProgram(progName string, useMulti bool) error {
 	progSpec := impl.coll.Programs[progName]
+	if progSpec == nil {
+		return fmt.Errorf("eBPF program %s not found in collection", progName)
+	}
 	programOptions := cebpf.ProgramOptions{
 		// TODO: wire in debug level
 	}

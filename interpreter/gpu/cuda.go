@@ -20,6 +20,12 @@ import (
 
 const (
 	GRAPH_LAUNCH_CBID = 311
+
+	// eBPF program names for USDT probes
+	// These correspond to the function names in cuda.ebpf.c, not the SEC() paths
+	USDTProgCudaCorrelation = "cuda_correlation"
+	USDTProgCudaKernel      = "cuda_kernel_exec"
+	USDTProgCudaProbe       = "cuda_probe"
 )
 
 var (
@@ -82,8 +88,11 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 			}
 		}
 		if len(parcagpuProbes) != 2 {
+			log.Warnf("Found %d parcagpu USDT probes in %s, need exactly 2", len(parcagpuProbes), info.FileName())
 			return nil, nil
 		}
+
+		log.Debugf("Found parcagpu USDT probes in %s: %v", info.FileName(), parcagpuProbes)
 
 		d := &data{
 			path:   info.FileName(),
@@ -106,18 +115,20 @@ func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Addre
 	for i, probe := range d.probes {
 		cookies[i] = uint64(probe.Name[0])
 		// Map probe names to specific program names for single-shot mode
-		switch probe.Name[0] {
-		case 'c':
-			progNames[i] = "usdt_parcagpu_cuda_correlation"
-		case 'k':
-			progNames[i] = "usdt_parcagpu_cuda_kernel"
+		switch probe.Name {
+		case "cuda_correlation":
+			progNames[i] = USDTProgCudaCorrelation
+		case "kernel_executed":
+			progNames[i] = USDTProgCudaKernel
+		default:
+			log.Debugf("unknown parcagpu USDT probe name: %s", probe.Name)
 		}
 	}
 
 	var lc interpreter.LinkCloser
 	if d.link == nil {
 		var err error
-		lc, err = ebpf.AttachUSDTProbes(pid, d.path, "cuda_probe", d.probes, cookies, progNames)
+		lc, err = ebpf.AttachUSDTProbes(pid, d.path, USDTProgCudaProbe, d.probes, cookies, progNames)
 		if err != nil {
 			return nil, err
 		}
