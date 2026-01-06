@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math/bits"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -214,13 +215,25 @@ func probeBpfUprobeMultiLink() bool {
 //
 // Note: This function requires CAP_BPF or CAP_SYS_ADMIN capabilities to load the probe
 // program. The profiler should already have these privileges.
+//
+// The behavior can be overridden by:
+// - Setting PARCA_DISABLE_MULTIPROBE=1 environment variable to force single-shot uprobe mode
+// - Using SetTestOnlyMultiUprobeSupport() for testing purposes
 func HasMultiUprobeSupport() bool {
+	// Check for test override first (takes precedence over everything)
 	if testOnlyMultiUprobeOverride != nil {
 		return *testOnlyMultiUprobeOverride
 	}
 
+	// Cache the probe result since it's expensive to check
 	multiUprobeSupportOnce.Do(func() {
-		multiUprobeSupportCached = probeBpfUprobeMultiLink()
+		// Check for environment variable override inside the Do() to ensure
+		// it's only evaluated once and consistently cached
+		if os.Getenv("PARCA_DISABLE_MULTIPROBE") == "1" {
+			multiUprobeSupportCached = false
+		} else {
+			multiUprobeSupportCached = probeBpfUprobeMultiLink()
+		}
 	})
 
 	return multiUprobeSupportCached
