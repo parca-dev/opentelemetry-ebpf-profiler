@@ -39,6 +39,11 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		return nil, nil
 	}
 
+	// Skip if the symbol address is invalid (0)
+	if sym.Address == 0 {
+		return nil, nil
+	}
+
 	log.Debugf("Found dlopen symbol in %s at 0x%x", fileName, sym.Address)
 
 	return &data{
