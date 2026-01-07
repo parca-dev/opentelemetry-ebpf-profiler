@@ -87,8 +87,11 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 				parcagpuProbes = append(parcagpuProbes, probe)
 			}
 		}
+		if len(parcagpuProbes) == 0 {
+			return nil, nil
+		}
 		if len(parcagpuProbes) != 2 {
-			log.Warnf("Found %d parcagpu USDT probes in %s, need exactly 2", len(parcagpuProbes), info.FileName())
+			log.Warnf("Found %d parcagpu USDT probes in %s, need exactly 2: %v", len(parcagpuProbes), info.FileName(), parcagpuProbes)
 			return nil, nil
 		}
 
