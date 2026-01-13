@@ -2167,24 +2167,15 @@ func (d *v8Data) loadNodeClData(ef *pfelf.File) error {
 		return fmt.Errorf("Unsupported Node major version: %d", major)
 	}
 
-	var offset int64
-
-	if major < 26 {
-		offset, err = ef.LookupTLSSymbolOffset("_ZN2v88internal18g_current_isolate_E")
-		if err != nil {
-			return fmt.Errorf("failed to look up g_current_isolate: %w", err)
-		}
-	} else {
-		// Node started building v8 without external dynamic symbols
-		// in major version v26.
-		sym, err = syms.LookupSymbol("_ZN2v88internal18g_current_isolate_E")
-		if err != nil {
-			return fmt.Errorf("failed to look up g_current_isolate (in major 26): %w", err)
-		}
-		offset, err = ef.AdjustTLSSymbol(sym)
-		if err != nil {
-			return fmt.Errorf("failed to adjust TLS symbol: %w", err)
-		}
+	// Node started building v8 without external dynamic symbols
+	// in major version v26.
+	sym, err = syms.LookupSymbol("_ZN2v88internal18g_current_isolate_E")
+	if err != nil {
+		return fmt.Errorf("failed to look up g_current_isolate (in major 26): %w", err)
+	}
+	offset, err := ef.AdjustTLSSymbol(sym)
+	if err != nil {
+		return fmt.Errorf("failed to adjust TLS symbol: %w", err)
 	}
 	d.isolateSym = libpf.Address(offset)
 	return nil
