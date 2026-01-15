@@ -31,7 +31,7 @@ int uprobe_dlopen(struct pt_regs *ctx)
   // Increment the metric for dlopen uprobe hits
   increment_metric(metricID_DlopenUprobeHits);
 
-  if (report_pid(ctx, pid_tgid, RATELIMIT_ACTION_DEFAULT)) {
+  if (report_pid(ctx, pid_tgid, RATELIMIT_ACTION_NONE)) {
     DEBUG_PRINT("Reported PID %u from uprobe_dlopen", pid);
   }
 
