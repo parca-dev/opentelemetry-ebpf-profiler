@@ -19,8 +19,6 @@ import (
 )
 
 const (
-	GRAPH_LAUNCH_CBID = 311
-
 	// eBPF program names for USDT probes
 	// These correspond to the function names in cuda.ebpf.c, not the SEC() paths
 	USDTProgCudaCorrelation = "cuda_correlation"
@@ -159,6 +157,29 @@ func (i *Instance) Detach(_ interpreter.EbpfHandler, _ libpf.PID) error {
 	return nil
 }
 
+const (
+	CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch                = 514
+	CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch_ptsz           = 515
+	CUPTI_RUNTIME_TRACE_CBID_cudaGraphLaunch_v10000      = 311
+	CUPTI_RUNTIME_TRACE_CBID_cudaGraphLaunch_ptsz_v10000 = 312
+)
+
+func isGraphLaunch(cbid int32) bool {
+	if cbid < 0 {
+		// Driver API callback ids are negative
+		switch -cbid {
+		case CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch, CUPTI_DRIVER_TRACE_CBID_cuGraphLaunch_ptsz:
+			return true
+		}
+	} else {
+		switch cbid {
+		case CUPTI_RUNTIME_TRACE_CBID_cudaGraphLaunch_v10000, CUPTI_RUNTIME_TRACE_CBID_cudaGraphLaunch_ptsz_v10000:
+			return true
+		}
+	}
+	return false
+}
+
 // addTrace is called when a CUDA trace is received, to match it with timing info.
 // Sends completed traces directly to the output channel (may be multiple for graph launches).
 func (f *gpuTraceFixer) addTrace(trace *host.Trace, traceOutChan chan<- *host.Trace) error {
@@ -169,27 +190,28 @@ func (f *gpuTraceFixer) addTrace(trace *host.Trace, traceOutChan chan<- *host.Tr
 	if frame.Type != libpf.CUDAKernelFrame {
 		return errors.New("first frame is not a CUDA kernel frame")
 	}
-	cudaId := uint32(frame.Lineno)
-	cbid := uint32(frame.Lineno >> 32)
+	correlationId := uint32(frame.Lineno)
+	cbid := int32(frame.Lineno >> 32)
 
-	log.Debugf("[cuda] adding trace with id %d cbid %d for pid %d", cudaId, cbid, trace.PID)
+	log.Debugf("[cuda] adding trace with id %d cbid %d for pid %d", correlationId, cbid, trace.PID)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	evs, ok := f.timesAwaitingTraces[cudaId]
+	evs, ok := f.timesAwaitingTraces[correlationId]
 	if ok {
-		if cbid != GRAPH_LAUNCH_CBID {
-			delete(f.timesAwaitingTraces, cudaId)
+		// Graph launches can have multiple timing events for the same correlation ID
+		if !isGraphLaunch(cbid) {
+			delete(f.timesAwaitingTraces, correlationId)
 		}
 		for idx := range evs {
 			log.Debugf("[cuda] gpu trace completed id %d cbid %d for pid %d",
-				cudaId, cbid, trace.PID)
+				correlationId, cbid, trace.PID)
 			traceOutChan <- f.prepTrace(trace, &evs[idx])
 		}
-		f.timesAwaitingTraces[cudaId] = nil
+		f.timesAwaitingTraces[correlationId] = nil
 		return nil
 	}
-	f.tracesAwaitingTimes[cudaId] = trace
+	f.tracesAwaitingTimes[correlationId] = trace
 	return nil
 }
 
