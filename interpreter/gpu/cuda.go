@@ -193,7 +193,7 @@ func (f *gpuTraceFixer) addTrace(trace *host.Trace, traceOutChan chan<- *host.Tr
 	correlationId := uint32(frame.Lineno)
 	cbid := int32(frame.Lineno >> 32)
 
-	log.Debugf("[cuda] adding trace with id %d cbid %d for pid %d", correlationId, cbid, trace.PID)
+	log.Debugf("[cuda] adding trace with id %d cbid %d (0x%x) for pid %d", correlationId, int(cbid), uint32(cbid), trace.PID)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -204,8 +204,8 @@ func (f *gpuTraceFixer) addTrace(trace *host.Trace, traceOutChan chan<- *host.Tr
 			delete(f.timesAwaitingTraces, correlationId)
 		}
 		for idx := range evs {
-			log.Debugf("[cuda] gpu trace completed id %d cbid %d for pid %d",
-				correlationId, cbid, trace.PID)
+			log.Debugf("[cuda] gpu trace completed id %d cbid %d (0x%x) for pid %d",
+				correlationId, int(cbid), uint32(cbid), trace.PID)
 			traceOutChan <- f.prepTrace(trace, &evs[idx])
 		}
 		f.timesAwaitingTraces[correlationId] = nil
