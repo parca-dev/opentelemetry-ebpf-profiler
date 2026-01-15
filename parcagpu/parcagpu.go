@@ -24,7 +24,7 @@ func Start(ctx context.Context, traceInCh <-chan *host.Trace,
 
 	// Read traces coming from ebpf and send normal traces through
 	go func() {
-		timer := time.NewTicker(60 * time.Second)
+		timer := time.NewTicker(1 * time.Second)
 		defer timer.Stop()
 
 		for {

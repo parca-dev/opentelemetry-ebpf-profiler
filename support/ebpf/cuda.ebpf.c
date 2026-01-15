@@ -5,7 +5,7 @@
 
 // cuda_correlation reads the correlation ID from the USDT probe and records a trace.
 SEC("usdt/parcagpu/cuda_correlation")
-int BPF_USDT(cuda_correlation, u32 correlation_id, u32 cbid)
+int BPF_USDT(cuda_correlation, u32 correlation_id, s32 cbid)
 {
   u64 pid_tgid = bpf_get_current_pid_tgid();
   u32 pid      = pid_tgid >> 32;
@@ -18,6 +18,7 @@ int BPF_USDT(cuda_correlation, u32 correlation_id, u32 cbid)
   DEBUG_PRINT("cuda_correlation_probe: correlation_id=%u, cbid=%u", correlation_id, cbid);
 
   u64 ts      = bpf_ktime_get_ns();
+  // Cast cbid to s32 first to get sign extension, then to u64
   u64 cuda_id = correlation_id + ((u64)cbid << 32);
   return collect_trace(ctx, TRACE_CUDA_LAUNCH, pid, tid, ts, 0, cuda_id);
 }
