@@ -3,7 +3,6 @@ package gpu // import "go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 import (
 	"errors"
 	"fmt"
-	"slices"
 	"strconv"
 	"sync"
 	"unsafe"
@@ -42,6 +41,7 @@ type gpuTraceFixer struct {
 	mu                  sync.Mutex
 	timesAwaitingTraces map[uint32][]CuptiTimingEvent // keyed by correlation ID
 	tracesAwaitingTimes map[uint32]*host.Trace        // keyed by correlation ID
+	maxCorrelationId    uint32                        // track highest ID for threshold-based clearing
 }
 
 type data struct {
@@ -197,6 +197,11 @@ func (f *gpuTraceFixer) addTrace(trace *host.Trace, traceOutChan chan<- *host.Tr
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	// Update max, detecting wrap-around (new ID much smaller than max means wrap)
+	if correlationId > f.maxCorrelationId || f.maxCorrelationId-correlationId > 1<<31 {
+		f.maxCorrelationId = correlationId
+	}
+
 	evs, ok := f.timesAwaitingTraces[correlationId]
 	if ok && len(evs) > 0 {
 		// Process any timing events that arrived before this trace
@@ -222,6 +227,11 @@ func (f *gpuTraceFixer) addTime(ev *CuptiTimingEvent) *host.Trace {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	// Update max, detecting wrap-around (new ID much smaller than max means wrap)
+	if ev.Id > f.maxCorrelationId || f.maxCorrelationId-ev.Id > 1<<31 {
+		f.maxCorrelationId = ev.Id
+	}
+
 	trace, ok := f.tracesAwaitingTimes[ev.Id]
 	if ok {
 		if ev.Graph == 0 {
@@ -234,56 +244,32 @@ func (f *gpuTraceFixer) addTime(ev *CuptiTimingEvent) *host.Trace {
 }
 
 // maybeClear clears the maps if they get too big.
+// Uses threshold-based clearing: deletes entries with correlation ID < maxCorrelationId - 5000
 func (f *gpuTraceFixer) maybeClear() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	// Sample a few IDs from each map to debug matching issues
-	var traceIDs, timeIDs []uint32
-	for id := range f.tracesAwaitingTimes {
-		traceIDs = append(traceIDs, id)
-		if len(traceIDs) >= 5 {
-			break
-		}
-	}
-	var graphCount, totalTimeEvents int
-	for id, evs := range f.timesAwaitingTraces {
-		if len(timeIDs) < 5 {
-			timeIDs = append(timeIDs, id)
-		}
-		for _, ev := range evs {
-			totalTimeEvents++
-			if ev.Graph != 0 {
-				graphCount++
-			}
-		}
-	}
-	log.Debugf("[cuda] gpu trace fixer: %d traces waiting, %d time keys (%d events, %d graphs) waiting. Sample trace IDs: %v, time IDs: %v",
-		len(f.tracesAwaitingTimes), len(f.timesAwaitingTraces), totalTimeEvents, graphCount, traceIDs, timeIDs)
+	log.Debugf("[cuda] gpu trace fixer: %d traces waiting, %d time keys waiting",
+		len(f.tracesAwaitingTimes), len(f.timesAwaitingTraces))
 	if len(f.timesAwaitingTraces) > 10000 || len(f.tracesAwaitingTimes) > 10000 {
-		log.Warnf("[cuda] clearing gpu trace fixer maps")
-		keys := libpf.MapKeysToSet(f.timesAwaitingTraces)
-		// sort keys by correlation ID so we keep the highest (most recent) ones
-		slices.SortFunc(keys.ToSlice(), func(a, b uint32) int {
-			return int(a) - int(b)
-		})
-		keySlice := keys.ToSlice()
-		if len(keySlice) > 5000 {
-			deleteCount := len(keySlice) - 5000
-			for _, k := range keySlice[:deleteCount] {
+		timesBeforeLen := len(f.timesAwaitingTraces)
+		tracesBeforeLen := len(f.tracesAwaitingTimes)
+
+		// Keep entries within 5000 of the max correlation ID
+		// Use signed distance to handle wrap-around correctly
+		for k := range f.timesAwaitingTraces {
+			if int32(f.maxCorrelationId-k) > 5000 {
 				delete(f.timesAwaitingTraces, k)
 			}
 		}
-		keys = libpf.MapKeysToSet(f.tracesAwaitingTimes)
-		slices.SortFunc(keys.ToSlice(), func(a, b uint32) int {
-			return int(a) - int(b)
-		})
-		keySlice = keys.ToSlice()
-		if len(keySlice) > 5000 {
-			deleteCount := len(keySlice) - 5000
-			for _, k := range keySlice[:deleteCount] {
+		for k := range f.tracesAwaitingTimes {
+			if int32(f.maxCorrelationId-k) > 5000 {
 				delete(f.tracesAwaitingTimes, k)
 			}
 		}
+
+		log.Warnf("[cuda] cleared gpu trace fixer maps: times %d -> %d, traces %d -> %d",
+			timesBeforeLen, len(f.timesAwaitingTraces),
+			tracesBeforeLen, len(f.tracesAwaitingTimes))
 	}
 }
 
