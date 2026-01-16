@@ -198,19 +198,21 @@ func (f *gpuTraceFixer) addTrace(trace *host.Trace, traceOutChan chan<- *host.Tr
 	defer f.mu.Unlock()
 
 	evs, ok := f.timesAwaitingTraces[correlationId]
-	if ok {
-		// Graph launches can have multiple timing events for the same correlation ID
-		if !isGraphLaunch(cbid) {
-			delete(f.timesAwaitingTraces, correlationId)
-		}
+	if ok && len(evs) > 0 {
+		// Process any timing events that arrived before this trace
 		for idx := range evs {
 			log.Debugf("[cuda] gpu trace completed id %d cbid %d (0x%x) for pid %d",
 				correlationId, int(cbid), uint32(cbid), trace.PID)
 			traceOutChan <- f.prepTrace(trace, &evs[idx])
 		}
-		f.timesAwaitingTraces[correlationId] = nil
-		return nil
+		// Always delete the key to avoid nil entries accumulating
+		delete(f.timesAwaitingTraces, correlationId)
+		// For non-graph launches, we've matched the only timing event, done
+		if !isGraphLaunch(cbid) {
+			return nil
+		}
 	}
+	// Store trace for future timing events
 	f.tracesAwaitingTimes[correlationId] = trace
 	return nil
 }
@@ -235,22 +237,38 @@ func (f *gpuTraceFixer) addTime(ev *CuptiTimingEvent) *host.Trace {
 func (f *gpuTraceFixer) maybeClear() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if len(f.timesAwaitingTraces) > 100 || len(f.tracesAwaitingTimes) > 100 {
-		log.Warnf("[cuda] clearing gpu trace fixer maps: %d traces, %d times",
-			len(f.tracesAwaitingTimes), len(f.timesAwaitingTraces))
+	// Sample a few IDs from each map to debug matching issues
+	var traceIDs, timeIDs []uint32
+	for id := range f.tracesAwaitingTimes {
+		traceIDs = append(traceIDs, id)
+		if len(traceIDs) >= 5 {
+			break
+		}
+	}
+	var graphCount, totalTimeEvents int
+	for id, evs := range f.timesAwaitingTraces {
+		if len(timeIDs) < 5 {
+			timeIDs = append(timeIDs, id)
+		}
+		for _, ev := range evs {
+			totalTimeEvents++
+			if ev.Graph != 0 {
+				graphCount++
+			}
+		}
+	}
+	log.Debugf("[cuda] gpu trace fixer: %d traces waiting, %d time keys (%d events, %d graphs) waiting. Sample trace IDs: %v, time IDs: %v",
+		len(f.tracesAwaitingTimes), len(f.timesAwaitingTraces), totalTimeEvents, graphCount, traceIDs, timeIDs)
+	if len(f.timesAwaitingTraces) > 10000 || len(f.tracesAwaitingTimes) > 10000 {
+		log.Warnf("[cuda] clearing gpu trace fixer maps")
 		keys := libpf.MapKeysToSet(f.timesAwaitingTraces)
 		// sort keys by correlation ID so we keep the highest (most recent) ones
 		slices.SortFunc(keys.ToSlice(), func(a, b uint32) int {
 			return int(a) - int(b)
 		})
 		keySlice := keys.ToSlice()
-		if len(keySlice) > 50 {
-			deleteCount := len(keySlice) - 50
-			log.Debugf(
-				"[cuda] timesAwaitingTraces: deleting %d entries (IDs %d-%d), "+
-					"keeping %d entries (IDs %d-%d)",
-				deleteCount, keySlice[0], keySlice[deleteCount-1],
-				50, keySlice[deleteCount], keySlice[len(keySlice)-1])
+		if len(keySlice) > 5000 {
+			deleteCount := len(keySlice) - 5000
 			for _, k := range keySlice[:deleteCount] {
 				delete(f.timesAwaitingTraces, k)
 			}
@@ -260,13 +278,8 @@ func (f *gpuTraceFixer) maybeClear() {
 			return int(a) - int(b)
 		})
 		keySlice = keys.ToSlice()
-		if len(keySlice) > 50 {
-			deleteCount := len(keySlice) - 50
-			log.Debugf(
-				"[cuda] tracesAwaitingTimes: deleting %d entries (IDs %d-%d), "+
-					"keeping %d entries (IDs %d-%d)",
-				deleteCount, keySlice[0], keySlice[deleteCount-1],
-				50, keySlice[deleteCount], keySlice[len(keySlice)-1])
+		if len(keySlice) > 5000 {
+			deleteCount := len(keySlice) - 5000
 			for _, k := range keySlice[:deleteCount] {
 				delete(f.tracesAwaitingTimes, k)
 			}
