@@ -24,7 +24,7 @@ func Start(ctx context.Context, traceInCh <-chan *host.Trace,
 
 	// Read traces coming from ebpf and send normal traces through
 	go func() {
-		timer := time.NewTicker(1 * time.Second)
+		timer := time.NewTicker(5 * time.Second)
 		defer timer.Stop()
 
 		for {
@@ -46,7 +46,9 @@ func Start(ctx context.Context, traceInCh <-chan *host.Trace,
 		}
 	}()
 
-	eventReader, err := perf.NewReader(gpuTimingEvents, 1024 /* perCPUBufferSize */)
+	// Per-CPU buffer size for timing events. CuptiTimingEvent is ~300 bytes,
+	// so 1MB allows ~3400 events per CPU before overflow.
+	eventReader, err := perf.NewReader(gpuTimingEvents, 1024*1024 /* perCPUBufferSize */)
 	if err != nil {
 		log.Fatalf("Failed to setup perf reporting via %s: %v", gpuTimingEvents, err)
 	}
@@ -54,8 +56,18 @@ func Start(ctx context.Context, traceInCh <-chan *host.Trace,
 	var lostEventsCount, readErrorCount, noDataCount atomic.Uint64
 	go func() {
 		var data perf.Record
+		logTicker := time.NewTicker(5 * time.Second)
+		defer logTicker.Stop()
 		for {
 			select {
+			case <-logTicker.C:
+				lost := lostEventsCount.Swap(0)
+				readErr := readErrorCount.Swap(0)
+				noData := noDataCount.Swap(0)
+				if lost > 0 || readErr > 0 || noData > 0 {
+					log.Warnf("[cuda] timing event reader: lost=%d readErrors=%d noData=%d",
+						lost, readErr, noData)
+				}
 			case <-ctx.Done():
 				return
 			default:

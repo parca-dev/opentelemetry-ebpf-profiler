@@ -113,6 +113,9 @@ type Tracer struct {
 	// samplesPerSecond holds the configured number of samples per second.
 	samplesPerSecond int
 
+	// traceBufferSizeMultiplier scales the trace_events perf buffer size.
+	traceBufferSizeMultiplier int
+
 	// probabilisticInterval is the time interval for which probabilistic profiling will be enabled.
 	probabilisticInterval time.Duration
 
@@ -139,6 +142,9 @@ type Config struct {
 	VerboseMode bool
 	// InstrumentCudaLaunch determines whether to instrument calls to `cudaLaunchKernel`.
 	InstrumentCudaLaunch bool
+	// TraceBufferSizeMultiplier scales the trace_events perf buffer size.
+	// Useful for high-throughput scenarios like GPU profiling. Defaults to 1.
+	TraceBufferSizeMultiplier int
 	// BPFVerifierLogLevel is the log level of the eBPF verifier output.
 	BPFVerifierLogLevel uint32
 	// ProbabilisticInterval is the time interval for which probabilistic profiling will be enabled.
@@ -231,9 +237,10 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 		hasBatchOperations:     hasBatchOperations,
 		perfEntrypoints:        xsync.NewRWMutex(perfEventList),
 		reporter:               cfg.Reporter,
-		samplesPerSecond:       cfg.SamplesPerSecond,
-		probabilisticInterval:  cfg.ProbabilisticInterval,
-		probabilisticThreshold: cfg.ProbabilisticThreshold,
+		samplesPerSecond:          cfg.SamplesPerSecond,
+		traceBufferSizeMultiplier: cfg.TraceBufferSizeMultiplier,
+		probabilisticInterval:     cfg.ProbabilisticInterval,
+		probabilisticThreshold:    cfg.ProbabilisticThreshold,
 	}
 
 	return tracer, nil
