@@ -59,7 +59,7 @@ const (
 const UnwindInfoMaxEntries = 0x4000
 
 const (
-	MetricIDBeginCumulative = 0x62
+	MetricIDBeginCumulative = 0x69
 )
 
 const (
@@ -99,8 +99,8 @@ const (
 type ApmSpanID [8]byte
 type ApmTraceID [16]byte
 type CustomLabel struct {
-	Key [16]uint8
-	Val [48]uint8
+	Key [26]uint8
+	Val [54]uint8
 }
 type CustomLabelsArray struct {
 	Len    uint32
@@ -314,15 +314,26 @@ type V8ProcInfo struct {
 	Codekind_baseline            uint8
 	Pad_cgo_0                    [2]byte
 }
+type NativeCustomLabelsProcInfo struct {
+	Current_set_tls_offset       uint64
+	Has_als_data                 bool
+	Als_identity_hash_tls_offset uint64
+	Als_handle_tls_offset        uint64
+}
 
 const (
 	Sizeof_StackDelta = 0x4
-	Sizeof_Trace      = 0x62d0
+	Sizeof_Trace      = 0x6370
 
 	sizeof_ApmIntProcInfo = 0x8
 	sizeof_DotnetProcInfo = 0x4
 	sizeof_PHPProcInfo    = 0x18
 	sizeof_RubyProcInfo   = 0x28
+)
+
+const (
+	CustomLabelMaxKeyLen = 0x19
+	CustomLabelMaxValLen = 0x35
 )
 
 const (

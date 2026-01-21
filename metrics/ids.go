@@ -635,6 +635,33 @@ const (
 	// Number of failures reading Go custom labels
 	IDUnwindGoLabelsFailures = 279
 
+	// placeholder, will be added in a future PR
+	IDplaceholder280 = 280
+
+	// placeholder, will be added in a future PR
+	IDplaceholder281 = 281
+
+	// Number of failures to get TSD base for native custom labels
+	IDUnwindNativeCustomLabelsErrReadTsdBase = 282
+
+	// Number of failures to read native custom labels thread-local object
+	IDUnwindNativeCustomLabelsErrReadData = 283
+
+	// Number of failures to read native custom labels key buffer
+	IDUnwindNativeCustomLabelsErrReadKey = 284
+
+	// Number of failures to read native custom labels value buffer
+	IDUnwindNativeCustomLabelsErrReadValue = 285
+
+	// Number of successful reads of native custom labels
+	IDUnwindNativeCustomLabelsReadSuccesses = 286
+
+	// Total number of failures to add native custom labels
+	IDUnwindNativeCustomLabelsAddErrors = 287
+
+	// Number of successes adding native custom labels
+	IDUnwindNativeCustomLabelsAddSuccesses = 288
+
 	// max number of ID values, keep this as *last entry*
-	IDMax = 280
+	IDMax = 289
 )

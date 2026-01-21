@@ -133,6 +133,7 @@ type PerlProcInfo C.PerlProcInfo
 type PyProcInfo C.PyProcInfo
 type RubyProcInfo C.RubyProcInfo
 type V8ProcInfo C.V8ProcInfo
+type NativeCustomLabelsProcInfo C.NativeCustomLabelsProcInfo
 
 const (
 	Sizeof_StackDelta = C.sizeof_StackDelta
@@ -142,6 +143,11 @@ const (
 	sizeof_DotnetProcInfo = C.sizeof_DotnetProcInfo
 	sizeof_PHPProcInfo    = C.sizeof_PHPProcInfo
 	sizeof_RubyProcInfo   = C.sizeof_RubyProcInfo
+)
+
+const (
+	CustomLabelMaxKeyLen = C.CUSTOM_LABEL_MAX_KEY_LEN
+	CustomLabelMaxValLen = C.CUSTOM_LABEL_MAX_VAL_LEN
 )
 
 const (
