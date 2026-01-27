@@ -692,6 +692,18 @@ const (
 	// Number of times dlopen uprobe was fired
 	IDDlopenUprobeHits = 294
 
+	// Number of GPU timing events waiting for matching traces
+	IDCudaTimesAwaitingTraces = 295
+
+	// Number of GPU traces waiting for matching timing events
+	IDCudaTracesAwaitingTimes = 296
+
+	// Number of GPU timing entries cleared due to threshold
+	IDCudaTimesCleared = 297
+
+	// Number of GPU trace entries cleared due to threshold
+	IDCudaTracesCleared = 298
+
 	// max number of ID values, keep this as *last entry*
-	IDMax = 295
+	IDMax = 299
 )
