@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
+	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
@@ -257,28 +258,49 @@ func (f *gpuTraceFixer) addTime(ev *CuptiTimingEvent) *host.Trace {
 func (f *gpuTraceFixer) maybeClear() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	log.Debugf("[cuda] gpu trace fixer: %d traces waiting, %d time keys waiting",
-		len(f.tracesAwaitingTimes), len(f.timesAwaitingTraces))
-	if len(f.timesAwaitingTraces) > 10000 || len(f.tracesAwaitingTimes) > 10000 {
-		timesBeforeLen := len(f.timesAwaitingTraces)
-		tracesBeforeLen := len(f.tracesAwaitingTimes)
 
+	timesLen := len(f.timesAwaitingTraces)
+	tracesLen := len(f.tracesAwaitingTimes)
+
+	// Report gauges
+	metrics.Add(metrics.IDCudaTimesAwaitingTraces, metrics.MetricValue(timesLen))
+	metrics.Add(metrics.IDCudaTracesAwaitingTimes, metrics.MetricValue(tracesLen))
+
+	log.Debugf("[cuda] gpu trace fixer: %d traces waiting, %d time keys waiting, maxCorrelationId=%d",
+		tracesLen, timesLen, f.maxCorrelationId)
+
+	if timesLen > 10000 || tracesLen > 10000 {
 		// Keep entries within 5000 of the max correlation ID
 		// Use signed distance to handle wrap-around correctly
+		var sampleK uint32
+		var sampleDist int32
 		for k := range f.timesAwaitingTraces {
-			if int32(f.maxCorrelationId-k) > 5000 {
+			dist := int32(f.maxCorrelationId - k)
+			if sampleK == 0 {
+				sampleK = k
+				sampleDist = dist
+			}
+			if dist > 5000 {
 				delete(f.timesAwaitingTraces, k)
 			}
 		}
+		log.Debugf("[cuda] clearing: maxCorrelationId=%d, sample k=%d, dist=%d",
+			f.maxCorrelationId, sampleK, sampleDist)
 		for k := range f.tracesAwaitingTimes {
 			if int32(f.maxCorrelationId-k) > 5000 {
 				delete(f.tracesAwaitingTimes, k)
 			}
 		}
 
-		log.Warnf("[cuda] cleared gpu trace fixer maps: times %d -> %d, traces %d -> %d",
-			timesBeforeLen, len(f.timesAwaitingTraces),
-			tracesBeforeLen, len(f.tracesAwaitingTimes))
+		timesCleared := timesLen - len(f.timesAwaitingTraces)
+		tracesCleared := tracesLen - len(f.tracesAwaitingTimes)
+
+		metrics.Add(metrics.IDCudaTimesCleared, metrics.MetricValue(timesCleared))
+		metrics.Add(metrics.IDCudaTracesCleared, metrics.MetricValue(tracesCleared))
+
+		log.Debugf("[cuda] cleared gpu trace fixer maps: times %d -> %d, traces %d -> %d",
+			timesLen, len(f.timesAwaitingTraces),
+			tracesLen, len(f.tracesAwaitingTimes))
 	}
 }
 
