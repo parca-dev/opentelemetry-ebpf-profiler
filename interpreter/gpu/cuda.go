@@ -88,10 +88,19 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		if len(parcagpuProbes) == 0 {
 			return nil, nil
 		}
-		if len(parcagpuProbes) != 2 {
-			log.Warnf("Found %d parcagpu USDT probes in %s, need exactly 2: %v", len(parcagpuProbes), info.FileName(), parcagpuProbes)
+
+		// Filter to only the probes we need
+		var requiredProbes []pfelf.USDTProbe
+		for _, probe := range parcagpuProbes {
+			if probe.Name == "cuda_correlation" || probe.Name == "kernel_executed" {
+				requiredProbes = append(requiredProbes, probe)
+			}
+		}
+		if len(requiredProbes) != 2 {
+			log.Warnf("parcagpu USDT probes in %s missing required probes (need cuda_correlation and kernel_executed): %v", info.FileName(), parcagpuProbes)
 			return nil, nil
 		}
+		parcagpuProbes = requiredProbes
 
 		log.Debugf("Found parcagpu USDT probes in %s: %v", info.FileName(), parcagpuProbes)
 
