@@ -54,8 +54,21 @@ func Start(ctx context.Context, traceInCh <-chan *host.Trace,
 	}
 
 	var lostEventsCount, readErrorCount, noDataCount atomic.Uint64
+
+	// processBatch processes a batch of timing events in parallel.
+	processBatch := func(batch []gpu.CuptiTimingEvent) {
+		for i := range batch {
+			if completedTrace := gpu.AddTime(&batch[i]); completedTrace != nil {
+				traceOutChan <- completedTrace
+			}
+		}
+	}
+
+	const batchSize = 100
 	go func() {
 		var data perf.Record
+		batch := make([]gpu.CuptiTimingEvent, 0, batchSize)
+
 		logTicker := time.NewTicker(5 * time.Second)
 		defer logTicker.Stop()
 		for {
@@ -83,11 +96,12 @@ func Start(ctx context.Context, traceInCh <-chan *host.Trace,
 					noDataCount.Add(1)
 					continue
 				}
+				// Copy event into batch since data.RawSample is reused
 				ev := (*gpu.CuptiTimingEvent)(unsafe.Pointer(&data.RawSample[0]))
-				log.Debugf("[cuda]: timing info with id %d for cuda from %d", ev.Id, ev.Pid)
-				if completedTrace := gpu.AddTime(ev); completedTrace != nil {
-					log.Debugf("[cuda]: trace completed with event: %d", ev.Id)
-					traceOutChan <- completedTrace
+				batch = append(batch, *ev)
+				if len(batch) >= batchSize {
+					go processBatch(batch)
+					batch = make([]gpu.CuptiTimingEvent, 0, batchSize)
 				}
 			}
 		}
