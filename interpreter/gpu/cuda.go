@@ -1,6 +1,7 @@
 package gpu // import "go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"strconv"
@@ -15,7 +16,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
-	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
 const (
@@ -315,16 +315,13 @@ func (f *gpuTraceFixer) prepTrace(tr *host.Trace, ev *CuptiTimingEvent) *host.Tr
 		tr.CustomLabels["cuda_id"] = strconv.FormatUint(uint64(ev.Id), 10)
 	}
 	if len(ev.KernelName) > 0 {
-		str := util.GoString(ev.KernelName[:])
-		demstr, err := demangle.ToString(
-			str, demangle.NoParams, demangle.NoEnclosingParams)
-		if err != nil {
-			log.Debugf("failed to demangle cuda kernel name %q: %v", str, err)
-		} else {
-			str = demstr
+		// Store the raw (mangled) kernel name - demangling happens in Symbolize
+		// Use unsafe.String to avoid allocation - Intern/unique.Make will copy if new
+		nameBytes := ev.KernelName[:]
+		if idx := bytes.IndexByte(nameBytes, 0); idx >= 0 {
+			nameBytes = nameBytes[:idx]
 		}
-		// Store the interned string directly in the File field (both are 8 bytes)
-		istr := libpf.Intern(str)
+		istr := libpf.Intern(unsafe.String(unsafe.SliceData(nameBytes), len(nameBytes)))
 		// See collect_trace where we always make the first frame a CUDA kernel frame.
 		if tr.Frames[0].Type != libpf.CUDAKernelFrame {
 			panic("first frame is not a CUDA kernel frame")
@@ -423,19 +420,21 @@ func (i *Instance) Symbolize(f *host.Frame, frames *libpf.Frames) error {
 	if f.Type != libpf.CUDAKernelFrame {
 		return interpreter.ErrMismatchInterpreterType
 	}
-	cudaId := uint64(f.Lineno)
-	correlationId := uint32(cudaId)
-	callbackType := uint32(cudaId >> 32)
 	// Extract the libpf.String directly from the uint64 field (both are 8 bytes)
 	fileIDAsUint64 := uint64(f.File)
-	internStr := *(*libpf.String)(unsafe.Pointer(&fileIDAsUint64))
-	log.Debugf("symbolizing cuda kernel frame with correlation ID %d (callback type %d) %s",
-		correlationId, callbackType, internStr)
+	mangledStr := *(*libpf.String)(unsafe.Pointer(&fileIDAsUint64))
+
+	// Demangle the kernel name
+	funcName := mangledStr
+	if demStr, err := demangle.ToString(
+		mangledStr.String(), demangle.NoParams, demangle.NoEnclosingParams); err == nil {
+		funcName = libpf.Intern(demStr)
+	}
 
 	frames.Append(&libpf.Frame{
 		Type:            libpf.CUDAKernelFrame,
 		AddressOrLineno: f.Lineno,
-		FunctionName:    internStr,
+		FunctionName:    funcName,
 	})
 	return nil
 }
