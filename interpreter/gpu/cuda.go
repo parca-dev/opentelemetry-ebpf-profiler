@@ -233,10 +233,8 @@ func (f *gpuTraceFixer) addTrace(trace *host.Trace, traceOutChan chan<- *host.Tr
 }
 
 // addTime is called when timing info is received from eBPF, to match it with a trace.
+// Caller must hold f.mu.
 func (f *gpuTraceFixer) addTime(ev *CuptiTimingEvent) *host.Trace {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
 	// Update max, detecting wrap-around (new ID much smaller than max means wrap)
 	if ev.Id > f.maxCorrelationId || f.maxCorrelationId-ev.Id > 1<<31 {
 		f.maxCorrelationId = ev.Id
@@ -253,55 +251,47 @@ func (f *gpuTraceFixer) addTime(ev *CuptiTimingEvent) *host.Trace {
 	return nil
 }
 
-// maybeClear clears the maps if they get too big.
+// fixerStats holds statistics from a single fixer for aggregation.
+type fixerStats struct {
+	timesLen      int
+	tracesLen     int
+	timesCleared  int
+	tracesCleared int
+}
+
+// maybeClear clears the maps if they get too big and returns stats.
 // Uses threshold-based clearing: deletes entries with correlation ID < maxCorrelationId - 5000
-func (f *gpuTraceFixer) maybeClear() {
+func (f *gpuTraceFixer) maybeClear() fixerStats {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	timesLen := len(f.timesAwaitingTraces)
 	tracesLen := len(f.tracesAwaitingTimes)
 
-	// Report gauges
-	metrics.Add(metrics.IDCudaTimesAwaitingTraces, metrics.MetricValue(timesLen))
-	metrics.Add(metrics.IDCudaTracesAwaitingTimes, metrics.MetricValue(tracesLen))
-
-	log.Debugf("[cuda] gpu trace fixer: %d traces waiting, %d time keys waiting, maxCorrelationId=%d",
-		tracesLen, timesLen, f.maxCorrelationId)
+	stats := fixerStats{
+		timesLen:  timesLen,
+		tracesLen: tracesLen,
+	}
 
 	if timesLen > 10000 || tracesLen > 10000 {
 		// Keep entries within 5000 of the max correlation ID
 		// Use signed distance to handle wrap-around correctly
-		var sampleK uint32
-		var sampleDist int32
 		for k := range f.timesAwaitingTraces {
-			dist := int32(f.maxCorrelationId - k)
-			if sampleK == 0 {
-				sampleK = k
-				sampleDist = dist
-			}
-			if dist > 5000 {
+			if int32(f.maxCorrelationId-k) > 5000 {
 				delete(f.timesAwaitingTraces, k)
 			}
 		}
-		log.Debugf("[cuda] clearing: maxCorrelationId=%d, sample k=%d, dist=%d",
-			f.maxCorrelationId, sampleK, sampleDist)
 		for k := range f.tracesAwaitingTimes {
 			if int32(f.maxCorrelationId-k) > 5000 {
 				delete(f.tracesAwaitingTimes, k)
 			}
 		}
 
-		timesCleared := timesLen - len(f.timesAwaitingTraces)
-		tracesCleared := tracesLen - len(f.tracesAwaitingTimes)
-
-		metrics.Add(metrics.IDCudaTimesCleared, metrics.MetricValue(timesCleared))
-		metrics.Add(metrics.IDCudaTracesCleared, metrics.MetricValue(tracesCleared))
-
-		log.Debugf("[cuda] cleared gpu trace fixer maps: times %d -> %d, traces %d -> %d",
-			timesLen, len(f.timesAwaitingTraces),
-			tracesLen, len(f.tracesAwaitingTimes))
+		stats.timesCleared = timesLen - len(f.timesAwaitingTraces)
+		stats.tracesCleared = tracesLen - len(f.tracesAwaitingTimes)
 	}
+
+	return stats
 }
 
 // prepTrace prepares a trace with timing information and kernel name.
@@ -365,16 +355,68 @@ func AddTime(ev *CuptiTimingEvent) *host.Trace {
 		return nil
 	}
 	fixer := value.(*gpuTraceFixer)
+	fixer.mu.Lock()
+	defer fixer.mu.Unlock()
 	return fixer.addTime(ev)
 }
 
-// MaybeClearAll periodically clears all fixers to avoid memory leaks.
+// AddTimes processes a batch of timing events, taking the lock once per PID.
+func AddTimes(events []CuptiTimingEvent, out chan<- *host.Trace) {
+	if len(events) == 0 {
+		return
+	}
+
+	// Fast path: assume all events from same PID (common case)
+	pid := libpf.PID(events[0].Pid)
+	value, ok := gpuFixers.Load(pid)
+	if !ok {
+		return
+	}
+	fixer := value.(*gpuTraceFixer)
+
+	var otherPID []CuptiTimingEvent
+	fixer.mu.Lock()
+	for i := range events {
+		ev := &events[i]
+		if libpf.PID(ev.Pid) != pid {
+			otherPID = append(otherPID, *ev)
+			continue
+		}
+		if trace := fixer.addTime(ev); trace != nil {
+			out <- trace
+		}
+	}
+	fixer.mu.Unlock()
+
+	// Handle rare events from other PIDs
+	for i := range otherPID {
+		if trace := AddTime(&otherPID[i]); trace != nil {
+			out <- trace
+		}
+	}
+}
+
+// MaybeClearAll periodically clears all fixers and reports aggregated metrics.
 func MaybeClearAll() {
+	var totalTimes, totalTraces, totalTimesCleared, totalTracesCleared int
+
 	gpuFixers.Range(func(key, value any) bool {
 		fixer := value.(*gpuTraceFixer)
-		fixer.maybeClear()
+		stats := fixer.maybeClear()
+		totalTimes += stats.timesLen
+		totalTraces += stats.tracesLen
+		totalTimesCleared += stats.timesCleared
+		totalTracesCleared += stats.tracesCleared
 		return true
 	})
+
+	// Report metrics outside of any locks
+	metrics.Add(metrics.IDCudaTimesAwaitingTraces, metrics.MetricValue(totalTimes))
+	metrics.Add(metrics.IDCudaTracesAwaitingTimes, metrics.MetricValue(totalTraces))
+	if totalTimesCleared > 0 || totalTracesCleared > 0 {
+		metrics.Add(metrics.IDCudaTimesCleared, metrics.MetricValue(totalTimesCleared))
+		metrics.Add(metrics.IDCudaTracesCleared, metrics.MetricValue(totalTracesCleared))
+	}
 }
 
 func (i *Instance) Symbolize(f *host.Frame, frames *libpf.Frames) error {
