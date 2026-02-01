@@ -24,13 +24,13 @@ func Start(ctx context.Context, traceInCh <-chan *host.Trace,
 
 	// Read traces coming from ebpf and send normal traces through
 	go func() {
-		timer := time.NewTicker(5 * time.Second)
+		timer := time.NewTicker(1 * time.Second)
 		defer timer.Stop()
 
 		for {
 			select {
 			case <-timer.C:
-				// Periodically clean up all GPU trace fixers
+				// Periodically clean up all GPU trace fixers and report metrics
 				gpu.MaybeClearAll()
 			case <-ctx.Done():
 				return
@@ -57,11 +57,7 @@ func Start(ctx context.Context, traceInCh <-chan *host.Trace,
 
 	// processBatch processes a batch of timing events in parallel.
 	processBatch := func(batch []gpu.CuptiTimingEvent) {
-		for i := range batch {
-			if completedTrace := gpu.AddTime(&batch[i]); completedTrace != nil {
-				traceOutChan <- completedTrace
-			}
-		}
+		gpu.AddTimes(batch, traceOutChan)
 	}
 
 	const batchSize = 100
