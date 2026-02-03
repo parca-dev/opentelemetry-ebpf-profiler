@@ -1114,7 +1114,7 @@ func (f *File) LookupSymbol(symbol libpf.SymbolName) (*libpf.Symbol, error) {
 			}
 		}
 	} else {
-		return nil, errors.New("symbol hash not present")
+		return nil, libpf.ErrNoSymbolHash
 	}
 
 	return nil, libpf.ErrSymbolNotFound
