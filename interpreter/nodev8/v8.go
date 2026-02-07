@@ -2123,10 +2123,13 @@ func (d *v8Data) readIntrospectionData(ef *pfelf.File) error {
 }
 
 // loadNodeClData loads various offsets that are needed for custom labels handling.
-func (d *v8Data) loadNodeClData(ef *pfelf.File) error {
-	syms, err := ef.ReadSymbols()
-	if err != nil {
-		return fmt.Errorf("failed to read symbols: %w", err)
+func (d *v8Data) loadNodeClData(ef *pfelf.File, syms *libpf.SymbolMap) error {
+	var err error
+	if syms == nil {
+		syms, err = ef.ReadSymbols()
+		if err != nil {
+			return fmt.Errorf("failed to read symbols: %w", err)
+		}
 	}
 
 	sym, err := syms.LookupSymbol("_ZZ21napi_get_node_versionE7version")
@@ -2190,6 +2193,36 @@ func (d *v8Data) loadNodeClData(ef *pfelf.File) error {
 	return nil
 }
 
+func lookupSymbol(ef *pfelf.File, syms **libpf.SymbolMap, name libpf.SymbolName) (*libpf.Symbol, error) {
+	if *syms == nil {
+		// first try getting the dynamic symbol
+		sym, err := ef.LookupSymbol(name)
+		if !errors.Is(err, libpf.ErrSymbolNotFound) {
+			return nil, err
+		}
+		if err == nil {
+			return sym, nil
+		}
+	}
+	// If we got here, then one of the expected dynamic symbols was missing.
+	// This is probably because in recent versions of node (the whole v26 series, as well as the v24 series >= v24.11.1)
+	// a build flag change was made to stop exporting various symbols: see https://github.com/nodejs/node/pull/56290
+	//
+	// Let's instead try reading the full non-dynamic symtab, and get the symbol from there.
+	// This won't work for stripped Node.js binaries, but the official builds are thankfully not stripped.
+	if *syms == nil {
+		var err error
+		*syms, err = ef.ReadSymbols()
+		if err != nil {
+			*syms = nil
+			return nil, err
+		}
+	}
+
+	// By the time we get here, *syms must be non-nil
+	return (*syms).LookupSymbol(name)
+}
+
 func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpreter.Data, error) {
 	if !v8Regex.MatchString(info.FileName()) {
 		return nil, nil
@@ -2223,12 +2256,13 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		version: version,
 	}
 
-	addr, err := ef.LookupSymbolAddress("_ZN2v88internal8Snapshot19DefaultSnapshotBlobEv")
+	var syms *libpf.SymbolMap
+	sym, err := lookupSymbol(ef, &syms, "_ZN2v88internal8Snapshot19DefaultSnapshotBlobEv")
 	if err == nil {
 		// If there is a big stack delta soon after v8::internal::Snapshot::DefaultSnapshotBlob()
 		// assume it is the V8 snapshot data.
 		for _, gap := range info.Gaps() {
-			if gap.Start-uint64(addr) < 1024 {
+			if gap.Start-uint64(sym.Address) < 1024 {
 				d.snapshotRange = gap
 				log.Debugf("V8 JIT Area: %#v", d.snapshotRange)
 				break
@@ -2236,7 +2270,7 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		}
 	}
 
-	sym, err := ef.LookupSymbol("_ZN2v88internal11interpreter9Bytecodes14kBytecodeSizesE")
+	sym, err = lookupSymbol(ef, &syms, "_ZN2v88internal11interpreter9Bytecodes14kBytecodeSizesE")
 	if err == nil && sym.Size%3 == 0 && sym.Size < 3*256 {
 		// Symbol v8::internal::interpreter::Bytecodes::kBytecodeSizes:
 		// static const uint8_t Bytecodes::kBytecodeSizes[3][kBytecodeCount];
@@ -2258,7 +2292,7 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		}
 	}
 
-	if err = d.loadNodeClData(ef); err != nil {
+	if err = d.loadNodeClData(ef, syms); err != nil {
 		log.Warnf("Failed to load extra data for Node.js custom labels handling: %v", err)
 	}
 
