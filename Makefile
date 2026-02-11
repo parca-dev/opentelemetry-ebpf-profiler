@@ -83,9 +83,19 @@ rust-tests: rust-targets
 	cargo test
 
 GOLANGCI_LINT_VERSION = "v2.1.6"
-lint: generate vanity-import-check pprof-execs
+GOLANGCI_LINT_IMAGE = golangci-lint-with-systemtap:$(GOLANGCI_LINT_VERSION)
+
+# Build custom golangci-lint image with systemtap support
+.PHONY: lint-image
+lint-image:
+	@if ! docker image inspect $(GOLANGCI_LINT_IMAGE) >/dev/null 2>&1; then \
+		echo "Building custom golangci-lint image with systemtap support..."; \
+		docker build -f Dockerfile.golangci-lint --build-arg GOLANGCI_LINT_VERSION=$(GOLANGCI_LINT_VERSION) -t $(GOLANGCI_LINT_IMAGE) .; \
+	fi
+
+lint: generate vanity-import-check pprof-execs lint-image
 	$(MAKE) lint -C support/ebpf
-	docker run --rm -t -v $$(pwd):/app -w /app golangci/golangci-lint:$(GOLANGCI_LINT_VERSION) sh -c "golangci-lint version && golangci-lint config verify && golangci-lint run --max-issues-per-linter -1 --max-same-issues -1"
+	docker run --rm -t -v $$(pwd):/app -w /app $(GOLANGCI_LINT_IMAGE) sh -c "golangci-lint version && golangci-lint config verify && golangci-lint run --max-issues-per-linter -1 --max-same-issues -1"
 
 format-ebpf:
 	$(MAKE) format -C support/ebpf
