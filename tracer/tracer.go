@@ -379,6 +379,11 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 			name:   "go_labels",
 			enable: cfg.IncludeTracers.Has(types.Labels),
 		},
+		{
+			progID: uint32(support.ProgUnwindLuaJIT),
+			name:   "unwind_luajit",
+			enable: cfg.IncludeTracers.Has(types.LuaJITTracer),
+		},
 	}
 
 	if err = loadPerfUnwinders(coll, ebpfProgs, ebpfMaps["perf_progs"], tailCallProgs,
@@ -938,6 +943,8 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) *host.Trace {
 			Lineno:        libpf.AddressOrLineno(rawFrame.Addr_or_line),
 			Type:          libpf.FrameType(rawFrame.Kind),
 			ReturnAddress: rawFrame.Return_address != 0,
+			LJCalleePC:    uint32(rawFrame.Callee_pc_lo) + (uint32(rawFrame.Callee_pc_hi) << 16),
+			LJCallerPC:    uint32(rawFrame.Caller_pc_lo) + (uint32(rawFrame.Caller_pc_hi) << 16),
 		}
 	}
 	return trace

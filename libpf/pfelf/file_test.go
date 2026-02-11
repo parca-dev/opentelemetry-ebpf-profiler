@@ -14,6 +14,8 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/testsupport"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
+	xh "go.opentelemetry.io/ebpf-profiler/x86helpers"
+	xx "golang.org/x/arch/x86/x86asm"
 )
 
 func getPFELF(path string, t *testing.T) *File {
@@ -95,6 +97,36 @@ func TestGoVersion(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, runtime.Version(), testVersion)
 }
+
+func symbolOffsetFromCodeX86(code []byte) (int64, error) {
+	// e.g. mov    eax,DWORD PTR fs:0xfffffffffffffffc
+	code, _ = xh.SkipEndBranch(code)
+	offset := 0
+	for {
+		insn, err := xx.Decode(code[offset:], 64)
+		if err != nil {
+			return 0, err
+		}
+		offset += insn.Len
+		if insn.Op != xx.MOV {
+			continue
+		}
+		switch a := insn.Args[1].(type) {
+		case xx.Mem:
+			if a.Segment != xx.FS {
+				continue
+			}
+			// for some reason the Go disassembler
+			// reports the displacement as a 32-bit value
+			// embedded in a 64-bit one; e.g., it represents -16 as 0x00000000fffffff0 .
+			// So this double cast is necessary.
+			return int64(int32(a.Disp)), nil
+		default:
+			continue
+		}
+	}
+}
+
 func TestLookupTlsSymbolOffset(t *testing.T) {
 	for _, test := range []struct {
 		exe      string

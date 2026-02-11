@@ -674,11 +674,11 @@ const (
 	// Number of successes adding native custom labels
 	IDUnwindNativeCustomLabelsAddSuccesses = 288
 
-	// placeholder, will be added in a future PR
-	IDplaceholder289 = 289
+	// Number of attempted LuaJIT unwinds
+	IDUnwindLuaJITAttempts = 289
 
-	// placeholder, will be added in a future PR
-	IDplaceholder290 = 290
+	// Number of times we didn't find an entry for this process in the LuaJIT process info array
+	IDUnwindLuaJITErrNoProcInfo = 290
 
 	// Number of attempts to read Node.js custom labels
 	IDUnwindNodeCustomLabelsAttempts = 291

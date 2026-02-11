@@ -33,8 +33,10 @@
 #define FRAME_MARKER_PHP_JIT 0x9
 // Indicates a Dotnet frame
 #define FRAME_MARKER_DOTNET  0xA
+// Indicates a LuaJIT frame
+#define FRAME_MARKER_LUAJIT  0xB
 // Indicates a Go frame
-#define FRAME_MARKER_GO      0xB
+#define FRAME_MARKER_GO      0xC
 
 // Indicates a frame containing information about a critical unwinding error
 // that caused further unwinding to be aborted.

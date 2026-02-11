@@ -153,6 +153,8 @@ type mappingArgs struct {
 
 // ebpfMapsMockup implements the ebpf interface as test mockup
 type ebpfMapsMockup struct {
+	interpreter.EbpfHandlerStubs
+
 	updateProcCount, deleteProcCount uint8
 
 	stackDeltaMemory []pmebpf.StackDeltaEBPF
@@ -316,7 +318,8 @@ func TestInterpreterConvertTrace(t *testing.T) {
 				libpf.Set[string]{})
 			require.NoError(t, err)
 
-			newTrace := manager.ConvertTrace(testcase.trace)
+			newTrace, err := manager.ConvertTrace(testcase.trace)
+			require.NoError(t, err)
 
 			testcase.expect.Hash = traceutil.HashTrace(testcase.expect)
 			if testcase.expect.Hash == newTrace.Hash {
