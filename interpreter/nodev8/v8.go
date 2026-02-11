@@ -154,6 +154,7 @@ package nodev8 // import "go.opentelemetry.io/ebpf-profiler/interpreter/nodev8"
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -480,6 +481,17 @@ type v8Data struct {
 
 	// frametypeToName caches frametype's name
 	frametypeToName [MaxFrameType]libpf.String
+
+	// isolateSym is the symbol of the v8 thread-local current isolate
+	isolateSym libpf.Address
+
+	// cpedOffset is the offset of continuation_preserved_embedder_data_ in
+	// the isolate data.
+	cpedOffset uint32
+
+	// wrappedObjectOffset is the offset of a wrapped (via ObjectWrap) C++ object
+	// in the corresponding JS object.
+	wrappedObjectOffset uint32
 }
 
 type v8Instance struct {
@@ -1779,9 +1791,12 @@ func (d *v8Data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Add
 		Off_Code_instruction_size:  uint8(vms.Code.InstructionSize),
 		Off_Code_flags:             uint8(vms.Code.Flags),
 
-		Codekind_shift:    vms.CodeKind.FieldShift,
-		Codekind_mask:     uint8(vms.CodeKind.FieldMask),
-		Codekind_baseline: vms.CodeKind.Baseline,
+		Codekind_shift:        vms.CodeKind.FieldShift,
+		Codekind_mask:         uint8(vms.CodeKind.FieldMask),
+		Codekind_baseline:     vms.CodeKind.Baseline,
+		Isolate_sym:           uint64(d.isolateSym),
+		Cped_offset:           d.cpedOffset,
+		Wrapped_object_offset: d.wrappedObjectOffset,
 	}
 	if err := ebpf.UpdateProcData(libpf.V8, pid, unsafe.Pointer(&data)); err != nil {
 		return nil, err
@@ -2079,6 +2094,74 @@ func (d *v8Data) readIntrospectionData(ef *pfelf.File) error {
 	return nil
 }
 
+// loadNodeClData loads various offsets that are needed for custom labels handling.
+func (d *v8Data) loadNodeClData(ef *pfelf.File) error {
+	syms, err := ef.ReadSymbols()
+	if err != nil {
+		return fmt.Errorf("failed to read symbols: %w", err)
+	}
+
+	sym, err := syms.LookupSymbol("_ZZ21napi_get_node_versionE7version")
+	if err != nil {
+		return fmt.Errorf("failed to lookup Node version symbol: %w", err)
+	}
+
+	if sym == nil {
+		return errors.New("Node version symbol not found")
+	}
+
+	if sym.Size < 12 {
+		return fmt.Errorf("Node version symbol size too small: %d", sym.Size)
+	}
+
+	versBuf := make([]byte, 12)
+	if _, err = ef.ReadVirtualMemory(versBuf, int64(sym.Address)); err != nil {
+		return fmt.Errorf("failed to read Node version data: %w", err)
+	}
+
+	major := binary.LittleEndian.Uint32(versBuf[0:4])
+
+	// These offsets are computed by pointing a libclang script at a Node build directory
+	// with a valid compile_commands.json:
+	// see e.g. https://gist.github.com/umanwizard/a9e055a7cc1b81248bbf17501c749481 .
+	if major >= 22 {
+		if major < 24 {
+			d.cpedOffset = 576
+			d.wrappedObjectOffset = 24
+		} else if major < 25 {
+			d.cpedOffset = 632
+			d.wrappedObjectOffset = 32
+		} else {
+			d.cpedOffset = 640
+			d.wrappedObjectOffset = 32
+		}
+	} else {
+		return fmt.Errorf("Unsupported Node major version: %d", major)
+	}
+
+	var offset int64
+
+	if major < 26 {
+		offset, err = ef.LookupTLSSymbolOffset("_ZN2v88internal18g_current_isolate_E")
+		if err != nil {
+			return fmt.Errorf("failed to look up g_current_isolate: %w", err)
+		}
+	} else {
+		// Node started building v8 without external dynamic symbols
+		// in major version v26.
+		sym, err = syms.LookupSymbol("_ZN2v88internal18g_current_isolate_E")
+		if err != nil {
+			return fmt.Errorf("failed to look up g_current_isolate (in major 26): %w", err)
+		}
+		offset, err = ef.AdjustTLSSymbol(sym)
+		if err != nil {
+			return fmt.Errorf("failed to adjust TLS symbol: %w", err)
+		}
+	}
+	d.isolateSym = libpf.Address(offset)
+	return nil
+}
+
 func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpreter.Data, error) {
 	if !v8Regex.MatchString(info.FileName()) {
 		return nil, nil
@@ -2145,6 +2228,10 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 				break
 			}
 		}
+	}
+
+	if err = d.loadNodeClData(ef); err != nil {
+		log.Warnf("Failed to load extra data for Node.js custom labels handling: %v", err)
 	}
 
 	// load introspection data
