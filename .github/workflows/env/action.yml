@@ -40,7 +40,8 @@ runs:
         sudo apt-get update -y
         sudo apt-get install -y gcc-aarch64-linux-gnu \
           libc6-arm64-cross qemu-user-binfmt libc6:arm64 \
-          binutils-aarch64-linux-gnu
+          musl-dev:amd64 musl-dev:arm64 musl-tools binutils-aarch64-linux-gnu \
+          systemtap-sdt-dev systemtap-sdt-dev:arm64
     - name: Set up Go
       uses: actions/setup-go@4dc6199c7b1a012772edbd06daecab0f50c9053c # v6.1.0
       with:

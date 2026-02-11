@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/lpm"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	sdtypes "go.opentelemetry.io/ebpf-profiler/nativeunwind/stackdeltatypes"
@@ -267,3 +268,8 @@ func (emc *ebpfMapsCoredump) SupportsGenericBatchOperations() bool {
 func (emc *ebpfMapsCoredump) SupportsLPMTrieBatchOperations() bool {
 	return false
 }
+func (emc *ebpfMapsCoredump) AttachUSDTProbes(_ libpf.PID, _, _ string, _ []pfelf.USDTProbe,
+	_ []uint64, _ []string) (interpreter.LinkCloser, error) {
+	return nil, nil
+}
+

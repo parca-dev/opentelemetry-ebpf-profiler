@@ -29,8 +29,6 @@ endif
 export TARGET_ARCH
 export CGO_ENABLED = 0
 export GOARCH = $(TARGET_ARCH)
-export CC = $(ARCH_PREFIX)-linux-gnu-gcc
-export OBJCOPY = $(ARCH_PREFIX)-linux-gnu-objcopy
 
 BRANCH = $(shell git rev-parse --abbrev-ref HEAD | tr -d '-' | tr '[:upper:]' '[:lower:]')
 COMMIT_SHORT_SHA = $(shell git rev-parse --short=8 HEAD)
@@ -83,6 +81,7 @@ rust-components: rust-targets
 rust-tests: rust-targets
 	cargo test
 
+# TODO (btv) -- the golang-ci with systemtap support got lost in the merge, figure out how to fix this.
 lint: generate vanity-import-check pprof-execs
 	$(MAKE) lint -C support/ebpf
 	go tool $(GO_TOOLS) golangci-lint config verify

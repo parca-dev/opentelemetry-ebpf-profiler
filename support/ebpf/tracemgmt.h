@@ -737,7 +737,13 @@ get_usermode_regs(struct pt_regs *ctx, UnwindState *state, bool *has_usermode_re
 #endif // TESTING_COREDUMP
 
 static inline EBPF_INLINE int collect_trace(
-  struct pt_regs *ctx, TraceOrigin origin, u32 pid, u32 tid, u64 trace_timestamp, u64 off_cpu_time)
+  struct pt_regs *ctx,
+  TraceOrigin origin,
+  u32 pid,
+  u32 tid,
+  u64 trace_timestamp,
+  u64 off_cpu_time,
+  u64 cuda_id)
 {
   // The trace is reused on each call to this function so we have to reset the
   // variables used to maintain state.
@@ -764,6 +770,16 @@ static inline EBPF_INLINE int collect_trace(
   if (pid == 0) {
     tail_call(ctx, PROG_UNWIND_STOP);
     return 0;
+  }
+
+  if (cuda_id != 0) {
+    // Create a CUDA kernel frame, Symbolize will later resolve the kernel name from the ID.
+    u64 *data = push_frame(&record->state, trace, FRAME_MARKER_CUDA_KERNEL, FRAME_FLAG_PID_SPECIFIC, 0, 2);
+    if (!data)
+      return ERR_STACK_LENGTH_EXCEEDED;
+    data[0] = cuda_id;
+    // this is used by userland to stash the kernel name pointer
+    data[1] = 0;
   }
 
   // Recursive unwind frames
