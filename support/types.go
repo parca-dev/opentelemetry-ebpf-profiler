@@ -22,6 +22,7 @@ const (
 	FrameMarkerPerl    = 0x7
 	FrameMarkerV8      = 0x8
 	FrameMarkerDotnet  = 0xa
+	FrameMarkerLuaJIT  = 0xd
 	FrameMarkerBEAM    = 0xc
 	FrameMarkerGo      = 0xb
 )
@@ -44,6 +45,7 @@ const (
 	ProgUnwindDotnet  = 0x8
 	ProgGoLabels      = 0x9
 	ProgUnwindBEAM    = 0xa
+	ProgUnwindLuaJIT  = 0xb
 )
 
 const (
@@ -59,7 +61,7 @@ const (
 const UnwindInfoMaxEntries = 0x4000
 
 const (
-	MetricIDBeginCumulative = 0x6c
+	MetricIDBeginCumulative = 0x70
 )
 
 const (
@@ -322,6 +324,11 @@ type NativeCustomLabelsProcInfo struct {
 	Als_identity_hash_tls_offset uint64
 	Als_handle_tls_offset        uint64
 }
+type LuaJITProcInfo struct {
+	G2dispatch      uint16
+	Cur_L_offset    uint16
+	Cframe_size_jit uint16
+}
 
 const (
 	Sizeof_StackDelta = 0x4
@@ -382,6 +389,13 @@ const (
 	V8LineCookieShift = 0x20
 	V8LineCookieMask  = 0xffffffff00000000
 	V8LineDeltaMask   = 0xffffffff
+)
+
+const (
+	LJFFIFunc     = 0xff1
+	LJFileId      = 0x2a
+	LJNormalFrame = 0x0
+	LJGReport     = 0xff2
 )
 
 var MetricsTranslation = []metrics.MetricID{
@@ -475,7 +489,9 @@ var MetricsTranslation = []metrics.MetricID{
 	0x5d: metrics.IDUnwindDotnetErrBadFP,
 	0x5e: metrics.IDUnwindDotnetErrCodeHeader,
 	0x5f: metrics.IDUnwindDotnetErrCodeTooLarge,
-	0x67: metrics.IDUnwindNodeCustomLabelsAttempts,
-	0x68: metrics.IDUnwindNodeCustomLabelsSuccesses,
-	0x69: metrics.IDUnwindNodeCustomLabelsFailures,
+	0x6b: metrics.IDUnwindNodeCustomLabelsAttempts,
+	0x6c: metrics.IDUnwindNodeCustomLabelsSuccesses,
+	0x6d: metrics.IDUnwindNodeCustomLabelsFailures,
+	0x67: metrics.IDUnwindLuaJITAttempts,
+	0x68: metrics.IDUnwindLuaJITErrNoProcInfo,
 }

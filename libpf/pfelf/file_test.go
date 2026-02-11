@@ -112,7 +112,7 @@ func TestGetGoBuildID(t *testing.T) {
 	assert.Equal(t, expectedBuildID, buildID)
 }
 
-func symbolOffsetFromCodeX86(code []byte) (int64, error) {
+ func symbolOffsetFromCodeX86(code []byte) (int64, error) {
 	// e.g. mov    eax,DWORD PTR fs:0xfffffffffffffffc
 	code, _ = xh.SkipEndBranch(code)
 	offset := 0
