@@ -782,7 +782,13 @@ get_usermode_regs(struct pt_regs *ctx, UnwindState *state, bool *has_usermode_re
 #endif // TESTING_COREDUMP
 
 static inline EBPF_INLINE int collect_trace(
-  struct pt_regs *ctx, TraceOrigin origin, u32 pid, u32 tid, u64 trace_timestamp, u64 off_cpu_time)
+  struct pt_regs *ctx,
+  TraceOrigin origin,
+  u32 pid,
+  u32 tid,
+  u64 trace_timestamp,
+  u64 off_cpu_time,
+  u64 cuda_id)
 {
   // The trace is reused on each call to this function so we have to reset the
   // variables used to maintain state.
@@ -805,6 +811,11 @@ static inline EBPF_INLINE int collect_trace(
   // Get the kernel mode stack trace first
   trace->kernel_stack_id = bpf_get_stackid(ctx, &kernel_stackmap, BPF_F_REUSE_STACKID);
   DEBUG_PRINT("kernel stack id = %d", trace->kernel_stack_id);
+
+  if (cuda_id != 0) {
+    // Create a CUDA kernel frame, Symbolize will later resolve the kernel name from the ID.
+    _push(trace, 0, cuda_id, FRAME_MARKER_CUDA_KERNEL);
+  }
 
   // Recursive unwind frames
   int unwinder           = PROG_UNWIND_STOP;

@@ -8,6 +8,7 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/lpm"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/process"
@@ -61,3 +62,8 @@ func (m *EbpfHandlerStubs) UpdateProcData(libpf.InterpreterType, libpf.PID,
 func (m *EbpfHandlerStubs) DeleteProcData(libpf.InterpreterType, libpf.PID) error {
 	return nil
 }
+func (mockup *EbpfHandlerStubs) AttachUSDTProbes(libpf.PID, string, string, []pfelf.USDTProbe,
+	[]uint64, []string) (LinkCloser, error) {
+	return nil, nil
+}
+
