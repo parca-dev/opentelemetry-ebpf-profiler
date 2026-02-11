@@ -52,6 +52,7 @@ extern bpf_map_def py_procs;
 extern bpf_map_def ruby_procs;
 extern bpf_map_def stack_delta_page_to_info;
 extern bpf_map_def unwind_info_array;
+extern bpf_map_def luajit_procs;
 
 #endif // TESTING_COREDUMP
 

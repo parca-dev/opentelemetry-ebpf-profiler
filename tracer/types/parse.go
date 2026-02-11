@@ -22,6 +22,7 @@ const (
 	RubyTracer
 	V8Tracer
 	DotnetTracer
+	LuaJITTracer
 	GoTracer
 	Labels
 
@@ -37,6 +38,7 @@ var tracerTypeToName = map[tracerType]string{
 	RubyTracer:    "ruby",
 	V8Tracer:      "v8",
 	DotnetTracer:  "dotnet",
+	LuaJITTracer:  "luajit",
 	GoTracer:      "go",
 	Labels:        "labels",
 }

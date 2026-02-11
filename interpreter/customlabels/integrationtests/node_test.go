@@ -77,8 +77,9 @@ func runTest(t *testing.T, ctx context.Context, host string, port nat.Port) {
 			if trace == nil {
 				continue
 			}
-			ct := trc.TraceProcessor().ConvertTrace(trace)
+			ct, err := trc.TraceProcessor().ConvertTrace(trace)
 			require.NotNil(t, ct)
+			require.NoError(t, err)
 			workerId, okWid := trace.CustomLabels["workerId"]
 			filePath, okFname := trace.CustomLabels["filePath"]
 			var fileName string

@@ -14,6 +14,7 @@ import (
 #include "./ebpf/frametypes.h"
 #include "./ebpf/stackdeltatypes.h"
 #include "./ebpf/v8_tracer.h"
+#include "./ebpf/luajit.h"
 */
 import "C"
 
@@ -30,6 +31,7 @@ const (
 	FrameMarkerPerl     = C.FRAME_MARKER_PERL
 	FrameMarkerV8       = C.FRAME_MARKER_V8
 	FrameMarkerDotnet   = C.FRAME_MARKER_DOTNET
+	FrameMarkerLuaJIT   = C.FRAME_MARKER_LUAJIT
 	FrameMarkerGo       = C.FRAME_MARKER_GO
 	FrameMarkerAbort    = C.FRAME_MARKER_ABORT
 )
@@ -45,6 +47,7 @@ const (
 	ProgUnwindV8      = C.PROG_UNWIND_V8
 	ProgUnwindDotnet  = C.PROG_UNWIND_DOTNET
 	ProgGoLabels      = C.PROG_GO_LABELS
+	ProgUnwindLuaJIT  = C.PROG_UNWIND_LUAJIT
 )
 
 const (
@@ -129,6 +132,7 @@ type PyProcInfo C.PyProcInfo
 type RubyProcInfo C.RubyProcInfo
 type V8ProcInfo C.V8ProcInfo
 type NativeCustomLabelsProcInfo C.NativeCustomLabelsProcInfo
+type LuaJITProcInfo C.LuaJITProcInfo
 
 const (
 	Sizeof_Frame      = C.sizeof_Frame
@@ -195,6 +199,11 @@ const (
 	V8LineCookieShift = C.V8_LINE_COOKIE_SHIFT
 	V8LineCookieMask  = C.V8_LINE_COOKIE_MASK
 	V8LineDeltaMask   = C.V8_LINE_DELTA_MASK
+)
+
+const (
+	LJFFIFunc = C.LUAJIT_FFI_FUNC
+	LJFileId  = C.LUAJIT_JIT_FILE_ID
 )
 
 var MetricsTranslation = []metrics.MetricID{
@@ -288,4 +297,6 @@ var MetricsTranslation = []metrics.MetricID{
 	C.metricID_UnwindDotnetErrBadFP:                       metrics.IDUnwindDotnetErrBadFP,
 	C.metricID_UnwindDotnetErrCodeHeader:                  metrics.IDUnwindDotnetErrCodeHeader,
 	C.metricID_UnwindDotnetErrCodeTooLarge:                metrics.IDUnwindDotnetErrCodeTooLarge,
+	C.metricID_UnwindLuaJITAttempts:                       metrics.IDUnwindLuaJITAttempts,
+	C.metricID_UnwindLuaJITErrNoProcInfo:                  metrics.IDUnwindLuaJITErrNoProcInfo,
 }

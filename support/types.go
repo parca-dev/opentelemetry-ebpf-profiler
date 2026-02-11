@@ -23,7 +23,8 @@ const (
 	FrameMarkerPerl     = 0x7
 	FrameMarkerV8       = 0x8
 	FrameMarkerDotnet   = 0xa
-	FrameMarkerGo       = 0xb
+	FrameMarkerLuaJIT   = 0xb
+	FrameMarkerGo       = 0xc
 	FrameMarkerAbort    = 0xff
 )
 
@@ -38,6 +39,7 @@ const (
 	ProgUnwindV8      = 0x7
 	ProgUnwindDotnet  = 0x8
 	ProgGoLabels      = 0x9
+	ProgUnwindLuaJIT  = 0xa
 )
 
 const (
@@ -53,7 +55,7 @@ const (
 const MaxFrameUnwinds = 0x80
 
 const (
-	MetricIDBeginCumulative = 0x6c
+	MetricIDBeginCumulative = 0x70
 )
 
 const (
@@ -108,7 +110,10 @@ type Frame struct {
 	Addr_or_line   uint64
 	Kind           uint8
 	Return_address uint8
-	Pad            [6]uint8
+	Callee_pc_hi   uint8
+	Caller_pc_hi   uint8
+	Callee_pc_lo   uint16
+	Caller_pc_lo   uint16
 }
 type OffsetRange struct {
 	Lower_offset1 uint64
@@ -316,6 +321,11 @@ type NativeCustomLabelsProcInfo struct {
 	Als_identity_hash_tls_offset uint64
 	Als_handle_tls_offset        uint64
 }
+type LuaJITProcInfo struct {
+	G2dispatch      uint16
+	Cur_L_offset    uint16
+	Cframe_size_jit uint16
+}
 
 const (
 	Sizeof_Frame      = 0x18
@@ -377,6 +387,11 @@ const (
 	V8LineCookieShift = 0x20
 	V8LineCookieMask  = 0xffffffff00000000
 	V8LineDeltaMask   = 0xffffffff
+)
+
+const (
+	LJFFIFunc = 0xff1
+	LJFileId  = 0x2a
 )
 
 var MetricsTranslation = []metrics.MetricID{
@@ -470,4 +485,6 @@ var MetricsTranslation = []metrics.MetricID{
 	0x5d: metrics.IDUnwindDotnetErrBadFP,
 	0x5e: metrics.IDUnwindDotnetErrCodeHeader,
 	0x5f: metrics.IDUnwindDotnetErrCodeTooLarge,
+	0x67: metrics.IDUnwindLuaJITAttempts,
+	0x68: metrics.IDUnwindLuaJITErrNoProcInfo,
 }

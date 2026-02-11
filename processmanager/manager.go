@@ -212,9 +212,10 @@ func (pm *ProcessManager) symbolizeFrame(frame int, trace *host.Trace, frames *l
 		len(pm.interpreters[trace.PID]), errSymbolizationNotSupported)
 }
 
-func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace) {
+func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace, err error) {
 	traceLen := len(trace.Frames)
 	kernelFramesLen := len(trace.KernelFrames)
+
 	newTrace = &libpf.Trace{
 		Frames:       make(libpf.Frames, kernelFramesLen, kernelFramesLen+traceLen),
 		CustomLabels: trace.CustomLabels,
@@ -288,6 +289,9 @@ func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace
 		default:
 			err := pm.symbolizeFrame(i, trace, &newTrace.Frames)
 			if err != nil {
+				if errors.Is(err, interpreter.ErrLJRestart) {
+					return nil, err
+				}
 				log.Debugf(
 					"symbolization failed for PID %d, frame %d/%d, frame type %d: %v",
 					trace.PID, i, traceLen, frame.Type, err)
@@ -297,7 +301,7 @@ func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace
 		}
 	}
 	newTrace.Hash = traceutil.HashTrace(newTrace)
-	return newTrace
+	return newTrace, nil
 }
 
 func (pm *ProcessManager) MaybeNotifyAPMAgent(
