@@ -647,6 +647,12 @@ const (
 	// Number of failures reading Go custom labels
 	IDUnwindGoLabelsFailures = 279
 
+	// placeholder, will be added in a future PR
+	IDplaceholder280 = 280
+
+	// placeholder, will be added in a future PR
+	IDplaceholder281 = 281
+
 	// Number of failures to get TSD base for native custom labels
 	IDUnwindNativeCustomLabelsErrReadTsdBase = 282
 
@@ -667,6 +673,12 @@ const (
 
 	// Number of successes adding native custom labels
 	IDUnwindNativeCustomLabelsAddSuccesses = 288
+
+	// placeholder, will be added in a future PR
+	IDplaceholder289 = 289
+
+	// placeholder, will be added in a future PR
+	IDplaceholder290 = 290
 
 	// Number of attempts to read Node.js custom labels
 	IDUnwindNodeCustomLabelsAttempts = 291
