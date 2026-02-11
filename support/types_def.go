@@ -288,4 +288,7 @@ var MetricsTranslation = []metrics.MetricID{
 	C.metricID_UnwindDotnetErrBadFP:                       metrics.IDUnwindDotnetErrBadFP,
 	C.metricID_UnwindDotnetErrCodeHeader:                  metrics.IDUnwindDotnetErrCodeHeader,
 	C.metricID_UnwindDotnetErrCodeTooLarge:                metrics.IDUnwindDotnetErrCodeTooLarge,
+	C.metricID_UnwindNodeCustomLabelsAttempts:             metrics.IDUnwindNodeCustomLabelsAttempts,
+	C.metricID_UnwindNodeCustomLabelsSuccesses:            metrics.IDUnwindNodeCustomLabelsSuccesses,
+	C.metricID_UnwindNodeCustomLabelsFailures:             metrics.IDUnwindNodeCustomLabelsFailures,
 }

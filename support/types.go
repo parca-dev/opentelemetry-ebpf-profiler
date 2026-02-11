@@ -306,7 +306,9 @@ type V8ProcInfo struct {
 	Codekind_shift             uint8
 	Codekind_mask              uint8
 	Codekind_baseline          uint8
-	Pad_cgo_0                  [3]byte
+	Isolate_sym                uint64
+	Cped_offset                uint32
+	Wrapped_object_offset      uint32
 }
 type NativeCustomLabelsProcInfo struct {
 	Current_set_tls_offset       uint64
@@ -468,4 +470,7 @@ var MetricsTranslation = []metrics.MetricID{
 	0x5d: metrics.IDUnwindDotnetErrBadFP,
 	0x5e: metrics.IDUnwindDotnetErrCodeHeader,
 	0x5f: metrics.IDUnwindDotnetErrCodeTooLarge,
+	0x6b: metrics.IDUnwindNodeCustomLabelsAttempts,
+	0x6c: metrics.IDUnwindNodeCustomLabelsSuccesses,
+	0x6d: metrics.IDUnwindNodeCustomLabelsFailures,
 }
