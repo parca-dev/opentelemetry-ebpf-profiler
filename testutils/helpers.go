@@ -12,9 +12,10 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
+
 	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
 	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
 )
@@ -31,9 +32,32 @@ func (f MockReporter) ExecutableKnown(_ libpf.FileID) bool {
 	return true
 }
 
+type TraceEvent struct {
+	Trace *libpf.Trace
+	Meta  *samples.TraceEventMeta
+}
+
+type traceReporter struct {
+	traceEventChan chan<- TraceEvent
+}
+
+func (tr *traceReporter) ReportTraceEvent(trace *libpf.Trace, meta *samples.TraceEventMeta) error {
+	tr.traceEventChan <- TraceEvent{
+		Trace: trace,
+		Meta:  meta,
+	}
+	return nil
+}
+
 func StartTracer(ctx context.Context, t *testing.T, et tracertypes.IncludedTracers,
-	printBpfLogs bool) (chan *libpf.EbpfTrace, *tracer.Tracer) {
+	printBpfLogs bool) (<-chan TraceEvent, *tracer.Tracer) {
+	traceCh := make(chan TraceEvent)
+	tr := &traceReporter{
+		traceEventChan: traceCh,
+	}
+
 	trc, err := tracer.NewTracer(ctx, &tracer.Config{
+		TraceReporter:          tr,
 		Intervals:              &MockIntervals{},
 		IncludeTracers:         et,
 		SamplesPerSecond:       20,
@@ -59,12 +83,6 @@ func StartTracer(ctx context.Context, t *testing.T, et tracertypes.IncludedTrace
 	require.NoError(t, err)
 
 	err = trc.AttachSchedMonitor()
-	require.NoError(t, err)
-
-	traceCh := make(chan *libpf.EbpfTrace)
-
-	// Spawn monitors for the various result maps
-	err = trc.StartMapMonitors(ctx, traceCh)
 	require.NoError(t, err)
 
 	return traceCh, trc
