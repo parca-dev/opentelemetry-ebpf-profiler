@@ -53,7 +53,7 @@ const (
 const MaxFrameUnwinds = 0x80
 
 const (
-	MetricIDBeginCumulative = 0x69
+	MetricIDBeginCumulative = 0x6c
 )
 
 const (
