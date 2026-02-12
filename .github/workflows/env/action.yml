@@ -36,7 +36,8 @@ runs:
 
         sudo apt-get install -y curl unzip gcc-aarch64-linux-gnu \
           libc6-arm64-cross qemu-user-binfmt libc6:arm64 \
-          musl-dev:amd64 musl-dev:arm64 musl-tools binutils-aarch64-linux-gnu
+          musl-dev:amd64 musl-dev:arm64 musl-tools binutils-aarch64-linux-gnu \
+          systemtap-sdt-dev systemtap-sdt-dev:arm64
     - name: Set up Go
       uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
       with:
