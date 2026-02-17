@@ -55,6 +55,13 @@ const (
 	probProfilingDisable = -1
 )
 
+// Names of tracepoint hooks for sched_process_free. There are two hooks
+// as the tracepoint format has changed for kernel versions 6.16+.
+const (
+	schedProcessFreeV1 = "tracepoint__sched_process_free_pre616"
+	schedProcessFreeV2 = "tracepoint__sched_process_free"
+)
+
 // Intervals is a subset of config.IntervalsAndTimers.
 type Intervals interface {
 	MonitorInterval() time.Duration
@@ -169,6 +176,16 @@ type progLoaderHelper struct {
 	progID uint32
 	// noTailCallTarget indicates if this eBPF program should be added to the tailcallMap.
 	noTailCallTarget bool
+}
+
+// schedProcessFreeHookName returns the name of the tracepoint hook to use.
+// This function requires that only one of (schedProcessFreeV1, schedProcessFreeV2)
+// be present in progNames.
+func schedProcessFreeHookName(progNames libpf.Set[string]) string {
+	if _, ok := progNames[schedProcessFreeV1]; ok {
+		return schedProcessFreeV1
+	}
+	return schedProcessFreeV2
 }
 
 // NewTracer loads eBPF code and map definitions from the ELF module at the configured path.
@@ -288,6 +305,13 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (ebpfMaps map
 	coll, err = support.LoadCollectionSpec()
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("failed to load specification for tracers: %v", err)
+	}
+
+	if major > 6 || (major == 6 && minor >= 16) {
+		// Tracepoint format for sched_process_free has changed in v6.16+.
+		delete(coll.Programs, schedProcessFreeV1)
+	} else {
+		delete(coll.Programs, schedProcessFreeV2)
 	}
 
 	if cfg.VerboseMode {
@@ -546,9 +570,11 @@ func loadPerfUnwinders(coll *cebpf.CollectionSpec, ebpfProgs map[string]*cebpf.P
 
 	progs := make([]progLoaderHelper, len(tailCallProgs)+2)
 	copy(progs, tailCallProgs)
+
+	schedProcessFree := schedProcessFreeHookName(libpf.MapKeysToSet(coll.Programs))
 	progs = append(progs,
 		progLoaderHelper{
-			name:             "tracepoint__sched_process_free",
+			name:             schedProcessFree,
 			noTailCallTarget: true,
 			enable:           true,
 		},
@@ -1174,4 +1200,9 @@ func (t *Tracer) GetEbpfMaps() map[string]*cebpf.Map {
 // or manipulate eBPF maps directly.
 func (t *Tracer) GetEbpfHandler() interpreter.EbpfHandler {
 	return t.processManager.GetEbpfHandler()
+}
+// ForceProcessPID forces processing of the given PID by sending it to the
+// pidEvents channel. Used to speed up tests.
+func (t *Tracer) ForceProcessPID(pid libpf.PID) {
+	t.pidEvents <- libpf.PIDTID(uint64(pid) + uint64(pid)<<32)
 }

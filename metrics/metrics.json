@@ -2115,10 +2115,10 @@
     "id": 293
   },
   {
-    "description": "placeholder, will be added in a future PR",
+    "description": "Number of times dlopen uprobe was fired",
     "type": "counter",
-    "name": "placeholder294",
-    "field": "placeholder294",
+    "name": "DlopenUprobeHits",
+    "field": "bpf.dlopen.uprobe_hits",
     "id": 294
   },
   {
