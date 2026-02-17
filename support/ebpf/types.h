@@ -301,12 +301,6 @@ enum {
   // number of failures to unwind code object due to its large size
   metricID_UnwindDotnetErrCodeTooLarge,
 
-  // number of attempts to read Go custom labels (legacy)
-  metricID_UnwindGoCustomLabelsAttempts,
-
-  // number of failures to read Go custom labels (legacy)
-  metricID_UnwindGoCustomLabelsFailures,
-
   // number of failures to get TSD base for native custom labels
   metricID_UnwindNativeCustomLabelsErrReadTsdBase,
 
