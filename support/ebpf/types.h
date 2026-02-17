@@ -351,6 +351,9 @@ enum {
   // number of failures to read Go custom labels
   metricID_UnwindGoLabelsFailures,
 
+  // number of times dlopen uprobe was fired
+  metricID_DlopenUprobeHits,
+
   //
   // Metric IDs above are for counters (cumulative values)
   //
