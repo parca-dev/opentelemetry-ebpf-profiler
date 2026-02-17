@@ -47,6 +47,10 @@ func (is *InstanceStubs) ReleaseResources() error {
 	return nil
 }
 
+func (is *InstanceStubs) Symbolize(*host.Frame, *libpf.Frames) error {
+	return ErrMismatchInterpreterType
+}
+
 type EbpfHandlerStubs struct{}
 
 func (m *EbpfHandlerStubs) UpdatePidInterpreterMapping(_ libpf.PID,
