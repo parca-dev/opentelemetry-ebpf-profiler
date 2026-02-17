@@ -345,10 +345,10 @@ enum {
   // total number of failed attempts to add node custom labels
   metricID_UnwindNodeCustomLabelsFailures,
 
-  // number of attempts to read Go labels (upstream)
+  // number of attempts to read Go labels
   metricID_UnwindGoLabelsAttempts,
 
-  // number of failures to read Go labels (upstream)
+  // number of failures to read Go labels
   metricID_UnwindGoLabelsFailures,
 
   // number of times dlopen uprobe was fired
