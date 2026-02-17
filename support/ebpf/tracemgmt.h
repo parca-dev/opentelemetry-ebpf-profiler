@@ -217,6 +217,7 @@ static inline EBPF_INLINE PerCPURecord *get_pristine_per_cpu_record()
   record->state.r22        = 0;
   record->state.r28        = 0;
   record->state.lr_invalid = false;
+  record->state.r28        = 0;
 #endif
   record->state.return_address             = false;
   record->state.error_metric               = -1;
@@ -515,6 +516,7 @@ static inline EBPF_INLINE ErrorCode resolve_unwind_mapping(PerCPURecord *record,
   decode_bias_and_unwind_program(val->bias_and_unwind_program, &state->text_section_bias, unwinder);
   state->text_section_id     = val->file_id;
   state->text_section_offset = pc - state->text_section_bias;
+
   DEBUG_PRINT(
     "Text section id for PC %lx is %llx (unwinder %d)",
     (unsigned long)pc,
