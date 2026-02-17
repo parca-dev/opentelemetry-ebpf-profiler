@@ -53,7 +53,7 @@ const (
 	EventTypeGenericPID = 0x1
 )
 
-const MaxFrameUnwinds = 0x80
+const MaxFrameUnwinds = 0x100
 
 const (
 	MetricIDBeginCumulative = 0x71
@@ -180,7 +180,7 @@ type Trace struct {
 	Stack_len          uint32
 	Origin             uint32
 	Offtime            uint64
-	Frames             [128]Frame
+	Frames             [256]Frame
 }
 type UnwindInfo struct {
 	Opcode      uint8
@@ -333,7 +333,7 @@ type LuaJITProcInfo struct {
 const (
 	Sizeof_Frame      = 0x18
 	Sizeof_StackDelta = 0x4
-	Sizeof_Trace      = 0xf70
+	Sizeof_Trace      = 0x1b70
 
 	sizeof_ApmIntProcInfo = 0x8
 	sizeof_DotnetProcInfo = 0x4
