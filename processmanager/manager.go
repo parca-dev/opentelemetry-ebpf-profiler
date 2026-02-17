@@ -332,3 +332,20 @@ func (pm *ProcessManager) MaybeNotifyAPMAgent(
 
 	return serviceName
 }
+
+// GetInterpretersForPID returns all interpreter instances for the given PID.
+func (pm *ProcessManager) GetInterpretersForPID(pid libpf.PID) []interpreter.Instance {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+
+	interpreters := pm.interpreters[pid]
+	if len(interpreters) == 0 {
+		return nil
+	}
+
+	result := make([]interpreter.Instance, 0, len(interpreters))
+	for _, instance := range interpreters {
+		result = append(result, instance)
+	}
+	return result
+}
