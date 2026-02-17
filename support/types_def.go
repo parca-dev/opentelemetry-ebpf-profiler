@@ -14,27 +14,24 @@ import (
 #include "./ebpf/frametypes.h"
 #include "./ebpf/stackdeltatypes.h"
 #include "./ebpf/v8_tracer.h"
-#include "./ebpf/luajit.h"
 */
 import "C"
 
 const (
-	FrameMarkerUnknown    = C.FRAME_MARKER_UNKNOWN
-	FrameMarkerErrorBit   = C.FRAME_MARKER_ERROR_BIT
-	FrameMarkerPython     = C.FRAME_MARKER_PYTHON
-	FrameMarkerNative     = C.FRAME_MARKER_NATIVE
-	FrameMarkerPHP        = C.FRAME_MARKER_PHP
-	FrameMarkerPHPJIT     = C.FRAME_MARKER_PHP_JIT
-	FrameMarkerKernel     = C.FRAME_MARKER_KERNEL
-	FrameMarkerHotSpot    = C.FRAME_MARKER_HOTSPOT
-	FrameMarkerRuby       = C.FRAME_MARKER_RUBY
-	FrameMarkerPerl       = C.FRAME_MARKER_PERL
-	FrameMarkerV8         = C.FRAME_MARKER_V8
-	FrameMarkerDotnet     = C.FRAME_MARKER_DOTNET
-	FrameMarkerLuaJIT     = C.FRAME_MARKER_LUAJIT
-	FrameMarkerGo         = C.FRAME_MARKER_GO
-	FrameMarkerCUDAKernel = C.FRAME_MARKER_CUDA_KERNEL
-	FrameMarkerAbort      = C.FRAME_MARKER_ABORT
+	FrameMarkerUnknown  = C.FRAME_MARKER_UNKNOWN
+	FrameMarkerErrorBit = C.FRAME_MARKER_ERROR_BIT
+	FrameMarkerPython   = C.FRAME_MARKER_PYTHON
+	FrameMarkerNative   = C.FRAME_MARKER_NATIVE
+	FrameMarkerPHP      = C.FRAME_MARKER_PHP
+	FrameMarkerPHPJIT   = C.FRAME_MARKER_PHP_JIT
+	FrameMarkerKernel   = C.FRAME_MARKER_KERNEL
+	FrameMarkerHotSpot  = C.FRAME_MARKER_HOTSPOT
+	FrameMarkerRuby     = C.FRAME_MARKER_RUBY
+	FrameMarkerPerl     = C.FRAME_MARKER_PERL
+	FrameMarkerV8       = C.FRAME_MARKER_V8
+	FrameMarkerDotnet   = C.FRAME_MARKER_DOTNET
+	FrameMarkerGo       = C.FRAME_MARKER_GO
+	FrameMarkerAbort    = C.FRAME_MARKER_ABORT
 )
 
 const (
@@ -48,7 +45,6 @@ const (
 	ProgUnwindV8      = C.PROG_UNWIND_V8
 	ProgUnwindDotnet  = C.PROG_UNWIND_DOTNET
 	ProgGoLabels      = C.PROG_GO_LABELS
-	ProgUnwindLuaJIT  = C.PROG_UNWIND_LUAJIT
 )
 
 const (
@@ -103,8 +99,6 @@ const (
 	TraceOriginSampling = C.TRACE_SAMPLING
 	TraceOriginOffCPU   = C.TRACE_OFF_CPU
 	TraceOriginUProbe   = C.TRACE_UPROBE
-	TraceOriginMemory   = C.TRACE_MEMORY
-	TraceOriginCuda     = C.TRACE_CUDA_LAUNCH
 )
 
 type ApmSpanID C.ApmSpanID
@@ -134,8 +128,6 @@ type PerlProcInfo C.PerlProcInfo
 type PyProcInfo C.PyProcInfo
 type RubyProcInfo C.RubyProcInfo
 type V8ProcInfo C.V8ProcInfo
-type NativeCustomLabelsProcInfo C.NativeCustomLabelsProcInfo
-type LuaJITProcInfo C.LuaJITProcInfo
 
 const (
 	Sizeof_Frame      = C.sizeof_Frame
@@ -146,11 +138,6 @@ const (
 	sizeof_DotnetProcInfo = C.sizeof_DotnetProcInfo
 	sizeof_PHPProcInfo    = C.sizeof_PHPProcInfo
 	sizeof_RubyProcInfo   = C.sizeof_RubyProcInfo
-)
-
-const (
-	CustomLabelMaxKeyLen = C.CUSTOM_LABEL_MAX_KEY_LEN
-	CustomLabelMaxValLen = C.CUSTOM_LABEL_MAX_VAL_LEN
 )
 
 const (
@@ -169,7 +156,6 @@ const (
 	UnwindCommandPLT          int32 = C.UNWIND_COMMAND_PLT
 	UnwindCommandSignal       int32 = C.UNWIND_COMMAND_SIGNAL
 	UnwindCommandFramePointer int32 = C.UNWIND_COMMAND_FRAME_POINTER
-	UnwindCommandGoMorestack  int32 = C.UNWIND_COMMAND_GO_MORESTACK
 
 	// UnwindDeref handling from the C header file
 	UnwindDerefMask       int32 = C.UNWIND_DEREF_MASK
@@ -203,11 +189,6 @@ const (
 	V8LineCookieShift = C.V8_LINE_COOKIE_SHIFT
 	V8LineCookieMask  = C.V8_LINE_COOKIE_MASK
 	V8LineDeltaMask   = C.V8_LINE_DELTA_MASK
-)
-
-const (
-	LJFFIFunc = C.LUAJIT_FFI_FUNC
-	LJFileId  = C.LUAJIT_JIT_FILE_ID
 )
 
 var MetricsTranslation = []metrics.MetricID{
@@ -301,10 +282,4 @@ var MetricsTranslation = []metrics.MetricID{
 	C.metricID_UnwindDotnetErrBadFP:                       metrics.IDUnwindDotnetErrBadFP,
 	C.metricID_UnwindDotnetErrCodeHeader:                  metrics.IDUnwindDotnetErrCodeHeader,
 	C.metricID_UnwindDotnetErrCodeTooLarge:                metrics.IDUnwindDotnetErrCodeTooLarge,
-	C.metricID_UnwindLuaJITAttempts:                       metrics.IDUnwindLuaJITAttempts,
-	C.metricID_UnwindLuaJITErrNoProcInfo:                  metrics.IDUnwindLuaJITErrNoProcInfo,
-	C.metricID_DlopenUprobeHits:                           metrics.IDDlopenUprobeHits,
-	C.metricID_UnwindNodeCustomLabelsAttempts:             metrics.IDUnwindNodeCustomLabelsAttempts,
-	C.metricID_UnwindNodeCustomLabelsSuccesses:            metrics.IDUnwindNodeCustomLabelsSuccesses,
-	C.metricID_UnwindNodeCustomLabelsFailures:             metrics.IDUnwindNodeCustomLabelsFailures,
 }

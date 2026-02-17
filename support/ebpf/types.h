@@ -1,4 +1,4 @@
-// provides type definitions shared by the eBPF and Go components
+// Provides type definitions shared by the eBPF and Go components
 
 #ifndef OPTI_TYPES_H
 #define OPTI_TYPES_H
@@ -274,10 +274,10 @@ enum {
   // number of failures to get TSD base for APM correlation
   metricID_UnwindApmIntErrReadTsdBase,
 
-  // number of failures to read the APM correlation pointer
+  // number of failures read the APM correlation pointer
   metricID_UnwindApmIntErrReadCorrBufPtr,
 
-  // number of failures to read the APM correlation buffer
+  // number of failures read the APM correlation buffer
   metricID_UnwindApmIntErrReadCorrBuf,
 
   // number of successful reads of APM correlation info
@@ -301,64 +301,11 @@ enum {
   // number of failures to unwind code object due to its large size
   metricID_UnwindDotnetErrCodeTooLarge,
 
-  // number of attempts to read Go custom labels (legacy)
-  metricID_UnwindGoCustomLabelsAttempts,
-
-  // number of failures to read Go custom labels (legacy)
-  metricID_UnwindGoCustomLabelsFailures,
-
-  // number of failures to get TSD base for native custom labels
-  metricID_UnwindNativeCustomLabelsErrReadTsdBase,
-
-  // number of failures to read native custom labels thread-local object
-  metricID_UnwindNativeCustomLabelsErrReadData,
-
-  // number of failures to read native custom labels key buffer
-  metricID_UnwindNativeCustomLabelsErrReadKey,
-
-  // number of failures to read native custom labels value buffer
-  metricID_UnwindNativeCustomLabelsErrReadValue,
-
-  // number of successful reads of native custom labels
-  metricID_UnwindNativeCustomLabelsReadSuccesses,
-
-  // total number of failures to add native custom labels
-  metricID_UnwindNativeCustomLabelsAddErrors,
-
-  // total number of successes adding native custom labels
-  metricID_UnwindNativeCustomLabelsAddSuccesses,
-
-  // number of attempts to unwind LuaJIT
-  metricID_UnwindLuaJITAttempts,
-
-  // number of failures to read LuaJIT proc info
-  metricID_UnwindLuaJITErrNoProcInfo,
-
-  // number of failures to read LuaJIT context pointer
-  metricID_UnwindLuaJITErrNoContext,
-
-  // number of failures in context pointer validity check
-  metricID_UnwindLuaJITErrLMismatch,
-
-  // total number of attempts to add node custom labels.
-  // This - (successes + errors) is the number of times
-  // we read nothing (undefined or empty labelset).
-  metricID_UnwindNodeCustomLabelsAttempts,
-
-  // total number of successes adding node custom labels
-  metricID_UnwindNodeCustomLabelsSuccesses,
-
-  // total number of failed attempts to add node custom labels
-  metricID_UnwindNodeCustomLabelsFailures,
-
-  // number of attempts to read Go labels (upstream)
+  // number of attempts to read Go custom labels
   metricID_UnwindGoLabelsAttempts,
 
-  // number of failures to read Go labels (upstream)
+  // number of failures to read Go custom labels
   metricID_UnwindGoLabelsFailures,
-
-  // number of times dlopen uprobe was fired
-  metricID_DlopenUprobeHits,
 
   //
   // Metric IDs above are for counters (cumulative values)
@@ -388,7 +335,6 @@ typedef enum TracePrograms {
   PROG_UNWIND_V8,
   PROG_UNWIND_DOTNET,
   PROG_GO_LABELS,
-  PROG_UNWIND_LUAJIT,
   NUM_TRACER_PROGS,
 } TracePrograms;
 
@@ -399,14 +345,12 @@ typedef enum TraceOrigin {
   TRACE_SAMPLING,
   TRACE_OFF_CPU,
   TRACE_UPROBE,
-  TRACE_MEMORY,
-  TRACE_CUDA_LAUNCH,
 } TraceOrigin;
 
 // MAX_FRAME_UNWINDS defines the maximum number of frames per
 // Trace we can unwind and respect the limit of eBPF instructions,
 // limit of tail calls and limit of stack size per eBPF program.
-#define MAX_FRAME_UNWINDS 256
+#define MAX_FRAME_UNWINDS 128
 
 // MAX_NON_ERROR_FRAME_UNWINDS defines the maximum number of frames
 // to be pushed by unwinders while still leaving space for an error frame.
@@ -427,21 +371,15 @@ typedef struct Frame {
   // The lower 32 bits provide the co_firstlineno value and the upper 32 bits
   // provide the f_lasti value. Other interpreter handlers use the field in
   // a similarly domain-specific fashion.
-
   u64 addr_or_line;
   // Indicates the type of the frame (Python, PHP, native etc.).
   u8 kind;
   // Indicates that the address is a return address.
   u8 return_address;
-  // LuaJIT stores bytecode pointers in file_id and addr_or_line, but
-  // in order to symbolize we also need the offset into the bytecode array
-  // 24 bits allows for 16M instructions, in theory we should support 26 bits
-  // but 16M should be good enough.
-  // https://github.com/openresty/luajit2/blob/7952882d/src/lj_def.h#L66
-  u8 callee_pc_hi;
-  u8 caller_pc_hi;
-  u16 callee_pc_lo;
-  u16 caller_pc_lo;
+  // Explicit padding bytes that the compiler would have inserted anyway.
+  // Here to make it clear to readers that there are spare bytes that could
+  // be put to work without extra cost in case an interpreter needs it.
+  u8 pad[6];
 } Frame;
 
 _Static_assert(sizeof(Frame) == 3 * 8, "frame padding not working as expected");
@@ -553,16 +491,7 @@ typedef struct V8ProcInfo {
   u8 off_Code_instruction_start, off_Code_instruction_size, off_Code_flags;
   u8 fp_marker, fp_function, fp_bytecode_offset;
   u8 codekind_shift, codekind_mask, codekind_baseline;
-  u64 isolate_sym;
-  u32 cped_offset;
-  u32 wrapped_object_offset;
 } V8ProcInfo;
-
-typedef struct LuaJITProcInfo {
-  u16 g2dispatch;
-  u16 cur_L_offset;
-  u16 cframe_size_jit;
-} LuaJITProcInfo;
 
 // COMM_LEN defines the maximum length we will receive for the comm of a task.
 #define COMM_LEN 16
@@ -600,29 +529,14 @@ typedef struct __attribute__((packed)) ApmCorrelationBuf {
   ApmSpanID transaction_id;
 } ApmCorrelationBuf;
 
-#define CUSTOM_LABEL_MAX_KEY_LEN 25
-#define CUSTOM_LABEL_MAX_VAL_LEN 53
+#define CUSTOM_LABEL_MAX_KEY_LEN COMM_LEN
+// Big enough to hold UUIDs, etc.
+#define CUSTOM_LABEL_MAX_VAL_LEN 48
 
 typedef struct CustomLabel {
-  u8 key[CUSTOM_LABEL_MAX_KEY_LEN + 1];
-  u8 val[CUSTOM_LABEL_MAX_VAL_LEN + 1];
+  u8 key[CUSTOM_LABEL_MAX_KEY_LEN];
+  u8 val[CUSTOM_LABEL_MAX_VAL_LEN];
 } CustomLabel;
-
-typedef struct NativeCustomLabelsString {
-  size_t len;
-  const unsigned char *buf;
-} NativeCustomLabelsString;
-
-typedef struct NativeCustomLabel {
-  NativeCustomLabelsString key;
-  NativeCustomLabelsString value;
-} NativeCustomLabel;
-
-typedef struct NativeCustomLabelsThreadLocalData {
-  NativeCustomLabel *storage;
-  size_t count;
-  size_t capacity;
-} NativeCustomLabelsSet;
 
 #define MAX_CUSTOM_LABELS 10
 
@@ -679,10 +593,10 @@ typedef struct UnwindState {
 
 #if defined(__x86_64__)
   // Current register values for named registers
-  u64 rax, r9, r11, r13, r14, r15;
+  u64 rax, r9, r11, r13, r15;
 #elif defined(__aarch64__)
   // Current register values for named registers
-  u64 lr, r7, r22, r28;
+  u64 lr, r22, r28;
 #endif
 
   // The executable ID/hash associated with PC
@@ -748,59 +662,6 @@ typedef struct RubyUnwindState {
   // Pointer to the last control frame struct in the Ruby VM stack we want to handle.
   void *last_stack_frame;
 } RubyUnwindState;
-
-typedef u64 TValue;
-
-// This layout hasn't changed over LuaJIT versions.
-typedef struct LJState {
-  void *glref;
-  void *dummy3;
-  TValue *base;     /* Base of currently executing function. */
-  TValue *top;      /* First free slot in the stack. */
-  TValue *maxstack; /* Last free slot in the stack. */
-  TValue *stack;    /* Stack base. */
-  void *openupval;  /* List of open upvalues in the stack. */
-  void *env;        /* Thread environment (table of globals). */
-  void *cframe;     /* End of C stack frame chain. */
-} LJState;
-
-// These two are always adjacent, cur_L offset comes from HA.
-typedef struct LJGlobalPart {
-  void *cur_L;
-  TValue *jit_base;
-} LJGlobalPart;
-
-// Part of a function we need access to, skips first 8 bytes.  Again
-// this layout (from GCfuncL type) hasn't changed in the history of openresty.
-typedef struct LJFuncPart {
-  u8 marked;
-  u8 gct;
-  u8 ffid;
-  u8 nupvalues;
-  u32 dummy;
-  void *env;
-  void *gclist;
-  void *pc; // BCIns* to end of GCproto (i.e. startpc)
-} LJFuncPart;
-
-typedef struct LJScratchSpace {
-  LJState L;
-  LJGlobalPart G;
-  LJFuncPart f;
-  void *G_to_report;
-  u32 *prev_proto;
-  u32 prev_pc;
-} LJScratchSpace;
-
-typedef struct LJUnwindState {
-  TValue *frame;
-  TValue *prevframe;
-  void *L_ptr;
-  // If we have intertwined interpreter and native frames use cframe to track we have more
-  // jumps back to native unwinder to do.
-  void *cframe;
-  bool is_jit;
-} LJUnwindState;
 
 // Container for additional scratch space needed by the HotSpot unwinder.
 typedef struct DotnetUnwindScratchSpace {
@@ -886,8 +747,6 @@ typedef struct PerCPURecord {
   PHPUnwindState phpUnwindState;
   // The current Ruby unwinder state.
   RubyUnwindState rubyUnwindState;
-  // The current LuaJIT unwinder state.
-  LJUnwindState luajitUnwindState;
   // State for Go and Native custom labels
   CustomLabelsState customLabelsState;
   union {
@@ -899,10 +758,6 @@ typedef struct PerCPURecord {
     V8UnwindScratchSpace v8UnwindScratch;
     // Scratch space for the Python unwinder
     PythonUnwindScratchSpace pythonUnwindScratch;
-    // Scratch space for the LuaJIT unwinder
-    LJScratchSpace luajitUnwindScratch;
-    // Native labels scratch space
-    NativeCustomLabel nativeCustomLabel;
     // Go labels scratch
     GoMapBucket goMapBucket;
     // Scratch for Go 1.24 labels
@@ -1079,14 +934,6 @@ typedef struct SystemConfig {
 typedef struct ApmIntProcInfo {
   u64 tls_offset;
 } ApmIntProcInfo;
-
-typedef struct NativeCustomLabelsProcInfo {
-  u64 current_set_tls_offset;
-
-  bool has_als_data;
-  u64 als_identity_hash_tls_offset;
-  u64 als_handle_tls_offset;
-} NativeCustomLabelsProcInfo;
 
 typedef struct GoLabelsOffsets {
   u32 m_offset;

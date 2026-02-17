@@ -5,5 +5,3 @@ kernel-image
 ubuntu-kernel-image
 go-binary
 separate-debug-file
-tls-*
-!tls-lookup.c

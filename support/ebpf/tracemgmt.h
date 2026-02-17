@@ -7,7 +7,6 @@
 #include "errors.h"
 #include "extmaps.h"
 #include "frametypes.h"
-#include "go_support.h"
 #include "types.h"
 
 #if defined(TESTING_COREDUMP)
@@ -32,6 +31,17 @@
     }
 
 #endif // TESTING_COREDUMP
+
+// increment_metric increments the value of the given metricID by 1
+static inline EBPF_INLINE void increment_metric(u32 metricID)
+{
+  u64 *count = bpf_map_lookup_elem(&metrics, &metricID);
+  if (count) {
+    ++*count;
+  } else {
+    DEBUG_PRINT("Failed to lookup metrics map for metricID %d", metricID);
+  }
+}
 
 // Send immediate notifications for event triggers to Go.
 // Notifications for GENERIC_PID and TRACES_FOR_SYMBOLIZATION will be
@@ -88,8 +98,6 @@ static inline EBPF_INLINE bool pid_information_exists(int pid)
 #define RATELIMIT_ACTION_DEFAULT 1
 // Set PID to fast timer mode
 #define RATELIMIT_ACTION_FAST    2
-// Skip rate limiting
-#define RATELIMIT_ACTION_NONE    3
 
 // pid_event_ratelimit determines if the PID event should be inhibited or not
 // based on rate limiting rules.
@@ -103,7 +111,7 @@ static inline EBPF_INLINE bool pid_event_ratelimit(u32 pid, int ratelimit_action
   u8 attempt                    = 0;
   u8 fast_timer                 = (ratelimit_action == RATELIMIT_ACTION_FAST) ? fast_timer_flag : 0;
 
-  if (ratelimit_action == RATELIMIT_ACTION_RESET || ratelimit_action == RATELIMIT_ACTION_NONE) {
+  if (ratelimit_action == RATELIMIT_ACTION_RESET) {
     return false;
   }
 
@@ -213,11 +221,9 @@ static inline EBPF_INLINE PerCPURecord *get_pristine_per_cpu_record()
   record->state.r13 = 0;
 #elif defined(__aarch64__)
   record->state.lr         = 0;
-  record->state.r7         = 0;
   record->state.r22        = 0;
   record->state.r28        = 0;
   record->state.lr_invalid = false;
-  record->state.r28        = 0;
 #endif
   record->state.return_address             = false;
   record->state.error_metric               = -1;
@@ -228,11 +234,6 @@ static inline EBPF_INLINE PerCPURecord *get_pristine_per_cpu_record()
   record->phpUnwindState.zend_execute_data = 0;
   record->rubyUnwindState.stack_ptr        = 0;
   record->rubyUnwindState.last_stack_frame = 0;
-  record->luajitUnwindState.frame          = 0;
-  record->luajitUnwindState.prevframe      = 0;
-  record->luajitUnwindState.L_ptr          = 0;
-  record->luajitUnwindState.cframe         = 0;
-  record->luajitUnwindState.is_jit         = false;
   record->unwindersDone                    = 0;
   record->tailCalls                        = 0;
   record->ratelimitAction                  = RATELIMIT_ACTION_DEFAULT;
@@ -249,8 +250,9 @@ static inline EBPF_INLINE PerCPURecord *get_pristine_per_cpu_record()
   trace->apm_transaction_id.as_int = 0;
 
   trace->custom_labels.len = 0;
-  _Static_assert(sizeof(CustomLabel) % 8 == 0, "CustomLabel size must be a multiple of 8 bytes.");
-  u64 *labels_space = (u64 *)&trace->custom_labels.labels;
+  u64 *labels_space        = (u64 *)&trace->custom_labels.labels;
+  // I'm not sure this is necessary since we only increment len after
+  // we successfully write the label.
   UNROLL for (int i = 0; i < sizeof(CustomLabel) * MAX_CUSTOM_LABELS / 8; i++)
   {
     labels_space[i] = 0;
@@ -308,44 +310,6 @@ static inline EBPF_INLINE bool unwinder_unwind_frame_pointer(UnwindState *state)
   return true;
 }
 
-static inline EBPF_INLINE bool unwinder_unwind_go_morestack(PerCPURecord *record)
-{
-  GoLabelsOffsets *offs = bpf_map_lookup_elem(&go_labels_procs, &record->trace.pid);
-  if (!offs) {
-    DEBUG_PRINT("morestack: failed to read go labels offsets");
-    return false;
-  }
-  void *mptr = get_go_m_ptr(offs, &record->state);
-  DEBUG_PRINT("morestack: curg offset: %d, mptr: %llx\n", offs->curg, (u64)mptr);
-
-  size_t curg_ptr_addr;
-  if (bpf_probe_read_user(&curg_ptr_addr, sizeof(void *), (void *)((u64)mptr + offs->curg))) {
-    DEBUG_PRINT("morestack: failed to read value for m_ptr->curg");
-    return false;
-  }
-
-  DEBUG_PRINT("morestack: curg is %lx\n", curg_ptr_addr);
-
-  // Valid since go 1.25:
-  // https://github.com/golang/go/blob/7b60d06739/src/runtime/runtime2.go#L303-L322
-  // On previous versions, there was an extra "ret" value, so "bp" is one spot later.
-  // TODO - make this work on earlier versions.
-  unsigned long regs[6];
-  if (bpf_probe_read_user(regs, sizeof(regs), (void *)(curg_ptr_addr + 56 /* XXX */))) {
-    DEBUG_PRINT("morestack: failed to read regs");
-    return false;
-  }
-  record->state.sp = regs[0];
-  record->state.pc = regs[1];
-  record->state.fp = regs[5];
-  DEBUG_PRINT(
-    "morestack: success, sp is %llx, pc is %llx, fp is %llx",
-    record->state.sp,
-    record->state.pc,
-    record->state.fp);
-  return true;
-}
-
 // Push the file ID, line number and frame type into FrameList with a user-defined
 // maximum stack size.
 //
@@ -354,44 +318,6 @@ static inline EBPF_INLINE bool unwinder_unwind_go_morestack(PerCPURecord *record
 //       and hotspot puts a subtype and BCI indices, amongst other things (see
 //       calc_line). This should probably be renamed to something like "frame type
 //       specific data".
-static inline __attribute__((__always_inline__)) ErrorCode _push_with_max_frames_lj_offsets(
-  Trace *trace,
-  u64 file,
-  u64 line,
-  u8 frame_type,
-  u8 return_address,
-  u32 max_frames,
-  u32 cee,
-  u32 cer)
-{
-  if (trace->stack_len >= max_frames) {
-    DEBUG_PRINT("unable to push frame: stack is full");
-    increment_metric(metricID_UnwindErrStackLengthExceeded);
-    return ERR_STACK_LENGTH_EXCEEDED;
-  }
-
-#ifdef TESTING_COREDUMP
-  // tools/coredump uses CGO to build the eBPF code. This dispatches
-  // the frame information directly to helper implemented in ebpfhelpers.go.
-  int __push_frame(u64, u64, u64, u8, u8, u32, u32);
-  trace->stack_len++;
-  return __push_frame(__cgo_ctx->id, file, line, frame_type, return_address, cee, cer);
-#else
-  trace->frames[trace->stack_len++] = (Frame){
-    .file_id        = file,
-    .addr_or_line   = line,
-    .kind           = frame_type,
-    .return_address = return_address,
-    .callee_pc_hi   = cee >> 16,
-    .callee_pc_lo   = cee & 0xffff,
-    .caller_pc_hi   = cer >> 16,
-    .caller_pc_lo   = cer & 0xffff,
-  };
-
-  return ERR_OK;
-#endif
-}
-
 static inline EBPF_INLINE ErrorCode _push_with_max_frames(
   Trace *trace, u64 file, u64 line, u8 frame_type, u8 return_address, u32 max_frames)
 {
@@ -404,9 +330,9 @@ static inline EBPF_INLINE ErrorCode _push_with_max_frames(
 #ifdef TESTING_COREDUMP
   // tools/coredump uses CGO to build the eBPF code. This dispatches
   // the frame information directly to helper implemented in ebpfhelpers.go.
-  int __push_frame(u64, u64, u64, u8, u8, u32, u32);
+  int __push_frame(u64, u64, u64, u8, u8);
   trace->stack_len++;
-  return __push_frame(__cgo_ctx->id, file, line, frame_type, return_address, 0, 0);
+  return __push_frame(__cgo_ctx->id, file, line, frame_type, return_address);
 #else
   trace->frames[trace->stack_len++] = (Frame){
     .file_id        = file,
@@ -417,13 +343,6 @@ static inline EBPF_INLINE ErrorCode _push_with_max_frames(
 
   return ERR_OK;
 #endif
-}
-
-static inline __attribute__((__always_inline__)) ErrorCode _push_with_max_frames_lj_compatible(
-  Trace *trace, u64 file, u64 line, u8 frame_type, u8 return_address, u32 max_frames)
-{
-  return _push_with_max_frames_lj_offsets(
-    trace, file, line, frame_type, return_address, max_frames, 0, 0);
 }
 
 // Push the file ID, line number and frame type into FrameList
@@ -516,7 +435,6 @@ static inline EBPF_INLINE ErrorCode resolve_unwind_mapping(PerCPURecord *record,
   decode_bias_and_unwind_program(val->bias_and_unwind_program, &state->text_section_bias, unwinder);
   state->text_section_id     = val->file_id;
   state->text_section_offset = pc - state->text_section_bias;
-
   DEBUG_PRINT(
     "Text section id for PC %lx is %llx (unwinder %d)",
     (unsigned long)pc,
@@ -678,7 +596,6 @@ copy_state_regs(UnwindState *state, struct pt_regs *regs, bool interrupted_kerne
   state->r9  = regs->r9;
   state->r11 = regs->r11;
   state->r13 = regs->r13;
-  state->r14 = regs->r14;
   state->r15 = regs->r15;
 
   // Treat syscalls as return addresses, but not IRQ handling, page faults, etc..
@@ -695,7 +612,6 @@ copy_state_regs(UnwindState *state, struct pt_regs *regs, bool interrupted_kerne
   state->sp  = regs->sp;
   state->fp  = regs->regs[29];
   state->lr  = normalize_pac_ptr(regs->regs[30]);
-  state->r7  = regs->regs[7];
   state->r22 = regs->regs[22];
   state->r28 = regs->regs[28];
 
@@ -813,13 +729,7 @@ get_usermode_regs(struct pt_regs *ctx, UnwindState *state, bool *has_usermode_re
 #endif // TESTING_COREDUMP
 
 static inline EBPF_INLINE int collect_trace(
-  struct pt_regs *ctx,
-  TraceOrigin origin,
-  u32 pid,
-  u32 tid,
-  u64 trace_timestamp,
-  u64 off_cpu_time,
-  u64 cuda_id)
+  struct pt_regs *ctx, TraceOrigin origin, u32 pid, u32 tid, u64 trace_timestamp, u64 off_cpu_time)
 {
   // The trace is reused on each call to this function so we have to reset the
   // variables used to maintain state.
@@ -842,11 +752,6 @@ static inline EBPF_INLINE int collect_trace(
   // Get the kernel mode stack trace first
   trace->kernel_stack_id = bpf_get_stackid(ctx, &kernel_stackmap, BPF_F_REUSE_STACKID);
   DEBUG_PRINT("kernel stack id = %d", trace->kernel_stack_id);
-
-  if (cuda_id != 0) {
-    // Create a CUDA kernel frame, Symbolize will later resolve the kernel name from the ID.
-    _push(trace, 0, cuda_id, FRAME_MARKER_CUDA_KERNEL);
-  }
 
   // Recursive unwind frames
   int unwinder           = PROG_UNWIND_STOP;

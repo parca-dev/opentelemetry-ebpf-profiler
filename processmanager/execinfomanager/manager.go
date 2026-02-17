@@ -7,8 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"reflect"
-	"runtime"
 	"time"
 
 	lru "github.com/elastic/go-freelru"
@@ -17,19 +15,14 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/apmint"
-	"go.opentelemetry.io/ebpf-profiler/interpreter/customlabels"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/dotnet"
 	golang "go.opentelemetry.io/ebpf-profiler/interpreter/go"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/golabels"
-	"go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/hotspot"
-	"go.opentelemetry.io/ebpf-profiler/interpreter/luajit"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/nodev8"
-	"go.opentelemetry.io/ebpf-profiler/interpreter/oomwatcher"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/perl"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/php"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/python"
-	"go.opentelemetry.io/ebpf-profiler/interpreter/rtld"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/ruby"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
@@ -135,22 +128,10 @@ func NewExecutableInfoManager(
 	if includeTracers.Has(types.GoTracer) {
 		interpreterLoaders = append(interpreterLoaders, golang.Loader)
 	}
-	if includeTracers.Has(types.LuaJITTracer) {
-		interpreterLoaders = append(interpreterLoaders, luajit.Loader)
-	}
+
 	interpreterLoaders = append(interpreterLoaders, apmint.Loader)
 	if includeTracers.Has(types.Labels) {
-		interpreterLoaders = append(interpreterLoaders, golabels.Loader, customlabels.Loader)
-	}
-	interpreterLoaders = append(interpreterLoaders, oomwatcher.Loader, rtld.Loader)
-
-	if includeTracers.Has(types.CUDATracer) {
-		// USDT support requires cookies
-		if util.HasBpfGetAttachCookie() {
-			interpreterLoaders = append(interpreterLoaders, gpu.Loader)
-		} else {
-			log.Warn("CUDA USDT tracing is not supported on this kernel (missing bpf_get_attach_cookie)")
-		}
+		interpreterLoaders = append(interpreterLoaders, golabels.Loader)
 	}
 
 	deferredFileIDs, err := lru.NewSynced[host.FileID, libpf.Void](deferredFileIDSize,
@@ -241,7 +222,7 @@ func (mgr *ExecutableInfoManager) AddOrIncRef(fileID host.FileID,
 	}
 
 	// Create the LoaderInfo for interpreter detection
-	loaderInfo := interpreter.NewLoaderInfo(fileID, elfRef, gaps, intervalData.Deltas)
+	loaderInfo := interpreter.NewLoaderInfo(fileID, elfRef, gaps)
 
 	// Insert a corresponding record into our map.
 	info = &entry{
@@ -349,14 +330,13 @@ func (state *executableInfoManagerState) detectAndLoadInterpData(
 	for _, loader := range state.interpreterLoaders {
 		data, err := loader(state.ebpf, loaderInfo)
 		if err != nil {
-			loaderName := runtime.FuncForPC(reflect.ValueOf(loader).Pointer()).Name()
 			if errors.Is(err, os.ErrNotExist) {
 				// Very common if the process exited when we tried to analyze it.
-				log.Debugf("Failed to load %v (%#016x) [%s]: file not found",
-					loaderInfo.FileName(), loaderInfo.FileID(), loaderName)
+				log.Debugf("Failed to load %v (%#016x): file not found",
+					loaderInfo.FileName(), loaderInfo.FileID())
 			} else {
-				log.Errorf("Failed to load %v (%#016x) [%s]: %v",
-					loaderInfo.FileName(), loaderInfo.FileID(), loaderName, err)
+				log.Errorf("Failed to load %v (%#016x): %v",
+					loaderInfo.FileName(), loaderInfo.FileID(), err)
 			}
 			// Continue checking other loaders even if one fails
 			continue

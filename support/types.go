@@ -11,22 +11,20 @@ import (
 )
 
 const (
-	FrameMarkerUnknown    = 0x0
-	FrameMarkerErrorBit   = 0x80
-	FrameMarkerPython     = 0x1
-	FrameMarkerNative     = 0x3
-	FrameMarkerPHP        = 0x2
-	FrameMarkerPHPJIT     = 0x9
-	FrameMarkerKernel     = 0x4
-	FrameMarkerHotSpot    = 0x5
-	FrameMarkerRuby       = 0x6
-	FrameMarkerPerl       = 0x7
-	FrameMarkerV8         = 0x8
-	FrameMarkerDotnet     = 0xa
-	FrameMarkerLuaJIT     = 0xb
-	FrameMarkerGo         = 0xc
-	FrameMarkerCUDAKernel = 0xd
-	FrameMarkerAbort      = 0xff
+	FrameMarkerUnknown  = 0x0
+	FrameMarkerErrorBit = 0x80
+	FrameMarkerPython   = 0x1
+	FrameMarkerNative   = 0x3
+	FrameMarkerPHP      = 0x2
+	FrameMarkerPHPJIT   = 0x9
+	FrameMarkerKernel   = 0x4
+	FrameMarkerHotSpot  = 0x5
+	FrameMarkerRuby     = 0x6
+	FrameMarkerPerl     = 0x7
+	FrameMarkerV8       = 0x8
+	FrameMarkerDotnet   = 0xa
+	FrameMarkerGo       = 0xb
+	FrameMarkerAbort    = 0xff
 )
 
 const (
@@ -40,7 +38,6 @@ const (
 	ProgUnwindV8      = 0x7
 	ProgUnwindDotnet  = 0x8
 	ProgGoLabels      = 0x9
-	ProgUnwindLuaJIT  = 0xa
 )
 
 const (
@@ -53,10 +50,10 @@ const (
 	EventTypeGenericPID = 0x1
 )
 
-const MaxFrameUnwinds = 0x100
+const MaxFrameUnwinds = 0x80
 
 const (
-	MetricIDBeginCumulative = 0x73
+	MetricIDBeginCumulative = 0x62
 )
 
 const (
@@ -91,15 +88,13 @@ const (
 	TraceOriginSampling = 0x1
 	TraceOriginOffCPU   = 0x2
 	TraceOriginUProbe   = 0x3
-	TraceOriginMemory   = 0x4
-	TraceOriginCuda     = 0x5
 )
 
 type ApmSpanID [8]byte
 type ApmTraceID [16]byte
 type CustomLabel struct {
-	Key [26]uint8
-	Val [54]uint8
+	Key [16]uint8
+	Val [48]uint8
 }
 type CustomLabelsArray struct {
 	Len    uint32
@@ -113,10 +108,7 @@ type Frame struct {
 	Addr_or_line   uint64
 	Kind           uint8
 	Return_address uint8
-	Callee_pc_hi   uint8
-	Caller_pc_hi   uint8
-	Callee_pc_lo   uint16
-	Caller_pc_lo   uint16
+	Pad            [6]uint8
 }
 type OffsetRange struct {
 	Lower_offset1 uint64
@@ -180,7 +172,7 @@ type Trace struct {
 	Stack_len          uint32
 	Origin             uint32
 	Offtime            uint64
-	Frames             [256]Frame
+	Frames             [128]Frame
 }
 type UnwindInfo struct {
 	Opcode      uint8
@@ -314,36 +306,18 @@ type V8ProcInfo struct {
 	Codekind_shift             uint8
 	Codekind_mask              uint8
 	Codekind_baseline          uint8
-	Isolate_sym                uint64
-	Cped_offset                uint32
-	Wrapped_object_offset      uint32
-}
-type NativeCustomLabelsProcInfo struct {
-	Current_set_tls_offset       uint64
-	Has_als_data                 bool
-	Als_identity_hash_tls_offset uint64
-	Als_handle_tls_offset        uint64
-}
-type LuaJITProcInfo struct {
-	G2dispatch      uint16
-	Cur_L_offset    uint16
-	Cframe_size_jit uint16
+	Pad_cgo_0                  [3]byte
 }
 
 const (
 	Sizeof_Frame      = 0x18
 	Sizeof_StackDelta = 0x4
-	Sizeof_Trace      = 0x1b70
+	Sizeof_Trace      = 0xed0
 
 	sizeof_ApmIntProcInfo = 0x8
 	sizeof_DotnetProcInfo = 0x4
 	sizeof_PHPProcInfo    = 0x18
 	sizeof_RubyProcInfo   = 0x20
-)
-
-const (
-	CustomLabelMaxKeyLen = 0x19
-	CustomLabelMaxValLen = 0x35
 )
 
 const (
@@ -360,7 +334,6 @@ const (
 	UnwindCommandPLT          int32 = 0x2
 	UnwindCommandSignal       int32 = 0x3
 	UnwindCommandFramePointer int32 = 0x4
-	UnwindCommandGoMorestack  int32 = 0x5
 
 	UnwindDerefMask       int32 = 0x7
 	UnwindDerefMultiplier int32 = 0x8
@@ -391,11 +364,6 @@ const (
 	V8LineCookieShift = 0x20
 	V8LineCookieMask  = 0xffffffff00000000
 	V8LineDeltaMask   = 0xffffffff
-)
-
-const (
-	LJFFIFunc = 0xff1
-	LJFileId  = 0x2a
 )
 
 var MetricsTranslation = []metrics.MetricID{
@@ -489,10 +457,4 @@ var MetricsTranslation = []metrics.MetricID{
 	0x5d: metrics.IDUnwindDotnetErrBadFP,
 	0x5e: metrics.IDUnwindDotnetErrCodeHeader,
 	0x5f: metrics.IDUnwindDotnetErrCodeTooLarge,
-	0x69: metrics.IDUnwindLuaJITAttempts,
-	0x6a: metrics.IDUnwindLuaJITErrNoProcInfo,
-	0x72: metrics.IDDlopenUprobeHits,
-	0x6d: metrics.IDUnwindNodeCustomLabelsAttempts,
-	0x6e: metrics.IDUnwindNodeCustomLabelsSuccesses,
-	0x6f: metrics.IDUnwindNodeCustomLabelsFailures,
 }

@@ -188,8 +188,3 @@ func (pi *processInfo) removeMapping(m *Mapping) {
 		}
 	}
 }
-
-// GetEbpfHandler returns the EbpfHandler interface for direct access to eBPF operations.
-func (pm *ProcessManager) GetEbpfHandler() pmebpf.EbpfHandler {
-	return pm.ebpf
-}

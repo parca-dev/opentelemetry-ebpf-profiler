@@ -7,14 +7,12 @@ import (
 	"context"
 	"debug/elf"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"runtime"
 	"time"
 	"unsafe"
 
-	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/xsync"
 	"go.opentelemetry.io/ebpf-profiler/nativeunwind/elfunwindinfo"
@@ -66,13 +64,13 @@ func generateErrorMap() (map[libpf.AddressOrLineno]string, error) {
 		Name string `json:"name"`
 	}
 
-	var errs []JSONError
-	if err = json.NewDecoder(file).Decode(&errs); err != nil {
+	var errors []JSONError
+	if err = json.NewDecoder(file).Decode(&errors); err != nil {
 		return nil, fmt.Errorf("failed to parse errors.json: %w", err)
 	}
 
-	out := make(map[libpf.AddressOrLineno]string, len(errs))
-	for _, item := range errs {
+	out := make(map[libpf.AddressOrLineno]string, len(errors))
+	for _, item := range errors {
 		out[libpf.AddressOrLineno(item.ID)] = item.Name
 	}
 
@@ -169,7 +167,7 @@ func ExtractTraces(ctx context.Context, pr process.Process, debug bool,
 	if err != nil {
 		return nil, fmt.Errorf("failed to get Interpreter manager: %v", err)
 	}
-restart:
+
 	manager.SynchronizeProcess(pr)
 
 	info := make([]ThreadInfo, 0, len(threadInfo))
@@ -187,13 +185,7 @@ restart:
 			return nil, fmt.Errorf("failed to unwind lwp %v: %v", thread.LWP, rc)
 		}
 		// Symbolize traces with interpreter manager
-		trace, err := manager.ConvertTrace(&ebpfCtx.trace)
-		if err != nil {
-			if errors.Is(err, interpreter.ErrLJRestart) {
-				goto restart
-			}
-			panic(err)
-		}
+		trace := manager.ConvertTrace(&ebpfCtx.trace)
 		tinfo := ThreadInfo{LWP: thread.LWP}
 		for _, f := range trace.Frames {
 			frame := f.Value()

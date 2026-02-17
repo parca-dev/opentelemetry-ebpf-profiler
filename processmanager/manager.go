@@ -212,10 +212,9 @@ func (pm *ProcessManager) symbolizeFrame(frame int, trace *host.Trace, frames *l
 		len(pm.interpreters[trace.PID]), errSymbolizationNotSupported)
 }
 
-func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace, err error) {
+func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace) {
 	traceLen := len(trace.Frames)
 	kernelFramesLen := len(trace.KernelFrames)
-
 	newTrace = &libpf.Trace{
 		Frames:       make(libpf.Frames, kernelFramesLen, kernelFramesLen+traceLen),
 		CustomLabels: trace.CustomLabels,
@@ -289,9 +288,6 @@ func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace
 		default:
 			err := pm.symbolizeFrame(i, trace, &newTrace.Frames)
 			if err != nil {
-				if errors.Is(err, interpreter.ErrLJRestart) {
-					return nil, err
-				}
 				log.Debugf(
 					"symbolization failed for PID %d, frame %d/%d, frame type %d: %v",
 					trace.PID, i, traceLen, frame.Type, err)
@@ -301,7 +297,7 @@ func (pm *ProcessManager) ConvertTrace(trace *host.Trace) (newTrace *libpf.Trace
 		}
 	}
 	newTrace.Hash = traceutil.HashTrace(newTrace)
-	return newTrace, nil
+	return newTrace
 }
 
 func (pm *ProcessManager) MaybeNotifyAPMAgent(
@@ -331,21 +327,4 @@ func (pm *ProcessManager) MaybeNotifyAPMAgent(
 	}
 
 	return serviceName
-}
-
-// GetInterpretersForPID returns all interpreter instances for the given PID.
-func (pm *ProcessManager) GetInterpretersForPID(pid libpf.PID) []interpreter.Instance {
-	pm.mu.RLock()
-	defer pm.mu.RUnlock()
-
-	interpreters := pm.interpreters[pid]
-	if len(interpreters) == 0 {
-		return nil
-	}
-
-	result := make([]interpreter.Instance, 0, len(interpreters))
-	for _, instance := range interpreters {
-		result = append(result, instance)
-	}
-	return result
 }

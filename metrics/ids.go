@@ -647,63 +647,6 @@ const (
 	// Number of failures reading Go custom labels
 	IDUnwindGoLabelsFailures = 279
 
-	// Number of attempts to read Go custom labels (legacy)
-	IDUnwindGoCustomLabelsAttempts = 280
-
-	// Number of failures reading Go custom labels (legacy)
-	IDUnwindGoCustomLabelsFailures = 281
-
-	// Number of failures to get TSD base for native custom labels
-	IDUnwindNativeCustomLabelsErrReadTsdBase = 282
-
-	// Number of failures to read native custom labels thread-local object
-	IDUnwindNativeCustomLabelsErrReadData = 283
-
-	// Number of failures to read native custom labels key buffer
-	IDUnwindNativeCustomLabelsErrReadKey = 284
-
-	// Number of failures to read native custom labels value buffer
-	IDUnwindNativeCustomLabelsErrReadValue = 285
-
-	// Number of successful reads of native custom labels
-	IDUnwindNativeCustomLabelsReadSuccesses = 286
-
-	// Total number of failures to add native custom labels
-	IDUnwindNativeCustomLabelsAddErrors = 287
-
-	// Number of successes adding native custom labels
-	IDUnwindNativeCustomLabelsAddSuccesses = 288
-
-	// Number of attempted LuaJIT unwinds
-	IDUnwindLuaJITAttempts = 289
-
-	// Number of times we didn't find an entry for this process in the LuaJIT process info array
-	IDUnwindLuaJITErrNoProcInfo = 290
-
-	// Number of attempts to read Node.js custom labels
-	IDUnwindNodeCustomLabelsAttempts = 291
-
-	// Number of successful reads of Node.js custom labels
-	IDUnwindNodeCustomLabelsSuccesses = 292
-
-	// Number of failed attempts to read Node.js custom labels
-	IDUnwindNodeCustomLabelsFailures = 293
-
-	// Number of times dlopen uprobe was fired
-	IDDlopenUprobeHits = 294
-
-	// Number of GPU timing events waiting for matching traces
-	IDCudaTimesAwaitingTraces = 295
-
-	// Number of GPU traces waiting for matching timing events
-	IDCudaTracesAwaitingTimes = 296
-
-	// Number of GPU timing entries cleared due to threshold
-	IDCudaTimesCleared = 297
-
-	// Number of GPU trace entries cleared due to threshold
-	IDCudaTracesCleared = 298
-
 	// max number of ID values, keep this as *last entry*
-	IDMax = 299
+	IDMax = 280
 )

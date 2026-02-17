@@ -308,11 +308,8 @@ func (pm *ProcessManager) handleNewMapping(pr process.Process, m *Mapping,
 
 	pm.assignTSDInfo(pid, ei.TSDInfo)
 
-	// Handle interpreter if present
 	if ei.Data != nil {
-		if err := pm.handleNewInterpreter(pr, m, &ei); err != nil {
-			return err
-		}
+		return pm.handleNewInterpreter(pr, m, &ei)
 	}
 
 	return nil
@@ -770,7 +767,6 @@ func (pm *ProcessManager) ProcessedUntil(traceCaptureKTime times.KTime) {
 		log.Debugf("PID %v deleted", pid)
 		delete(pm.pidToProcessInfo, pid)
 
-		// Detach all interpreters for this PID
 		for _, instance := range pm.interpreters[pid] {
 			if err2 := instance.Detach(pm.ebpf, pid); err2 != nil {
 				err = errors.Join(err,
@@ -779,7 +775,6 @@ func (pm *ProcessManager) ProcessedUntil(traceCaptureKTime times.KTime) {
 			}
 		}
 		delete(pm.interpreters, pid)
-
 		delete(pm.exitEvents, pid)
 		log.Debugf("PID %v exit latency %v ms", pid, (nowKTime-pidExitKTime)/1e6)
 	}

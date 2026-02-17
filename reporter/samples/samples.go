@@ -8,19 +8,17 @@ import (
 )
 
 type TraceEventMeta struct {
-	Timestamp             libpf.UnixTime64
-	Comm                  string
-	ProcessName           string
-	ExecutablePath        string
-	APMServiceName        string
-	ContainerID           string
-	PID, TID              libpf.PID
-	CPU                   int
-	Origin                libpf.Origin
-	OffTime               int64
-	Allocs, Frees         uint64
-	AllocBytes, FreeBytes uint64
-	EnvVars               map[string]string
+	Timestamp      libpf.UnixTime64
+	Comm           string
+	ProcessName    string
+	ExecutablePath string
+	APMServiceName string
+	ContainerID    string
+	PID, TID       libpf.PID
+	CPU            int
+	Origin         libpf.Origin
+	OffTime        int64
+	EnvVars        map[string]string
 }
 
 // TraceEvents holds known information about a trace.
@@ -36,6 +34,8 @@ type TraceEvents struct {
 // contain all trace fields that aren't already part of the trace hash to ensure
 // that we don't accidentally merge traces with different fields.
 type TraceAndMetaKey struct {
+	// Hash is not sent forward, but it is used as the primary key
+	// to not aggregate difference traces.
 	Hash libpf.TraceHash
 	// comm and apmServiceName are provided by the eBPF programs
 	Comm           string

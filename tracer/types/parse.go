@@ -22,10 +22,8 @@ const (
 	RubyTracer
 	V8Tracer
 	DotnetTracer
-	LuaJITTracer
 	GoTracer
 	Labels
-	CUDATracer
 
 	// maxTracers indicates the max. number of different tracers
 	maxTracers
@@ -39,10 +37,8 @@ var tracerTypeToName = map[tracerType]string{
 	RubyTracer:    "ruby",
 	V8Tracer:      "v8",
 	DotnetTracer:  "dotnet",
-	LuaJITTracer:  "luajit",
 	GoTracer:      "go",
 	Labels:        "labels",
-	CUDATracer:    "cuda",
 }
 
 var tracerNameToType = make(map[string]tracerType, maxTracers)
@@ -154,6 +150,7 @@ func Parse(tracers string) (IncludedTracers, error) {
 
 	if tracersEnabled := result.String(); tracersEnabled != "" {
 		log.Debugf("Tracer string: %v", tracers)
+		log.Infof("Interpreter tracers: %v", tracersEnabled)
 	}
 
 	return result, nil

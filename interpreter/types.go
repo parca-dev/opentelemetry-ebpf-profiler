@@ -9,7 +9,6 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
-	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/lpm"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/process"
@@ -40,8 +39,6 @@ var (
 	UnknownFunctionName = libpf.Intern("<unknown>")
 
 	ErrMismatchInterpreterType = errors.New("mismatched interpreter type")
-	// Special coredump only error used to restart ConvertTrace processing.
-	ErrLJRestart = errors.New("lj_restart")
 )
 
 // The following function Loader and interfaces Data and Instance work together
@@ -108,38 +105,8 @@ type EbpfHandler interface {
 	UpdatePidInterpreterMapping(libpf.PID, lpm.Prefix, uint8, host.FileID, uint64) error
 
 	// DeletePidInterpreterMapping removes the element specified by pid, prefix
-	// from the eBPF map pid_page_to_mapping_info.
+	// rom the eBPF map pid_page_to_mapping_info.
 	DeletePidInterpreterMapping(libpf.PID, lpm.Prefix) error
-
-	// If unwinder needs special behavior for coredump mode to work use this.
-	CoredumpTest() bool
-
-	// AttachUSDTProbes attaches an eBPF program to USDT probes in the specified binary.
-	//
-	// Parameters:
-	//  - pid: The process ID. Required for getting path to exe via procfs.
-	//  - path: Full path to the binary containing the USDT probes.
-	//  - multiProgName: Name of eBPF program to use for multi-uprobe attachment (newer kernels).
-	//  - probes: The USDT probe definitions to attach to.
-	//  - cookies: Optional cookies to pass to the eBPF program (one per probe, or nil).
-	//  - singleProgNames: eBPF program names for single-shot attachment (older kernels, one
-	//    per probe).
-	//
-	// Returns:
-	//  - LinkCloser: A handle to the attached probes. The caller must:
-	//    1. Store the LinkCloser to prevent it from being garbage collected (which would
-	//       detach the probes)
-	//    2. Call LinkCloser.Detach() from Instance.Detach() to detach from the specific PID
-	//    3. Call LinkCloser.Unload() from Data.Unload() to fully clean up the eBPF program
-	AttachUSDTProbes(pid libpf.PID, path, multiProgName string, probes []pfelf.USDTProbe,
-		cookies []uint64, singleProgNames []string) (LinkCloser, error)
-
-	// AttachUprobe attaches an eBPF uprobe to a function at a specific offset in a binary
-	AttachUprobe(pid libpf.PID, path string, offset uint64, progName string) (LinkCloser, error)
-}
-
-type LinkCloser interface {
-	Unload() error
 }
 
 // Loader is a function to detect and load data from given interpreter ELF file.

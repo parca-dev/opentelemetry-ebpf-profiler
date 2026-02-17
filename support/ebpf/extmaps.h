@@ -19,8 +19,6 @@ extern bpf_map_def interpreter_offsets;
 extern bpf_map_def system_config;
 extern bpf_map_def trace_events;
 extern bpf_map_def go_labels_procs;
-extern bpf_map_def cl_procs;
-extern bpf_map_def v8_procs;
 
 #if defined(TESTING_COREDUMP)
 
@@ -52,7 +50,7 @@ extern bpf_map_def py_procs;
 extern bpf_map_def ruby_procs;
 extern bpf_map_def stack_delta_page_to_info;
 extern bpf_map_def unwind_info_array;
-extern bpf_map_def luajit_procs;
+extern bpf_map_def v8_procs;
 
 #endif // TESTING_COREDUMP
 

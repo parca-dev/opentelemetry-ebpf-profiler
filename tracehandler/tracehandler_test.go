@@ -34,10 +34,10 @@ type fakeTraceProcessor struct{}
 // Compile time check to make sure fakeTraceProcessor satisfies the interfaces.
 var _ tracehandler.TraceProcessor = (*fakeTraceProcessor)(nil)
 
-func (f *fakeTraceProcessor) ConvertTrace(trace *host.Trace) (*libpf.Trace, error) {
+func (f *fakeTraceProcessor) ConvertTrace(trace *host.Trace) *libpf.Trace {
 	var newTrace libpf.Trace
 	newTrace.Hash = libpf.NewTraceHash(uint64(trace.Hash), uint64(trace.Hash))
-	return &newTrace, nil
+	return &newTrace
 }
 
 func (f *fakeTraceProcessor) ProcessedUntil(times.KTime) {}

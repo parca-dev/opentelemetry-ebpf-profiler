@@ -9,7 +9,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
-	sdtypes "go.opentelemetry.io/ebpf-profiler/nativeunwind/stackdeltatypes"
 	"go.opentelemetry.io/ebpf-profiler/process"
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
@@ -23,18 +22,14 @@ type LoaderInfo struct {
 	elfRef *pfelf.Reference
 	// gaps represents holes in the stack deltas of the executable.
 	gaps []util.Range
-	// deltas contains the stack deltas for the executable.
-	deltas sdtypes.StackDeltaArray
 }
 
 // NewLoaderInfo returns a populated LoaderInfo struct.
-func NewLoaderInfo(fileID host.FileID, elfRef *pfelf.Reference, gaps []util.Range,
-	deltas sdtypes.StackDeltaArray) *LoaderInfo {
+func NewLoaderInfo(fileID host.FileID, elfRef *pfelf.Reference, gaps []util.Range) *LoaderInfo {
 	return &LoaderInfo{
 		fileID: fileID,
 		elfRef: elfRef,
 		gaps:   gaps,
-		deltas: deltas,
 	}
 }
 
@@ -73,11 +68,6 @@ func (i *LoaderInfo) FileName() string {
 // Gaps returns the gaps for the executable of this LoaderInfo.
 func (i *LoaderInfo) Gaps() []util.Range {
 	return i.gaps
-}
-
-// Deltas returns the stack deltas for the executable of this LoaderInfo.
-func (i *LoaderInfo) Deltas() sdtypes.StackDeltaArray {
-	return i.deltas
 }
 
 // ExtractAsFile returns a filename referring to the ELF executable, extracting
