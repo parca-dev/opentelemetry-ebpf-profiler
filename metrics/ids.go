@@ -647,11 +647,11 @@ const (
 	// Number of failures reading Go custom labels
 	IDUnwindGoLabelsFailures = 279
 
-	// placeholder, will be added in a future PR
-	IDplaceholder280 = 280
+	// Number of attempts to read Go custom labels (legacy)
+	IDUnwindGoCustomLabelsAttempts = 280
 
-	// placeholder, will be added in a future PR
-	IDplaceholder281 = 281
+	// Number of failures reading Go custom labels (legacy)
+	IDUnwindGoCustomLabelsFailures = 281
 
 	// Number of failures to get TSD base for native custom labels
 	IDUnwindNativeCustomLabelsErrReadTsdBase = 282

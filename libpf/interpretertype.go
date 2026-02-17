@@ -79,6 +79,7 @@ var interpreterTypeToString = map[InterpreterType]string{
 	APMInt:       "apm-integration",
 	LuaJIT:       "luajit",
 	Go:           "go",
+	GoLabels:     "go-labels",
 	CustomLabels: "custom-labels",
 }
 
