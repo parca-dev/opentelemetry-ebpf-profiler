@@ -49,6 +49,11 @@ func (is *InstanceStubs) ReleaseResources() error {
 
 type EbpfHandlerStubs struct{}
 
+func (m *EbpfHandlerStubs) UpdatePidInterpreterMapping(_ libpf.PID,
+	pfx lpm.Prefix, _ uint8, _ host.FileID, _ uint64) error {
+	return nil
+}
+
 func (m *EbpfHandlerStubs) DeletePidInterpreterMapping(_ libpf.PID, _ lpm.Prefix) error {
 	return nil
 }
