@@ -15,7 +15,7 @@ import (
 // storing the current g but "static" binaries it ends up as -80. There
 // may be dynamic relocating going on so just read it from a known
 // symbol if possible.
-func extractTLSGOffset(f *pfelf.File, path string) (int32, error) {
+func extractTLSGOffset(f *pfelf.File) (int32, error) {
 	syms, err := f.ReadSymbols()
 	if err != nil {
 		return 0, err
@@ -25,7 +25,7 @@ func extractTLSGOffset(f *pfelf.File, path string) (int32, error) {
 	sym, err := syms.LookupSymbol("runtime.stackcheck.abi0")
 	if err != nil {
 		// Binary must be stripped, hope default is correct and warn.
-		log.Warnf("Failed to find stackcheck symbol, Go labels might not work: %v (%s)", err, path)
+		log.Warnf("Failed to find stackcheck symbol, Go labels might not work: %v", err)
 		return -8, nil
 	}
 	b, err := f.VirtualMemory(int64(sym.Address), 16, 16)
@@ -61,6 +61,6 @@ func extractTLSGOffset(f *pfelf.File, path string) (int32, error) {
 		}
 	}
 exit:
-	log.Warnf("Failed to decode stackcheck symbol, Go label collection might not work %s", path)
+	log.Warnf("Failed to decode stackcheck symbol, Go label collection might not work")
 	return -8, nil
 }
