@@ -301,7 +301,6 @@ enum {
   // number of failures to unwind code object due to its large size
   metricID_UnwindDotnetErrCodeTooLarge,
 
-  // number of attempts to read Go custom labels
   // number of failures to get TSD base for native custom labels
   metricID_UnwindNativeCustomLabelsErrReadTsdBase,
 
@@ -346,9 +345,10 @@ enum {
   // total number of failed attempts to add node custom labels
   metricID_UnwindNodeCustomLabelsFailures,
 
+  // number of attempts to read Go labels
   metricID_UnwindGoLabelsAttempts,
 
-  // number of failures to read Go custom labels
+  // number of failures to read Go labels
   metricID_UnwindGoLabelsFailures,
 
   // number of invalid instruction sequences sequence
