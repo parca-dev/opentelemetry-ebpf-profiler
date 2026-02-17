@@ -35,12 +35,12 @@ func (is *InstanceStubs) UpdateTSDInfo(EbpfHandler, libpf.PID, tpbase.TSDInfo) e
 	return nil
 }
 
-func (is *InstanceStubs) Symbolize(*host.Frame, *libpf.Frames) error {
-	return ErrMismatchInterpreterType
-}
-
 func (is *InstanceStubs) GetAndResetMetrics() ([]metrics.Metric, error) {
 	return []metrics.Metric{}, nil
+}
+
+func (is *InstanceStubs) Symbolize(*host.Frame, *libpf.Frames) error {
+	return ErrMismatchInterpreterType
 }
 
 type EbpfHandlerStubs struct{}
@@ -71,6 +71,7 @@ func (m *EbpfHandlerStubs) UpdateProcData(libpf.InterpreterType, libpf.PID,
 func (m *EbpfHandlerStubs) DeleteProcData(libpf.InterpreterType, libpf.PID) error {
 	return nil
 }
+
 func (mockup *EbpfHandlerStubs) AttachUSDTProbes(libpf.PID, string, string, []pfelf.USDTProbe,
 	[]uint64, []string) (LinkCloser, error) {
 	return nil, nil
