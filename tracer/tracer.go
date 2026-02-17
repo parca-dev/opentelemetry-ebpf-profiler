@@ -113,6 +113,9 @@ type Tracer struct {
 	// samplesPerSecond holds the configured number of samples per second.
 	samplesPerSecond int
 
+	// traceBufferSizeMultiplier scales the trace_events perf buffer size.
+	traceBufferSizeMultiplier int
+
 	// probabilisticInterval is the time interval for which probabilistic profiling will be enabled.
 	probabilisticInterval time.Duration
 
@@ -223,20 +226,21 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 	perfEventList := []*perf.Event{}
 
 	tracer := &Tracer{
-		kernelSymbolizer:       kernelSymbolizer,
-		processManager:         processManager,
-		triggerPIDProcessing:   make(chan bool, 1),
-		pidEvents:              make(chan libpf.PIDTID, pidEventBufferSize),
-		ebpfMaps:               ebpfMaps,
-		ebpfProgs:              ebpfProgs,
-		hooks:                  make(map[hookPoint]link.Link),
-		intervals:              cfg.Intervals,
-		hasBatchOperations:     hasBatchOperations,
-		perfEntrypoints:        xsync.NewRWMutex(perfEventList),
-		reporter:               cfg.Reporter,
-		samplesPerSecond:       cfg.SamplesPerSecond,
-		probabilisticInterval:  cfg.ProbabilisticInterval,
-		probabilisticThreshold: cfg.ProbabilisticThreshold,
+		kernelSymbolizer:          kernelSymbolizer,
+		processManager:            processManager,
+		triggerPIDProcessing:      make(chan bool, 1),
+		pidEvents:                 make(chan libpf.PIDTID, pidEventBufferSize),
+		ebpfMaps:                  ebpfMaps,
+		ebpfProgs:                 ebpfProgs,
+		hooks:                     make(map[hookPoint]link.Link),
+		intervals:                 cfg.Intervals,
+		hasBatchOperations:        hasBatchOperations,
+		perfEntrypoints:           xsync.NewRWMutex(perfEventList),
+		reporter:                  cfg.Reporter,
+		samplesPerSecond:          cfg.SamplesPerSecond,
+		traceBufferSizeMultiplier: cfg.TraceBufferSizeMultiplier,
+		probabilisticInterval:     cfg.ProbabilisticInterval,
+		probabilisticThreshold:    cfg.ProbabilisticThreshold,
 	}
 
 	return tracer, nil
