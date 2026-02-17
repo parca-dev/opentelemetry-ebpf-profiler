@@ -48,7 +48,18 @@ var (
 		metric.WithInstrumentationVersion(vc.Version()))
 	counters = map[MetricID]metric.Int64Counter{}
 	gauges   = map[MetricID]metric.Int64Gauge{}
+
+	reporterImpl MetricsReporter
 )
+
+// MetricsReporter is the interface for reporting metrics
+type MetricsReporter interface {
+	ReportMetrics(timestamp uint32, ids []uint32, values []int64)
+}
+
+func SetReporter(r MetricsReporter) {
+	reporterImpl = r
+}
 
 func init() {
 	defs := GetDefinitions()
@@ -87,6 +98,16 @@ func init() {
 // Allow for report to be overridden in the test.
 var report = func() {
 	ctx := context.Background()
+	if reporterImpl != nil {
+		ids := make([]uint32, nMetrics)
+		values := make([]int64, nMetrics)
+
+		for i := 0; i < nMetrics; i++ {
+			ids[i] = uint32(metricsBuffer[i].ID)
+			values[i] = int64(metricsBuffer[i].Value)
+		}
+		reporterImpl.ReportMetrics(prevTimestamp, ids, values)
+	}
 	for i := range nMetrics {
 		metric := metricsBuffer[i]
 		switch typ := metricTypes[metric.ID]; typ {
