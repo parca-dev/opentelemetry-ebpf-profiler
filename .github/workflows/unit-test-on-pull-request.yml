@@ -179,19 +179,12 @@ jobs:
           - { target_arch: amd64, kernel: 6.8.10 }
           - { target_arch: amd64, kernel: 6.9.1 }
           - { target_arch: amd64, kernel: 6.12.16 }
-          # include a kernel that has 4540aed51b12bc13364149bf95f6ecef013197c0
-          # (see https://github.com/parca-dev/opentelemetry-ebpf-profiler/pull/201)
-          - { target_arch: amd64, kernel: 6.12.63 }
-          - { target_arch: amd64, kernel: 6.16 }
 
           # ARM64 (NOTE: older ARM64 kernels are not available in Cilium repos)
           - { target_arch: arm64, kernel: 6.6.31 }
           - { target_arch: arm64, kernel: 6.8.4 }
           - { target_arch: arm64, kernel: 6.9.1 }
           - { target_arch: arm64, kernel: 6.12.16 }
-          # qemu has a bug that prevents booting the following kernel on ARM,
-          # fixed in qemu 9.2
-          #- { target_arch: arm64, kernel: 6.16 }
     steps:
       - name: Clone code
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
@@ -224,30 +217,6 @@ jobs:
             *) echo >&2 "bug: bad arch selected"; exit 1;;
           esac
           support/run-tests.sh ${{ matrix.kernel }}
-  interpreter-integration-tests:
-    name: Interpreter integration (${{ matrix.target_arch }}, ${{ matrix.test_type }})
-    runs-on: ubuntu-24.04
-    strategy:
-      matrix:
-        target_arch: [amd64, arm64]
-        test_type: [stable, known-failing]
-    steps:
-      - name: Clone code
-        uses: actions/checkout@v4
-      - name: Set up environment
-        uses: ./.github/workflows/env
-      - name: Test interpreter integration (stable tests)
-        if: matrix.test_type == 'stable'
-        run: |
-          uname -a
-          sudo go test ./interpreter/... -v -run TestIntegration -skip "TestIntegration/(node-local-nightly|node-latest)"
-      - name: Test interpreter integration (known failing tests)
-        if: matrix.test_type == 'known-failing'
-        continue-on-error: true
-        run: |
-          uname -a
-          sudo go test ./interpreter/... -v -run "TestIntegration/(node-local-nightly|node-latest)"
-
   distro-qemu-tests:
     name: Distro QEMU tests (${{ matrix.kernel }} ${{ matrix.target_arch }})
     runs-on: ubuntu-24.04
@@ -263,9 +232,6 @@ jobs:
           - { target_arch: amd64, kernel: 6.8.10 }
           - { target_arch: amd64, kernel: 6.9.1 }
           - { target_arch: amd64, kernel: 6.12.16 }
-          # include a kernel that has 4540aed51b12bc13364149bf95f6ecef013197c0
-          # (see https://github.com/parca-dev/opentelemetry-ebpf-profiler/pull/201)
-          - { target_arch: amd64, kernel: 6.12.63 }
           - { target_arch: amd64, kernel: 6.16 }
 
           # ARM64 (NOTE: older ARM64 kernels are not available in Cilium repos)

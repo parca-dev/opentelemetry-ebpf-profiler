@@ -586,8 +586,7 @@ func loadPerfUnwinders(coll *cebpf.CollectionSpec, ebpfProgs map[string]*cebpf.P
 			name:             "native_tracer_entry",
 			noTailCallTarget: true,
 			enable:           true,
-		},
-	)
+		})
 
 	for _, unwindProg := range progs {
 		if !unwindProg.enable {
@@ -963,8 +962,6 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) *host.Trace {
 			Lineno:        libpf.AddressOrLineno(rawFrame.Addr_or_line),
 			Type:          libpf.FrameType(rawFrame.Kind),
 			ReturnAddress: rawFrame.Return_address != 0,
-			LJCalleePC:    uint32(rawFrame.Callee_pc_lo) + (uint32(rawFrame.Callee_pc_hi) << 16),
-			LJCallerPC:    uint32(rawFrame.Caller_pc_lo) + (uint32(rawFrame.Caller_pc_hi) << 16),
 		}
 	}
 	return trace

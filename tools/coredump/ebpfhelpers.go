@@ -129,7 +129,7 @@ func __bpf_map_lookup_elem(id C.u64, mapdef *C.bpf_map_def, keyptr unsafe.Pointe
 		if deltas, ok := ctx.exeIDToStackDeltaMaps[ctx.stackDeltaFileID]; ok {
 			return unsafe.Pointer(uintptr(deltas) + key*C.sizeof_StackDelta)
 		}
-	case &C.metrics, &C.reported_pids:
+	case &C.metrics:
 		return unsafe.Pointer(uintptr(0))
 	case &C.system_config:
 		return ctx.systemConfig

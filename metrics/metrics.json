@@ -2017,17 +2017,17 @@
     "id": 279
   },
   {
-    "description": "Number of attempts to read Go custom labels (legacy)",
+    "description": "placeholder, will be added in a future PR",
     "type": "counter",
-    "name": "UnwindGoCustomLabelsAttempts",
-    "field": "bpf.go_custom_labels.attempts",
+    "name": "placeholder280",
+    "field": "placeholder280",
     "id": 280
   },
   {
-    "description": "Number of failures reading Go custom labels (legacy)",
+    "description": "placeholder, will be added in a future PR",
     "type": "counter",
-    "name": "UnwindGoCustomLabelsFailures",
-    "field": "bpf.go_custom_labels.errors",
+    "name": "placeholder281",
+    "field": "placeholder281",
     "id": 281
   },
   {

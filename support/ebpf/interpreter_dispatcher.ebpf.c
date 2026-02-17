@@ -8,7 +8,6 @@
 #include "tracemgmt.h"
 #include "tsd.h"
 #include "types.h"
-#include "util.h"
 
 // Begin shared maps
 
@@ -731,6 +730,7 @@ static EBPF_INLINE int unwind_stop(struct pt_regs *ctx)
   }
   // TEMPORARY HACK END
 
+  // Must be last since it may not return (it will call send_trace).
   maybe_add_go_custom_labels(ctx, record);
 
   send_trace(ctx, trace);

@@ -1,4 +1,4 @@
-// provides type definitions shared by the eBPF and Go components
+// Provides type definitions shared by the eBPF and Go components
 
 #ifndef OPTI_TYPES_H
 #define OPTI_TYPES_H
@@ -274,10 +274,10 @@ enum {
   // number of failures to get TSD base for APM correlation
   metricID_UnwindApmIntErrReadTsdBase,
 
-  // number of failures to read the APM correlation pointer
+  // number of failures read the APM correlation pointer
   metricID_UnwindApmIntErrReadCorrBufPtr,
 
-  // number of failures to read the APM correlation buffer
+  // number of failures read the APM correlation buffer
   metricID_UnwindApmIntErrReadCorrBuf,
 
   // number of successful reads of APM correlation info
@@ -301,12 +301,7 @@ enum {
   // number of failures to unwind code object due to its large size
   metricID_UnwindDotnetErrCodeTooLarge,
 
-  // number of attempts to read Go custom labels (legacy)
-  metricID_UnwindGoCustomLabelsAttempts,
-
-  // number of failures to read Go custom labels (legacy)
-  metricID_UnwindGoCustomLabelsFailures,
-
+  // number of attempts to read Go custom labels
   // number of failures to get TSD base for native custom labels
   metricID_UnwindNativeCustomLabelsErrReadTsdBase,
 
@@ -351,10 +346,9 @@ enum {
   // total number of failed attempts to add node custom labels
   metricID_UnwindNodeCustomLabelsFailures,
 
-  // number of attempts to read Go labels (upstream)
   metricID_UnwindGoLabelsAttempts,
 
-  // number of failures to read Go labels (upstream)
+  // number of failures to read Go custom labels
   metricID_UnwindGoLabelsFailures,
 
   // number of times dlopen uprobe was fired
@@ -399,14 +393,13 @@ typedef enum TraceOrigin {
   TRACE_SAMPLING,
   TRACE_OFF_CPU,
   TRACE_UPROBE,
-  TRACE_MEMORY,
   TRACE_CUDA_LAUNCH,
 } TraceOrigin;
 
 // MAX_FRAME_UNWINDS defines the maximum number of frames per
 // Trace we can unwind and respect the limit of eBPF instructions,
 // limit of tail calls and limit of stack size per eBPF program.
-#define MAX_FRAME_UNWINDS 256
+#define MAX_FRAME_UNWINDS 128
 
 // MAX_NON_ERROR_FRAME_UNWINDS defines the maximum number of frames
 // to be pushed by unwinders while still leaving space for an error frame.

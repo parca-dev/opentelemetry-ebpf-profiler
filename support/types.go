@@ -53,10 +53,10 @@ const (
 	EventTypeGenericPID = 0x1
 )
 
-const MaxFrameUnwinds = 0x100
+const MaxFrameUnwinds = 0x80
 
 const (
-	MetricIDBeginCumulative = 0x73
+	MetricIDBeginCumulative = 0x71
 )
 
 const (
@@ -91,8 +91,7 @@ const (
 	TraceOriginSampling = 0x1
 	TraceOriginOffCPU   = 0x2
 	TraceOriginUProbe   = 0x3
-	TraceOriginMemory   = 0x4
-	TraceOriginCuda     = 0x5
+	TraceOriginCuda     = 0x4
 )
 
 type ApmSpanID [8]byte
@@ -180,7 +179,7 @@ type Trace struct {
 	Stack_len          uint32
 	Origin             uint32
 	Offtime            uint64
-	Frames             [256]Frame
+	Frames             [128]Frame
 }
 type UnwindInfo struct {
 	Opcode      uint8
@@ -333,7 +332,7 @@ type LuaJITProcInfo struct {
 const (
 	Sizeof_Frame      = 0x18
 	Sizeof_StackDelta = 0x4
-	Sizeof_Trace      = 0x1b70
+	Sizeof_Trace      = 0xf70
 
 	sizeof_ApmIntProcInfo = 0x8
 	sizeof_DotnetProcInfo = 0x4
@@ -489,10 +488,7 @@ var MetricsTranslation = []metrics.MetricID{
 	0x5d: metrics.IDUnwindDotnetErrBadFP,
 	0x5e: metrics.IDUnwindDotnetErrCodeHeader,
 	0x5f: metrics.IDUnwindDotnetErrCodeTooLarge,
-	0x69: metrics.IDUnwindLuaJITAttempts,
-	0x6a: metrics.IDUnwindLuaJITErrNoProcInfo,
-	0x72: metrics.IDDlopenUprobeHits,
-	0x6d: metrics.IDUnwindNodeCustomLabelsAttempts,
-	0x6e: metrics.IDUnwindNodeCustomLabelsSuccesses,
-	0x6f: metrics.IDUnwindNodeCustomLabelsFailures,
+	0x67: metrics.IDUnwindLuaJITAttempts,
+	0x68: metrics.IDUnwindLuaJITErrNoProcInfo,
+	0x70: metrics.IDDlopenUprobeHits,
 }

@@ -411,7 +411,6 @@ func (impl *ebpfMapsImpl) loadUSDTProgram(progName string, useMulti bool) error 
 		// These errors tend to have hundreds of lines (or more),
 		// so we print each line individually.
 		if ve, ok := err.(*cebpf.VerifierError); ok {
-			log.Errorf("failed to load %s: %v", progSpec.Name, ve.Unwrap())
 			for _, line := range ve.Log {
 				log.Error(line)
 			}
@@ -421,7 +420,7 @@ func (impl *ebpfMapsImpl) loadUSDTProgram(progName string, useMulti bool) error 
 				log.Error(scanner.Text())
 			}
 		}
-		return fmt.Errorf("failed to load %s: %w", progSpec.Name, err)
+		return fmt.Errorf("failed to load %s", progSpec.Name)
 	}
 	impl.userProgs[progSpec.Name] = prog
 	return nil
