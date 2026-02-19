@@ -2,14 +2,10 @@
 
 #include "bpfdefs.h"
 #include "errors.h"
+#include "stackdeltatypes.h"
 #include "tracemgmt.h"
 #include "tsd.h"
 #include "types.h"
-
-// The number of Python frames to unwind per frame-unwinding eBPF program. If
-// we start running out of instructions in the walk_python_stack program, one
-// option is to adjust this number downwards.
-#define FRAMES_PER_WALK_PYTHON_STACK 12
 
 // Forward declaration to avoid warnings like
 // "declaration of 'struct pt_regs' will not be visible outside of this function [-Wvisibility]".
@@ -127,8 +123,10 @@ static EBPF_INLINE ErrorCode process_python_frame(
   }
 
   // Read PyCodeObject
-  if (bpf_probe_read_user(pss->code, sizeof(pss->code), py_codeobject)) {
-    DEBUG_PRINT("Failed to read PyCodeObject at 0x%lx", (unsigned long)(py_codeobject));
+  long pycode_err = bpf_probe_read_user(pss->code, sizeof(pss->code), py_codeobject);
+  if (pycode_err) {
+    DEBUG_PRINT(
+      "Failed to read PyCodeObject at 0x%lx err=%ld", (unsigned long)(py_codeobject), pycode_err);
     increment_metric(metricID_UnwindPythonErrBadCodeObjectArgCountAddr);
     return ERR_PYTHON_BAD_CODE_OBJECT_ADDR;
   }
@@ -153,40 +151,6 @@ push_frame:
   }
   increment_metric(metricID_UnwindPythonFrames);
   return ERR_OK;
-}
-
-static EBPF_INLINE ErrorCode
-walk_python_stack(PerCPURecord *record, const PyProcInfo *pyinfo, int *unwinder)
-{
-  void *py_frame  = record->pythonUnwindState.py_frame;
-  ErrorCode error = ERR_OK;
-  *unwinder       = PROG_UNWIND_STOP;
-
-  UNROLL for (u32 i = 0; i < FRAMES_PER_WALK_PYTHON_STACK; ++i)
-  {
-    bool continue_with_next;
-    error = process_python_frame(record, pyinfo, &py_frame, &continue_with_next);
-    if (error) {
-      goto stop;
-    }
-    if (continue_with_next) {
-      *unwinder = get_next_unwinder_after_interpreter();
-      goto stop;
-    }
-    if (!py_frame) {
-      goto stop;
-    }
-  }
-
-  *unwinder = PROG_UNWIND_PYTHON;
-
-stop:
-  // Set up the state for the next invocation of this unwinding program.
-  if (error || !py_frame) {
-    unwinder_mark_done(record, PROG_UNWIND_PYTHON);
-  }
-  record->pythonUnwindState.py_frame = py_frame;
-  return error;
 }
 
 // get_PyThreadState retrieves the PyThreadState* for the current thread.
@@ -276,6 +240,55 @@ static EBPF_INLINE ErrorCode get_PyFrame(const PyProcInfo *pyinfo, void **frame)
   return ERR_OK;
 }
 
+#include "native_stack_trace.h"
+
+// Number of Python<->native entry frame transitions to handle inline per
+// program invocation. Each transition walks up to FRAMES_PER_WALK_PYTHON_STACK
+// python frames and up to NATIVE_FRAMES_PER_BOUNDARY native frames.
+// Deep PyTorch stacks routinely have 25-27 such transitions; handling
+// MAX_INLINE_TRANSITIONS per invocation reduces the tail calls needed from
+// ~27 down to ~27/MAX_INLINE_TRANSITIONS.
+#define MAX_INLINE_TRANSITIONS 3
+
+// Number of Python frames to walk per boundary.
+#define FRAMES_PER_WALK_PYTHON_STACK 6
+
+// Maximum native frames to unwind at each entry frame boundary. In PyTorch-style
+// stacks the native portion between Python frames is typically 1-3 frames
+// (C extension call overhead). If more native frames are needed, we fall through
+// to tail call the full native unwinder.
+#define NATIVE_FRAMES_PER_BOUNDARY 2
+
+// Walk up to FRAMES_PER_WALK_PYTHON_STACK Python frames.
+// Returns the python frame pointer (NULL if done), sets *unwinder.
+static EBPF_INLINE ErrorCode
+walk_python_stack(PerCPURecord *record, const PyProcInfo *pyinfo, void **py_frame, int *unwinder)
+{
+  ErrorCode error = ERR_OK;
+  *unwinder       = PROG_UNWIND_STOP;
+
+  for (u32 i = 0; i < FRAMES_PER_WALK_PYTHON_STACK; ++i) {
+    bool continue_with_next;
+    error = process_python_frame(record, pyinfo, py_frame, &continue_with_next);
+    if (error) {
+      goto done;
+    }
+    if (continue_with_next) {
+      *unwinder = get_next_unwinder_after_interpreter();
+      goto done;
+    }
+    if (!*py_frame) {
+      goto done;
+    }
+  }
+
+  // Ran out of budget, need to tail call back to self.
+  *unwinder = PROG_UNWIND_PYTHON;
+
+done:
+  return error;
+}
+
 // unwind_python is the entry point for tracing when invoked from the native tracer
 // or interpreter dispatcher. It does not reset the trace object and will append the
 // Python stack frames to the trace object for the current CPU.
@@ -314,7 +327,70 @@ static EBPF_INLINE int unwind_python(struct pt_regs *ctx)
     goto exit;
   }
 
-  error = walk_python_stack(record, pyinfo, &unwinder);
+  // Walk Python and native frames inline, handling entry frame boundaries
+  // without consuming tail calls. The outer loop alternates between walking
+  // Python frames and unwinding native frames at boundaries. When the native
+  // budget (NATIVE_FRAMES_PER_BOUNDARY) is exhausted without crossing back
+  // to Python, we loop back and try more native frames (skipping the Python
+  // walk) rather than immediately falling through to a tail call.
+  {
+    void *py_frame = record->pythonUnwindState.py_frame;
+    bool in_native = false;
+
+    for (int t = 0; t < MAX_INLINE_TRANSITIONS; t++) {
+      if (!in_native) {
+        error = walk_python_stack(record, pyinfo, &py_frame, &unwinder);
+        if (error || unwinder != PROG_UNWIND_NATIVE) {
+          break;
+        }
+      }
+
+      // Unwind native frames at the boundary.
+      in_native = true;
+      for (int j = 0; j < NATIVE_FRAMES_PER_BOUNDARY; j++) {
+        unwinder = PROG_UNWIND_STOP;
+
+        increment_metric(metricID_UnwindNativeAttempts);
+        error = push_native(
+          trace,
+          record->state.text_section_id,
+          record->state.text_section_offset,
+          record->state.return_address);
+        if (error) {
+          goto done;
+        }
+
+        bool stop;
+        error = unwind_one_frame(record, &stop);
+        if (error || stop) {
+          goto done;
+        }
+
+        error = get_next_unwinder_after_native_frame(record, &unwinder);
+        if (error) {
+          goto done;
+        }
+        if (unwinder == PROG_UNWIND_PYTHON) {
+          // Crossed back to Python.
+          in_native = false;
+          break;
+        }
+        if (unwinder != PROG_UNWIND_NATIVE) {
+          // Some other state (stop, different interpreter).
+          goto done;
+        }
+      }
+      // If still in_native, the outer loop will come back and try more
+      // native frames without walking Python first.
+    }
+
+  done:
+    // Save Python frame state.
+    if (error || !py_frame) {
+      unwinder_mark_done(record, PROG_UNWIND_PYTHON);
+    }
+    record->pythonUnwindState.py_frame = py_frame;
+  }
 
 exit:
   record->state.unwind_error = error;

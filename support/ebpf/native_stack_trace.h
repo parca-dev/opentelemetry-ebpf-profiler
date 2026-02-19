@@ -314,8 +314,8 @@ static EBPF_INLINE ErrorCode unwind_one_frame(PerCPURecord *record, bool *stop)
   *stop              = false;
 
   u32 unwindInfo = 0;
-  int addrDiff = 0;
-  u64 cfa      = 0;
+  int addrDiff   = 0;
+  u64 cfa        = 0;
 
   // The relevant executable is compiled with frame pointer omission, so
   // stack deltas need to be retrieved from the relevant map.
@@ -418,7 +418,7 @@ static EBPF_INLINE ErrorCode unwind_one_frame(struct PerCPURecord *record, bool 
 
   u32 unwindInfo = 0;
   int addrDiff   = 0;
-  u64 cfa = 0;
+  u64 cfa        = 0;
 
   // The relevant executable is compiled with frame pointer omission, so
   // stack deltas need to be retrieved from the relevant map.
@@ -550,16 +550,17 @@ frame_ok:
   #error unsupported architecture
 #endif
 
-// unwind_native is the tail call destination for PROG_UNWIND_NATIVE.
-static EBPF_INLINE int unwind_native(struct pt_regs *ctx)
+// unwind_native_frames is the core native unwinding loop. It unwinds up to
+// NATIVE_FRAMES_PER_PROGRAM native frames and returns the next unwinder to use.
+// This is used by both the standalone native unwinder (which tail calls after)
+// and by interpreter unwinders that inline native unwinding (which can avoid
+// the tail call when looping back to interpreter unwinding).
+static EBPF_INLINE ErrorCode unwind_native_frames(PerCPURecord *record, int *out_unwinder)
 {
-  PerCPURecord *record = get_per_cpu_record();
-  if (!record)
-    return -1;
+  Trace *trace    = &record->trace;
+  int unwinder    = PROG_UNWIND_STOP;
+  ErrorCode error = ERR_OK;
 
-  Trace *trace = &record->trace;
-  int unwinder;
-  ErrorCode error;
   for (int i = 0; i < NATIVE_FRAMES_PER_PROGRAM; i++) {
     unwinder = PROG_UNWIND_STOP;
 
@@ -599,6 +600,22 @@ static EBPF_INLINE int unwind_native(struct pt_regs *ctx)
       break;
     }
   }
+
+  *out_unwinder = unwinder;
+  return error;
+}
+
+// unwind_native is the tail call destination for PROG_UNWIND_NATIVE.
+// It may be unused when the header is included by interpreter unwinders that
+// call unwind_native_frames directly.
+__attribute__((unused)) static EBPF_INLINE int unwind_native(struct pt_regs *ctx)
+{
+  PerCPURecord *record = get_per_cpu_record();
+  if (!record)
+    return -1;
+
+  int unwinder;
+  ErrorCode error = unwind_native_frames(record, &unwinder);
 
   // Tail call needed for recursion, switching to interpreter unwinder, or reporting
   // trace due to end-of-trace or error. The unwinder program index is set accordingly.
