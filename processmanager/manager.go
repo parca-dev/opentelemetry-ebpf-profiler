@@ -63,7 +63,7 @@ func New(ctx context.Context, includeTracers types.IncludedTracers, monitorInter
 	executableUnloadDelay time.Duration, ebpf pmebpf.EbpfHandler, traceReporter reporter.TraceReporter,
 	exeReporter reporter.ExecutableReporter, sdp nativeunwind.StackDeltaProvider,
 	filterErrorFrames bool, includeEnvVars libpf.Set[string],
-        interceptor TraceInterceptor) (*ProcessManager, error) {
+	interceptor TraceInterceptor) (*ProcessManager, error) {
 	if exeReporter == nil {
 		exeReporter = executableReporterStub{}
 	}
@@ -255,6 +255,13 @@ func (pm *ProcessManager) convertFrame(pid libpf.PID, ef libpf.EbpfFrame, dst *l
 			AddressOrLineno: libpf.AddressOrLineno(address),
 			Mapping:         mapping,
 		})
+	case libpf.CUDA:
+		// CUDA kernel frames are symbolized later when GPU timing arrives.
+		// Preserve AddressOrLineno which encodes correlation ID | (CBID << 32).
+		dst.Append(&libpf.Frame{
+			Type:            ef.Type(),
+			AddressOrLineno: libpf.AddressOrLineno(ef.Data()),
+		})
 	default:
 		err := pm.symbolizeFrame(pid, ef, dst, libpf.FrameMapping{})
 		if err == nil {
@@ -384,7 +391,7 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace) {
 	if pm.interceptor != nil && pm.interceptor(trace, meta, bpfTrace) {
 		return
 	}
-	
+
 	meta.APMServiceName = pm.maybeNotifyAPMAgent(bpfTrace, trace.Hash, 1)
 
 	if err := pm.traceReporter.ReportTraceEvent(trace, meta); err != nil {
