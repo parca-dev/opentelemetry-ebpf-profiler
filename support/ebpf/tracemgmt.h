@@ -584,6 +584,7 @@ copy_state_regs(UnwindState *state, struct pt_regs *regs, bool interrupted_kerne
   state->r9  = regs->r9;
   state->r11 = regs->r11;
   state->r13 = regs->r13;
+  state->r14 = regs->r14;
   state->r15 = regs->r15;
 
   // Treat syscalls as return addresses, but not IRQ handling, page faults, etc..
@@ -601,6 +602,7 @@ copy_state_regs(UnwindState *state, struct pt_regs *regs, bool interrupted_kerne
   state->fp  = regs->regs[29];
   state->lr  = normalize_pac_ptr(regs->regs[30]);
   state->r20 = regs->regs[20];
+  state->r7  = regs->regs[7];
   state->r22 = regs->regs[22];
   state->r28 = regs->regs[28];
 
