@@ -2,76 +2,97 @@ package pdata
 
 import (
 	"testing"
-	"unique"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pprofile"
+	"go.opentelemetry.io/collector/pdata/pprofile/pprofileotlp"
+	v1profiles "go.opentelemetry.io/proto/otlp/profiles/v1development"
+	"google.golang.org/protobuf/proto"
 
-	semconv "go.opentelemetry.io/otel/semconv/v1.34.0"
+	"github.com/open-telemetry/sig-profiling/tools/profcheck"
+
+	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/reporter/internal/orderedset"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/support"
 )
 
+var (
+	// Test collection window: 60 second duration
+	testCollectionStart = time.Unix(1000, 0)
+	testCollectionEnd   = time.Unix(1060, 0)
+	// Expected profile metadata based on collection window
+	testProfileTime     = pcommon.Timestamp(testCollectionStart.UnixNano())
+	testProfileDuration = uint64(testCollectionEnd.Sub(testCollectionStart).Nanoseconds())
+)
+
+// testGenerate is a helper that calls Generate with the standard test collection window
+func testGenerate(p *Pdata, tree samples.TraceEventsTree, name, version string) (pprofile.Profiles, error) {
+	return p.Generate(tree, name, version, testCollectionStart, testCollectionEnd)
+}
+
 func TestGetDummyMappingIndex(t *testing.T) {
+	fileID := libpf.NewFileID(12345678, 12345678)
 	for _, tt := range []struct {
 		name       string
-		mappingSet OrderedSet[libpf.FileID]
-		stringSet  OrderedSet[string]
+		mappingSet orderedset.OrderedSet[libpf.FileID]
+		stringSet  orderedset.OrderedSet[string]
 		fileID     libpf.FileID
 
 		wantIndex        int32
-		wantMappingSet   OrderedSet[libpf.FileID]
+		wantMappingSet   orderedset.OrderedSet[libpf.FileID]
 		wantMappingTable []int32
-		wantStringSet    OrderedSet[string]
+		wantStringSet    orderedset.OrderedSet[string]
 	}{
 		{
 			name: "with an index already in the file id mapping",
-			mappingSet: OrderedSet[libpf.FileID]{
-				libpf.UnsymbolizedFileID: 42,
+			mappingSet: orderedset.OrderedSet[libpf.FileID]{
+				fileID: 42,
 			},
-			fileID:    libpf.UnsymbolizedFileID,
+			fileID:    fileID,
 			wantIndex: 42,
-			wantMappingSet: OrderedSet[libpf.FileID]{
-				libpf.UnsymbolizedFileID: 42,
+			wantMappingSet: orderedset.OrderedSet[libpf.FileID]{
+				fileID: 42,
 			},
 		},
 		{
 			name:       "with an index not yet in the file id mapping",
-			mappingSet: OrderedSet[libpf.FileID]{},
-			stringSet:  OrderedSet[string]{},
-			fileID:     libpf.UnsymbolizedFileID,
+			mappingSet: orderedset.OrderedSet[libpf.FileID]{},
+			stringSet:  orderedset.OrderedSet[string]{},
+			fileID:     fileID,
 
 			wantIndex: 0,
-			wantMappingSet: OrderedSet[libpf.FileID]{
-				libpf.UnsymbolizedFileID: 0,
+			wantMappingSet: orderedset.OrderedSet[libpf.FileID]{
+				fileID: 0,
 			},
 			wantMappingTable: []int32{0},
-			wantStringSet:    OrderedSet[string]{"": 0},
+			wantStringSet:    orderedset.OrderedSet[string]{"": 0, "process.executable.build_id.htlhash": 1},
 		},
 		{
 			name: "with an index not yet in the file id mapping and a filename in the string table",
 
-			mappingSet: OrderedSet[libpf.FileID]{},
-			stringSet:  OrderedSet[string]{"": 42},
-			fileID:     libpf.UnsymbolizedFileID,
+			mappingSet: orderedset.OrderedSet[libpf.FileID]{},
+			stringSet:  orderedset.OrderedSet[string]{"": 42},
+			fileID:     fileID,
 
 			wantIndex: 0,
-			wantMappingSet: OrderedSet[libpf.FileID]{
-				libpf.UnsymbolizedFileID: 0,
+			wantMappingSet: orderedset.OrderedSet[libpf.FileID]{
+				fileID: 0,
 			},
 			wantMappingTable: []int32{42},
-			wantStringSet:    OrderedSet[string]{"": 42},
+			wantStringSet:    orderedset.OrderedSet[string]{"": 42, "process.executable.build_id.htlhash": 1},
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			mappingSet := tt.mappingSet
 			stringSet := tt.stringSet
 			dic := pprofile.NewProfilesDictionary()
-			mgr := samples.NewAttrTableManager(dic.AttributeTable())
+			mgr := samples.NewAttrTableManager(stringSet, dic.AttributeTable())
 
 			idx, exists := mappingSet.AddWithCheck(tt.fileID)
 			if !exists {
@@ -95,86 +116,95 @@ func TestGetDummyMappingIndex(t *testing.T) {
 	}
 }
 
-func newTestFrames() libpf.Frames {
-	fileID := libpf.NewFileID(2, 3)
+func newTestFrames(extraFrame bool) libpf.Frames {
+	mapping := libpf.NewFrameMapping(libpf.FrameMappingData{
+		File: libpf.NewFrameMappingFile(libpf.FrameMappingFileData{
+			FileID: libpf.NewFileID(2, 3),
+		}),
+	})
 	frames := make(libpf.Frames, 0, 5)
 	frames.Append(&libpf.Frame{
 		Type:            libpf.KernelFrame,
-		FileID:          fileID,
 		AddressOrLineno: 0xef,
 		FunctionName:    libpf.Intern("func1"),
+		Mapping:         mapping,
 	})
 	frames.Append(&libpf.Frame{
 		Type:            libpf.KernelFrame,
-		FileID:          fileID,
 		AddressOrLineno: 0x1ef,
 		FunctionName:    libpf.Intern("func2"),
+		Mapping:         mapping,
 	})
 	frames.Append(&libpf.Frame{
 		Type:            libpf.KernelFrame,
-		FileID:          fileID,
 		AddressOrLineno: 0x2ef,
 		FunctionName:    libpf.Intern("func3"),
+		Mapping:         mapping,
 	})
 	frames.Append(&libpf.Frame{
 		Type:            libpf.KernelFrame,
-		FileID:          fileID,
 		AddressOrLineno: 0x3ef,
 		FunctionName:    libpf.Intern("func4"),
+		Mapping:         mapping,
 	})
 	frames.Append(&libpf.Frame{
 		Type:            libpf.KernelFrame,
-		FileID:          fileID,
 		AddressOrLineno: 0x4ef,
 		FunctionName:    libpf.Intern("func5"),
+		Mapping:         mapping,
 	})
+
+	if extraFrame {
+		frames.Append(&libpf.Frame{
+			Type:            libpf.KernelFrame,
+			AddressOrLineno: 0x5ef,
+			FunctionName:    libpf.Intern("func6"),
+			Mapping:         mapping,
+		})
+	}
 	return frames
 }
 
 func TestFunctionTableOrder(t *testing.T) {
 	for _, tt := range []struct {
-		name        string
-		executables map[libpf.FileID]samples.ExecInfo
-		frames      map[libpf.FileID]map[libpf.AddressOrLineno]samples.SourceInfo
-		events      map[libpf.Origin]samples.KeyToEventMapping
+		name   string
+		events map[libpf.Origin]samples.KeyToEventMapping
 
 		wantFunctionTable        []string
 		expectedResourceProfiles int
 	}{
 		{
 			name:                     "no events",
-			executables:              map[libpf.FileID]samples.ExecInfo{},
 			events:                   map[libpf.Origin]samples.KeyToEventMapping{},
-			wantFunctionTable:        []string{},
+			wantFunctionTable:        []string{""},
 			expectedResourceProfiles: 0,
 		}, {
 			name:                     "single executable",
 			expectedResourceProfiles: 1,
-			executables: map[libpf.FileID]samples.ExecInfo{
-				libpf.NewFileID(2, 3): {},
-			},
 			events: map[libpf.Origin]samples.KeyToEventMapping{
 				support.TraceOriginSampling: map[samples.TraceAndMetaKey]*samples.TraceEvents{
-					{}: {
-						Frames:     newTestFrames(),
+					{Pid: 1}: {
+						Frames:     newTestFrames(false),
 						Timestamps: []uint64{1, 2, 3, 4, 5},
+					},
+					// Test Function deduplication
+					{Pid: 2}: {
+						Frames:     newTestFrames(true),
+						Timestamps: []uint64{6, 7, 8, 9, 10, 11},
 					},
 				},
 			},
 			wantFunctionTable: []string{
-				"func1", "func2", "func3", "func4", "func5",
+				"", "func1", "func2", "func3", "func4", "func5", "func6",
 			},
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			d, err := New(100, 100, nil)
+			d, err := New(100, nil)
 			require.NoError(t, err)
-			for k, v := range tt.executables {
-				d.Executables.Add(k, v)
-			}
 			tree := make(samples.TraceEventsTree)
-			tree[""] = tt.events
-			res, _ := d.Generate(tree, tt.name, "version")
+			tree[libpf.NullString] = tt.events
+			res, _ := testGenerate(d, tree, tt.name, "version")
 			require.Equal(t, tt.expectedResourceProfiles, res.ResourceProfiles().Len())
 			if tt.expectedResourceProfiles == 0 {
 				// Do not check elements of ResourceProfile if there is no expected
@@ -189,7 +219,7 @@ func TestFunctionTableOrder(t *testing.T) {
 			if expectedProfiles == 0 {
 				return
 			}
-			dic := res.ProfilesDictionary()
+			dic := res.Dictionary()
 			require.Equal(t, len(tt.wantFunctionTable), dic.FunctionTable().Len())
 			for i := 0; i < dic.FunctionTable().Len(); i++ {
 				funcName := dic.StringTable().At(int(dic.FunctionTable().At(i).NameStrindex()))
@@ -200,75 +230,146 @@ func TestFunctionTableOrder(t *testing.T) {
 }
 
 func TestProfileDuration(t *testing.T) {
+	mapping := libpf.NewFrameMapping(libpf.FrameMappingData{
+		File: libpf.NewFrameMappingFile(libpf.FrameMappingFileData{
+			FileID: libpf.NewFileID(1, 2),
+		}),
+	})
+
 	for _, tt := range []struct {
-		name   string
-		events map[libpf.Origin]samples.KeyToEventMapping
+		name             string
+		tree             samples.TraceEventsTree
+		expectedTime     pcommon.Timestamp
+		expectedDuration uint64
 	}{
 		{
-			name: "profile duration",
-			events: map[libpf.Origin]samples.KeyToEventMapping{
-				support.TraceOriginSampling: map[samples.TraceAndMetaKey]*samples.TraceEvents{
-					{Pid: 1}: {
-						Timestamps: []uint64{2, 1, 3, 4, 7},
-					},
-					{Pid: 2}: {
-						Timestamps: []uint64{8},
+			name: "samples within collection window",
+			tree: samples.TraceEventsTree{
+				libpf.NullString: map[libpf.Origin]samples.KeyToEventMapping{
+					support.TraceOriginSampling: map[samples.TraceAndMetaKey]*samples.TraceEvents{
+						{Pid: 1}: {
+							// Timestamps within the collection window (1000-1060)
+							Timestamps: []uint64{
+								uint64(time.Unix(1010, 0).UnixNano()),
+								uint64(time.Unix(1020, 0).UnixNano()),
+								uint64(time.Unix(1030, 0).UnixNano()),
+							},
+						},
+						{Pid: 2}: {
+							Timestamps: []uint64{uint64(time.Unix(1040, 0).UnixNano())},
+						},
 					},
 				},
 			},
+			expectedTime:     testProfileTime,
+			expectedDuration: testProfileDuration,
+		},
+		{
+			name: "adjusted start time for buffered samples",
+			tree: samples.TraceEventsTree{
+				libpf.NullString: map[libpf.Origin]samples.KeyToEventMapping{
+					support.TraceOriginSampling: {
+						{Pid: 1}: {
+							Frames: newTestFrames(false),
+							// Sample before collection start (990 vs 1000)
+							Timestamps: []uint64{uint64(time.Unix(990, 0).UnixNano())},
+						},
+					},
+				},
+			},
+			expectedTime:     pcommon.Timestamp(time.Unix(990, 0).UnixNano()),
+			expectedDuration: uint64(testCollectionEnd.Sub(time.Unix(990, 0)).Nanoseconds()),
+		},
+		{
+			name: "adjusted across multiple containers",
+			tree: samples.TraceEventsTree{
+				libpf.Intern("container1"): map[libpf.Origin]samples.KeyToEventMapping{
+					support.TraceOriginSampling: {
+						{Pid: 1}: {
+							Frames: singleFrameTrace(libpf.GoFrame, mapping, 0x10, "func1", libpf.NullString, 1),
+							// Oldest sample at 985
+							Timestamps: []uint64{uint64(time.Unix(985, 0).UnixNano())},
+						},
+					},
+				},
+				libpf.Intern("container2"): map[libpf.Origin]samples.KeyToEventMapping{
+					support.TraceOriginSampling: {
+						{Pid: 2}: {
+							Frames: singleFrameTrace(libpf.GoFrame, mapping, 0x20, "func2", libpf.NullString, 2),
+							// Newer old sample at 995
+							Timestamps: []uint64{uint64(time.Unix(995, 0).UnixNano())},
+						},
+					},
+				},
+			},
+			expectedTime:     pcommon.Timestamp(time.Unix(985, 0).UnixNano()),
+			expectedDuration: uint64(testCollectionEnd.Sub(time.Unix(985, 0)).Nanoseconds()),
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			d, err := New(100, 100, nil)
+			d, err := New(100, nil)
 			require.NoError(t, err)
 
-			tree := make(samples.TraceEventsTree)
-			tree[""] = tt.events
-			res, err := d.Generate(tree, tt.name, "version")
+			res, err := testGenerate(d, tt.tree, tt.name, "version")
 			require.NoError(t, err)
 
-			profile := res.ResourceProfiles().At(0).ScopeProfiles().At(0).Profiles().At(0)
-			require.Equal(t, pcommon.Timestamp(7), profile.Duration())
-			require.Equal(t, pcommon.Timestamp(1), profile.Time())
+			for i := 0; i < res.ResourceProfiles().Len(); i++ {
+				rp := res.ResourceProfiles().At(i)
+				for j := 0; j < rp.ScopeProfiles().Len(); j++ {
+					sp := rp.ScopeProfiles().At(j)
+					for k := 0; k < sp.Profiles().Len(); k++ {
+						profile := sp.Profiles().At(k)
+						assert.Equal(t, tt.expectedTime, profile.Time())
+						assert.Equal(t, tt.expectedDuration, profile.DurationNano())
+					}
+				}
+			}
 		})
 	}
 }
+
 func TestGenerate_EmptyTree(t *testing.T) {
-	d, err := New(100, 100, nil)
+	d, err := New(100, nil)
 	require.NoError(t, err)
 
 	tree := make(samples.TraceEventsTree)
-	profiles, err := d.Generate(tree, "agent", "v1")
+	profiles, err := testGenerate(d, tree, "agent", "v1")
 	require.NoError(t, err)
 	assert.Equal(t, 0, profiles.ResourceProfiles().Len())
 }
 
-func singleFrameTrace(ty libpf.FrameType, fileID libpf.FileID, lineno libpf.AddressOrLineno,
-	funcName, sourceFile string, sourceLine libpf.SourceLineno) libpf.Frames {
-	frames := make(libpf.Frames, 1)
-	frames[0] = unique.Make(libpf.Frame{
+func singleFrameTrace(ty libpf.FrameType, mapping libpf.FrameMapping,
+	lineno libpf.AddressOrLineno, funcName string, sourceFile libpf.String,
+	sourceLine libpf.SourceLineno,
+) libpf.Frames {
+	frames := make(libpf.Frames, 0, 1)
+	frames.Append(&libpf.Frame{
 		Type:            ty,
-		FileID:          fileID,
 		AddressOrLineno: lineno,
 		FunctionName:    libpf.Intern(funcName),
-		SourceFile:      libpf.Intern(sourceFile),
+		SourceFile:      sourceFile,
 		SourceLine:      sourceLine,
+		Mapping:         mapping,
 	})
 	return frames
 }
 
 func TestGenerate_SingleContainerSingleOrigin(t *testing.T) {
-	d, err := New(100, 100, nil)
+	d, err := New(100, nil)
 	require.NoError(t, err)
 
-	fileID := libpf.NewFileID(1, 2)
 	funcName := "main"
-	filePath := "/bin/test"
-	d.Executables.Add(fileID, samples.ExecInfo{FileName: filePath})
+	filePath := libpf.Intern("/bin/test")
+	mapping := libpf.NewFrameMapping(libpf.FrameMappingData{
+		File: libpf.NewFrameMappingFile(libpf.FrameMappingFileData{
+			FileID:   libpf.NewFileID(1, 2),
+			FileName: filePath,
+		}),
+	})
 
 	traceKey := samples.TraceAndMetaKey{
 		ExecutablePath: filePath,
-		Comm:           "testproc",
+		Comm:           libpf.Intern("testproc"),
 		Pid:            123,
 		Tid:            456,
 		ApmServiceName: "svc",
@@ -276,17 +377,20 @@ func TestGenerate_SingleContainerSingleOrigin(t *testing.T) {
 	events := map[libpf.Origin]samples.KeyToEventMapping{
 		support.TraceOriginSampling: {
 			traceKey: &samples.TraceEvents{
-				Frames:     singleFrameTrace(libpf.GoFrame, fileID, 0x10, funcName, filePath, 42),
-				Timestamps: []uint64{100},
-				EnvVars:    map[string]string{"FOO": "BAR"},
+				Frames: singleFrameTrace(libpf.GoFrame, mapping,
+					0x10, funcName, filePath, 42),
+				Timestamps: []uint64{uint64(time.Unix(1010, 0).UnixNano())},
+				EnvVars: map[libpf.String]libpf.String{
+					libpf.Intern("FOO"): libpf.Intern("BAR"),
+				},
 			},
 		},
 	}
 	tree := samples.TraceEventsTree{
-		"container1": events,
+		libpf.Intern("container1"): events,
 	}
 
-	profiles, err := d.Generate(tree, "agent", "v1")
+	profiles, err := testGenerate(d, tree, "agent", "v1")
 	require.NoError(t, err)
 	require.Equal(t, 1, profiles.ResourceProfiles().Len())
 	rp := profiles.ResourceProfiles().At(0)
@@ -300,15 +404,16 @@ func TestGenerate_SingleContainerSingleOrigin(t *testing.T) {
 	assert.Equal(t, semconv.SchemaURL, sp.SchemaUrl())
 	require.Equal(t, 1, sp.Profiles().Len())
 	prof := sp.Profiles().At(0)
-	assert.Equal(t, pcommon.Timestamp(100), prof.Time())
-	assert.Equal(t, pcommon.Timestamp(0), prof.Duration())
+	assert.Equal(t, testProfileTime, prof.Time())
+	assert.Equal(t, testProfileDuration, prof.DurationNano())
 
 	t.Run("Check environment variable attribute", func(t *testing.T) {
 		foundFOOKey := false
 		foundBarValue := false
 
-		for _, attr := range profiles.ProfilesDictionary().AttributeTable().All() {
-			key := attr.Key()
+		dic := profiles.Dictionary()
+		for _, attr := range dic.AttributeTable().All() {
+			key := dic.StringTable().At(int(attr.KeyStrindex()))
 			value := attr.Value()
 			// Check if this is an environment variable attribute
 			if key == "process.environment_variable.FOO" {
@@ -326,26 +431,37 @@ func TestGenerate_SingleContainerSingleOrigin(t *testing.T) {
 }
 
 func TestGenerate_MultipleOriginsAndContainers(t *testing.T) {
-	d, err := New(100, 100, nil)
+	d, err := New(100, nil)
 	require.NoError(t, err)
 
-	fileID := libpf.NewFileID(5, 6)
-	d.Executables.Add(fileID, samples.ExecInfo{FileName: "/bin/foo"})
-	traceKey := samples.TraceAndMetaKey{ExecutablePath: "/bin/foo"}
-	frames := singleFrameTrace(libpf.PythonFrame, fileID, 0x20, "f", "/bin/foo", 1)
+	mapping := libpf.NewFrameMapping(libpf.FrameMappingData{
+		File: libpf.NewFrameMappingFile(libpf.FrameMappingFileData{
+			FileID:   libpf.NewFileID(5, 6),
+			FileName: libpf.Intern("/bin/foo"),
+		}),
+	})
+	exec := libpf.Intern("/bin/foo")
+	traceKey := samples.TraceAndMetaKey{ExecutablePath: exec}
+	frames := singleFrameTrace(libpf.PythonFrame, mapping, 0x20, "f", exec, 1)
 
 	events1 := map[libpf.Origin]samples.KeyToEventMapping{
 		support.TraceOriginSampling: {
 			traceKey: &samples.TraceEvents{
-				Frames:     frames,
-				Timestamps: []uint64{1, 2},
+				Frames: frames,
+				Timestamps: []uint64{
+					uint64(time.Unix(1010, 0).UnixNano()),
+					uint64(time.Unix(1020, 0).UnixNano()),
+				},
 			},
 		},
 		support.TraceOriginOffCPU: {
 			traceKey: &samples.TraceEvents{
-				Frames:     frames,
-				Timestamps: []uint64{3, 4},
-				OffTimes:   []int64{10, 20},
+				Frames: frames,
+				Timestamps: []uint64{
+					uint64(time.Unix(1030, 0).UnixNano()),
+					uint64(time.Unix(1040, 0).UnixNano()),
+				},
+				OffTimes: []int64{10, 20},
 			},
 		},
 	}
@@ -353,16 +469,16 @@ func TestGenerate_MultipleOriginsAndContainers(t *testing.T) {
 		support.TraceOriginSampling: {
 			traceKey: &samples.TraceEvents{
 				Frames:     frames,
-				Timestamps: []uint64{5},
+				Timestamps: []uint64{uint64(time.Unix(1050, 0).UnixNano())},
 			},
 		},
 	}
 	tree := samples.TraceEventsTree{
-		"c1": events1,
-		"c2": events2,
+		libpf.Intern("c1"): events1,
+		libpf.Intern("c2"): events2,
 	}
 
-	profiles, err := d.Generate(tree, "agent", "v2")
+	profiles, err := testGenerate(d, tree, "agent", "v2")
 	require.NoError(t, err)
 	require.Equal(t, 2, profiles.ResourceProfiles().Len())
 
@@ -373,8 +489,18 @@ func TestGenerate_MultipleOriginsAndContainers(t *testing.T) {
 		val, exists := rp.Resource().Attributes().Get(string(semconv.ContainerIDKey))
 		require.True(t, exists)
 		containerID := val.Str()
-		profileCount := rp.ScopeProfiles().At(0).Profiles().Len()
+		sp := rp.ScopeProfiles().At(0)
+		profileCount := sp.Profiles().Len()
 		containerProfileCounts[containerID] = profileCount
+
+		// All profiles should have the same duration and start time based on collection window
+		for j := range profileCount {
+			prof := sp.Profiles().At(j)
+			assert.Equal(t, testProfileTime, prof.Time(),
+				"profile %d in container %s", j, containerID)
+			assert.Equal(t, testProfileDuration, prof.DurationNano(),
+				"profile %d in container %s", j, containerID)
+		}
 	}
 
 	// c1 has both origins, so 2 profiles
@@ -384,31 +510,35 @@ func TestGenerate_MultipleOriginsAndContainers(t *testing.T) {
 }
 
 func TestGenerate_StringAndFunctionTablePopulation(t *testing.T) {
-	d, err := New(100, 100, nil)
+	d, err := New(100, nil)
 	require.NoError(t, err)
 
-	fileID := libpf.NewFileID(7, 8)
 	funcName := "myfunc"
-	filePath := "/bin/bar"
-	d.Executables.Add(fileID, samples.ExecInfo{FileName: filePath})
+	filePath := libpf.Intern("/bin/bar")
+	mapping := libpf.NewFrameMapping(libpf.FrameMappingData{
+		File: libpf.NewFrameMappingFile(libpf.FrameMappingFileData{
+			FileID:   libpf.NewFileID(7, 8),
+			FileName: filePath,
+		}),
+	})
 
 	traceKey := samples.TraceAndMetaKey{ExecutablePath: filePath}
 	events := map[libpf.Origin]samples.KeyToEventMapping{
 		support.TraceOriginSampling: {
 			traceKey: &samples.TraceEvents{
-				Frames: singleFrameTrace(libpf.PythonFrame, fileID, 0x30,
+				Frames: singleFrameTrace(libpf.PythonFrame, mapping, 0x30,
 					funcName, filePath, 123),
 				Timestamps: []uint64{42},
 			},
 		},
 	}
 	tree := samples.TraceEventsTree{
-		"c": events,
+		libpf.Intern("c"): events,
 	}
 
-	profiles, err := d.Generate(tree, "agent", "v3")
+	profiles, err := testGenerate(d, tree, "agent", "v3")
 	require.NoError(t, err)
-	dic := profiles.ProfilesDictionary()
+	dic := profiles.Dictionary()
 	// The string table should contain "" as first element, then function name and file path
 	strs := dic.StringTable().At(0)
 	assert.Contains(t, strs, "")
@@ -418,55 +548,64 @@ func TestGenerate_StringAndFunctionTablePopulation(t *testing.T) {
 		stringTableSlice = append(stringTableSlice, dic.StringTable().At(i))
 	}
 	assert.Contains(t, stringTableSlice, funcName)
-	assert.Contains(t, stringTableSlice, filePath)
+	assert.Contains(t, stringTableSlice, filePath.String())
 	// The function table should have the function name and file path indices set
-	require.Equal(t, 1, dic.FunctionTable().Len())
-	fn := dic.FunctionTable().At(0)
+	require.Equal(t, 2, dic.FunctionTable().Len())
+	fn := dic.FunctionTable().At(1)
 	assert.Equal(t, funcName, dic.StringTable().At(int(fn.NameStrindex())))
-	assert.Equal(t, filePath, dic.StringTable().At(int(fn.FilenameStrindex())))
+	assert.Equal(t, filePath.String(), dic.StringTable().At(int(fn.FilenameStrindex())))
 }
 
-func singleFrameNative(fileID libpf.FileID, lineno libpf.AddressOrLineno,
-	mappingStart, mappingEnd libpf.Address, mappingFileOffset uint64) libpf.Frames {
-	frames := make(libpf.Frames, 1)
-	frames[0] = unique.Make(libpf.Frame{
-		Type:              libpf.NativeFrame,
-		FileID:            fileID,
-		AddressOrLineno:   lineno,
-		MappingStart:      mappingStart,
-		MappingEnd:        mappingEnd,
-		MappingFileOffset: mappingFileOffset,
+func singleFrameNative(mappingFile libpf.FrameMappingFile, lineno libpf.AddressOrLineno,
+	mappingStart, mappingEnd libpf.Address, mappingFileOffset uint64,
+) libpf.Frames {
+	frames := make(libpf.Frames, 0, 1)
+	frames.Append(&libpf.Frame{
+		Type:            libpf.NativeFrame,
+		AddressOrLineno: lineno,
+		Mapping: libpf.NewFrameMapping(libpf.FrameMappingData{
+			Start:      mappingStart,
+			End:        mappingEnd,
+			FileOffset: mappingFileOffset,
+			File:       mappingFile,
+		}),
 	})
 	return frames
 }
 
 func TestGenerate_NativeFrame(t *testing.T) {
-	d, err := New(100, 100, nil)
+	d, err := New(100, nil)
 	require.NoError(t, err)
 
-	fileID := libpf.NewFileID(9, 10)
-	filePath := "/usr/lib/libexample.so"
-	d.Executables.Add(fileID, samples.ExecInfo{FileName: filePath})
+	filePath := libpf.Intern("/usr/lib/libexample.so")
+	mappingFile := libpf.NewFrameMappingFile(libpf.FrameMappingFileData{
+		FileID:   libpf.NewFileID(9, 10),
+		FileName: filePath,
+	})
 
 	traceKey := samples.TraceAndMetaKey{
 		ExecutablePath: filePath,
-		Comm:           "native_app",
+		Comm:           libpf.Intern("native_app"),
 		Pid:            789,
 		Tid:            1011,
 	}
 	events := map[libpf.Origin]samples.KeyToEventMapping{
 		support.TraceOriginSampling: {
 			traceKey: &samples.TraceEvents{
-				Frames:     singleFrameNative(fileID, 0x1000, 0x1000, 0x2000, 0x100),
-				Timestamps: []uint64{789},
+				Frames: singleFrameNative(mappingFile, 0x1000, 0x1000, 0x2000, 0x100),
+				Timestamps: []uint64{
+					uint64(time.Unix(1010, 0).UnixNano()),
+					uint64(time.Unix(1020, 0).UnixNano()),
+					uint64(time.Unix(1030, 0).UnixNano()),
+				},
 			},
 		},
 	}
 	tree := samples.TraceEventsTree{
-		"native_container": events,
+		libpf.Intern("native_container"): events,
 	}
 
-	profiles, err := d.Generate(tree, "agent", "v1")
+	profiles, err := testGenerate(d, tree, "agent", "v1")
 	require.NoError(t, err)
 	require.Equal(t, 1, profiles.ResourceProfiles().Len())
 
@@ -485,18 +624,18 @@ func TestGenerate_NativeFrame(t *testing.T) {
 	// Check profile
 	require.Equal(t, 1, sp.Profiles().Len())
 	prof := sp.Profiles().At(0)
-	assert.Equal(t, pcommon.Timestamp(789), prof.Time())
-	assert.Equal(t, pcommon.Timestamp(0), prof.Duration())
+	assert.Equal(t, testProfileTime, prof.Time())
+	assert.Equal(t, testProfileDuration, prof.DurationNano())
 
 	// Verify profile contains one sample
-	assert.Equal(t, 1, prof.Sample().Len())
-	sample := prof.Sample().At(0)
-	assert.Len(t, sample.Value().AsRaw(), 1)
-	assert.Equal(t, int64(1), sample.Value().At(0)) // sampling count
+	assert.Equal(t, 1, prof.Samples().Len())
+	sample := prof.Samples().At(0)
+	assert.Len(t, sample.Values().AsRaw(), 0)
+	assert.Len(t, sample.TimestampsUnixNano().AsRaw(), 3)
 
 	// Check that the mapping table contains our native frame mapping
 	// (plus the dummy mapping at index 0)
-	dic := profiles.ProfilesDictionary()
+	dic := profiles.Dictionary()
 	assert.GreaterOrEqual(t, dic.MappingTable().Len(), 2,
 		"Mapping table should have dummy mapping + native frame mapping")
 
@@ -521,10 +660,140 @@ func TestGenerate_NativeFrame(t *testing.T) {
 	// Verify the filename is correctly set in the mapping
 	filenameStrIndex := nativeMapping.FilenameStrindex()
 	filename := dic.StringTable().At(int(filenameStrIndex))
-	assert.Equal(t, filePath, filename)
+	assert.Equal(t, filePath.String(), filename)
 
 	// For native frames, function information is not populated in the function table
 	// since it's resolved by the backend. The function table should be empty.
-	assert.Equal(t, 0, dic.FunctionTable().Len(),
+	assert.Equal(t, 1, dic.FunctionTable().Len(),
 		"Function table should be empty for native frames")
+}
+
+func TestStackTableOrder(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		events map[libpf.Origin]samples.KeyToEventMapping
+
+		wantStackTable           [][]int32
+		expectedLocationTableLen int
+	}{
+		{
+			name: "single stack",
+			events: map[libpf.Origin]samples.KeyToEventMapping{
+				support.TraceOriginSampling: map[samples.TraceAndMetaKey]*samples.TraceEvents{
+					{}: {
+						Frames:     newTestFrames(false),
+						Timestamps: []uint64{1, 2, 3, 4, 5},
+					},
+				},
+			},
+			wantStackTable: [][]int32{
+				nil, {1, 2, 3, 4, 5},
+			},
+			expectedLocationTableLen: 6,
+		},
+		{
+			name: "multiple stacks",
+			events: map[libpf.Origin]samples.KeyToEventMapping{
+				support.TraceOriginSampling: map[samples.TraceAndMetaKey]*samples.TraceEvents{
+					{Pid: 1}: {
+						Frames:     newTestFrames(false),
+						Timestamps: []uint64{1, 2, 3, 4, 5},
+					},
+				},
+				// This test relies on an implementation detail for ordering of results:
+				// it assumes that support.TraceOriginSampling events are processed first
+				support.TraceOriginOffCPU: map[samples.TraceAndMetaKey]*samples.TraceEvents{
+					{Pid: 2}: {
+						Frames:     newTestFrames(true),
+						Timestamps: []uint64{7, 8, 9, 10, 11, 12},
+					},
+					{Pid: 3}: {
+						Frames:     newTestFrames(false),
+						Timestamps: []uint64{13, 14, 15, 16, 17},
+					},
+				},
+			},
+			wantStackTable: [][]int32{
+				nil,
+				{1, 2, 3, 4, 5},
+				{1, 2, 3, 4, 5, 6},
+			},
+			expectedLocationTableLen: 7,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			d, err := New(100, nil)
+			require.NoError(t, err)
+			tree := make(samples.TraceEventsTree)
+			tree[libpf.NullString] = tt.events
+			res, _ := testGenerate(d, tree, tt.name, "version")
+
+			dic := res.Dictionary()
+
+			require.Equal(t, tt.expectedLocationTableLen, dic.LocationTable().Len())
+			require.Equal(t, len(tt.wantStackTable), dic.StackTable().Len())
+			for i := 0; i < dic.StackTable().Len(); i++ {
+				locationIndices := dic.StackTable().At(i).LocationIndices().AsRaw()
+				assert.Equal(t, tt.wantStackTable[i], locationIndices)
+			}
+		})
+	}
+}
+
+func TestGenerate_Validate(t *testing.T) {
+	d, err := New(100, nil)
+	require.NoError(t, err)
+
+	funcName := "myfunc"
+	filePath := libpf.Intern("/bin/bar")
+	mapping := libpf.NewFrameMapping(libpf.FrameMappingData{
+		File: libpf.NewFrameMappingFile(libpf.FrameMappingFileData{
+			FileID:   libpf.NewFileID(7, 8),
+			FileName: filePath,
+		}),
+	})
+
+	traceKey := samples.TraceAndMetaKey{ExecutablePath: filePath}
+	events := map[libpf.Origin]samples.KeyToEventMapping{
+		support.TraceOriginSampling: {
+			traceKey: &samples.TraceEvents{
+				Frames: singleFrameTrace(libpf.PythonFrame, mapping, 0x30,
+					funcName, filePath, 123),
+				Timestamps: []uint64{42},
+			},
+		},
+	}
+	tree := samples.TraceEventsTree{
+		libpf.Intern("native_container"): events,
+	}
+
+	profiles, err := testGenerate(d, tree, "agent", "v1")
+	require.NoError(t, err)
+
+	// We can not directly use ConformanceChecker on profiles,
+	// so we first need to marshal and unmarshal the data
+	// for the expected format.
+
+	req := pprofileotlp.NewExportRequestFromProfiles(profiles)
+	contents, err := req.MarshalProto()
+	require.NoError(t, err)
+
+	var data v1profiles.ProfilesData
+	err = proto.Unmarshal(contents, &data)
+	require.NoError(t, err)
+
+	// Fix for protobuf unmarshaling for ConformanceChecker: The first attribute
+	// table entry must have a nil Value,but protobuf unmarshaling creates a
+	// non-nil but empty AnyValue. Explicitly set it to nil.
+	if data.Dictionary != nil && len(data.Dictionary.AttributeTable) > 0 {
+		firstAttr := data.Dictionary.AttributeTable[0]
+		if firstAttr.KeyStrindex == 0 && firstAttr.UnitStrindex == 0 {
+			firstAttr.Value = nil
+		}
+	}
+
+	err = (profcheck.ConformanceChecker{
+		CheckDictionaryDuplicates: true,
+		CheckSampleTimestampShape: true}).Check(&data)
+	require.NoError(t, err)
 }

@@ -7,52 +7,30 @@ import (
 	"context"
 	"debug/elf"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"runtime"
+	"sync"
 	"time"
 	"unsafe"
 
-	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
-	"go.opentelemetry.io/ebpf-profiler/libpf/xsync"
 	"go.opentelemetry.io/ebpf-profiler/nativeunwind/elfunwindinfo"
 	"go.opentelemetry.io/ebpf-profiler/process"
 	pm "go.opentelemetry.io/ebpf-profiler/processmanager"
-	"go.opentelemetry.io/ebpf-profiler/reporter"
+	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
 )
 
 // #include <stdlib.h>
 // #include "../../support/ebpf/types.h"
 // int unwind_traces(u64 id, int debug, u64 tp_base, void *ctx);
+// void initialize_rodata_variables(u64 new_inv_pac_mask);
 import "C"
 
 // sliceBuffer creates a Go slice from C buffer
 func sliceBuffer(buf unsafe.Pointer, sz C.int) []byte {
 	return unsafe.Slice((*byte)(buf), int(sz))
-}
-
-// symbolizationCache collects and caches the interpreter manager's symbolization
-// callbacks to be used for trace stringification.
-type symbolizationCache struct {
-	files map[libpf.FileID]string
-}
-
-func newSymbolizationCache() *symbolizationCache {
-	return &symbolizationCache{
-		files: make(map[libpf.FileID]string),
-	}
-}
-
-func (c *symbolizationCache) ExecutableKnown(fileID libpf.FileID) bool {
-	_, exists := c.files[fileID]
-	return exists
-}
-
-func (c *symbolizationCache) ExecutableMetadata(args *reporter.ExecutableMetadataArgs) {
-	c.files[args.FileID] = args.FileName
 }
 
 func generateErrorMap() (map[libpf.AddressOrLineno]string, error) {
@@ -79,37 +57,62 @@ func generateErrorMap() (map[libpf.AddressOrLineno]string, error) {
 	return out, nil
 }
 
-var errorMap xsync.Once[map[libpf.AddressOrLineno]string]
+var errorMap = sync.OnceValues(generateErrorMap)
 
-func (c *symbolizationCache) formatFrame(frame *libpf.Frame) (string, error) {
+func formatFrame(frame *libpf.Frame) (string, error) {
 	if frame.Type.IsError() {
-		errMap, err := errorMap.GetOrInit(generateErrorMap)
+		errMap, err := errorMap()
 		if err != nil {
 			return "", fmt.Errorf("unable to construct error map: %v", err)
 		}
-		errName, ok := (*errMap)[frame.AddressOrLineno]
+		errName, ok := errMap[frame.AddressOrLineno]
 		if !ok {
 			return "", fmt.Errorf(
 				"got invalid error code %d. forgot to `make generate`",
 				frame.AddressOrLineno)
 		}
-		if frame.Type == libpf.AbortFrame {
+		if frame.Type.IsAbort() {
 			return fmt.Sprintf("<unwinding aborted due to error %s>", errName), nil
 		}
 		return fmt.Sprintf("<error %s>", errName), nil
 	}
 
 	if frame.FunctionName != libpf.NullString {
-		return fmt.Sprintf("%s+%d in %s:%d",
+		columnInfo := ""
+		if frame.SourceColumn != 0 {
+			columnInfo = fmt.Sprintf(":%d", frame.SourceColumn)
+		}
+		return fmt.Sprintf("%s+%d in %s:%d%s",
 			frame.FunctionName, frame.FunctionOffset,
-			frame.SourceFile, frame.SourceLine), nil
+			frame.SourceFile, frame.SourceLine, columnInfo), nil
 	}
 
-	sourceFile, ok := c.files[frame.FileID]
-	if !ok {
-		sourceFile = fmt.Sprintf("%08x", frame.FileID)
+	if frame.Mapping.Valid() {
+		mf := frame.Mapping.Value().File.Value()
+		return fmt.Sprintf("%s+0x%x",
+			mf.FileName,
+			frame.AddressOrLineno), nil
 	}
-	return fmt.Sprintf("%s+0x%x", sourceFile, frame.AddressOrLineno), nil
+	return fmt.Sprintf("?+0x%x", frame.AddressOrLineno), nil
+}
+
+type traceReporter struct {
+	frames []string
+}
+
+func (t *traceReporter) ReportTraceEvent(trace *libpf.Trace, meta *samples.TraceEventMeta) error {
+	t.frames = nil
+	frames := make([]string, 0, len(trace.Frames))
+	for _, f := range trace.Frames {
+		frame := f.Value()
+		frameText, err := formatFrame(&frame)
+		if err != nil {
+			return err
+		}
+		frames = append(frames, frameText)
+	}
+	t.frames = frames
+	return nil
 }
 
 func ExtractTraces(ctx context.Context, pr process.Process, debug bool,
@@ -131,6 +134,8 @@ func ExtractTraces(ctx context.Context, pr process.Process, debug bool,
 	// panics. To avoid these panics we set monitorInterval to a high value so these reporter
 	// function are never used.
 	monitorInterval := time.Hour * 24
+
+	executableUnloadDelay := time.Minute * 5
 
 	// Check compatibility.
 	pid := pr.PID()
@@ -164,19 +169,21 @@ func ExtractTraces(ctx context.Context, pr process.Process, debug bool,
 	ebpfCtx := newEBPFContext(ebpfProcess)
 	defer ebpfCtx.release()
 
+	inverse_pac_mask := ^(pr.GetMachineData().CodePACMask)
+	C.initialize_rodata_variables(C.u64(inverse_pac_mask))
+
 	coredumpEbpfMaps := ebpfMapsCoredump{ctx: ebpfCtx}
-	symCache := newSymbolizationCache()
+	traceReporter := traceReporter{}
 
 	// Instantiate managers and enable all tracers by default
 	includeTracers, _ := tracertypes.Parse("all")
 
-	manager, err := pm.New(todo, includeTracers, monitorInterval, &coredumpEbpfMaps,
-		pm.NewMapFileIDMapper(), symCache, elfunwindinfo.NewStackDeltaProvider(), false,
-		libpf.Set[string]{})
+	manager, err := pm.New(todo, includeTracers, monitorInterval, executableUnloadDelay,
+		&coredumpEbpfMaps, &traceReporter, nil, elfunwindinfo.NewStackDeltaProvider(),
+		false, libpf.Set[string]{}, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get Interpreter manager: %v", err)
 	}
-restart:
 	manager.SynchronizeProcess(pr)
 
 	info := make([]ThreadInfo, 0, len(threadInfo))
@@ -194,23 +201,11 @@ restart:
 			return nil, fmt.Errorf("failed to unwind lwp %v: %v", thread.LWP, rc)
 		}
 		// Symbolize traces with interpreter manager
-		trace, err := manager.ConvertTrace(&ebpfCtx.trace)
-		if err != nil {
-			if errors.Is(err, interpreter.ErrLJRestart) {
-				goto restart
-			}
-			panic(err)
-		}
-		tinfo := ThreadInfo{LWP: thread.LWP}
-		for _, f := range trace.Frames {
-			frame := f.Value()
-			frameText, err := symCache.formatFrame(&frame)
-			if err != nil {
-				return nil, err
-			}
-			tinfo.Frames = append(tinfo.Frames, frameText)
-		}
-		info = append(info, tinfo)
+		manager.HandleTrace(&ebpfCtx.trace)
+		info = append(info, ThreadInfo{
+			LWP:    thread.LWP,
+			Frames: traceReporter.frames,
+		})
 	}
 
 	return info, nil

@@ -26,7 +26,6 @@ import (
 	"github.com/stretchr/testify/require"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
-	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/testutils"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
@@ -105,8 +104,7 @@ func TestIntegration(t *testing.T) {
 					enabledTracers, err := tracertypes.Parse("luajit")
 					require.NoError(t, err)
 					enabledTracers.Enable(tracertypes.LuaJITTracer)
-					r := &testutils.MockReporter{}
-					traceCh, trc := testutils.StartTracer(ctx, t, enabledTracers, r, false)
+					traceCh, trc := testutils.StartTracer(ctx, t, enabledTracers, false)
 
 					var waitGroup sync.WaitGroup
 					defer waitGroup.Wait()
@@ -124,9 +122,11 @@ func TestIntegration(t *testing.T) {
 							t.Log("passes", passes, "fails", fails, "total", traces)
 						case <-ctx.Done():
 							break done
-						case trace := <-traceCh:
+						case traceEvent := <-traceCh:
 							// See if PID is openresty
-							if trace == nil || int(trace.PID) != st.Pid {
+							trace := traceEvent.Trace
+							meta := traceEvent.Meta
+							if trace == nil || int(meta.PID) != st.Pid {
 								continue
 							}
 							traces++
@@ -150,14 +150,10 @@ func TestIntegration(t *testing.T) {
 }
 
 // Find lua traces and test that they are good
-func validateTrace(t *testing.T, trc *tracer.Tracer, trace *host.Trace,
+func validateTrace(t *testing.T, trc *tracer.Tracer, trace *libpf.Trace,
 	st []string) bool {
-	// Finally convert it to flex all the proto parsing/remote code
-	ct, err := trc.TraceProcessor().ConvertTrace(trace)
-	require.NotNil(t, ct)
-	require.NoError(t, err)
 
-	return validateFrames(t, ct.Frames, st)
+	return validateFrames(t, trace.Frames, st)
 }
 
 func validateFrames(t *testing.T, frames libpf.Frames, st []string) bool {

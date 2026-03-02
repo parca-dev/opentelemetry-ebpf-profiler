@@ -4,11 +4,12 @@
 package golabels // import "go.opentelemetry.io/ebpf-profiler/interpreter/golabels"
 
 import (
+	"errors"
 	"fmt"
 	"go/version"
 	"unsafe"
 
-	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
@@ -22,8 +23,15 @@ type data struct {
 	interpreter.InstanceStubs
 }
 
+var errDecodeSymbol = errors.New("failed to decode symbol")
+
+func (d *data) String() string {
+	return "Golang labels " + d.goVersion
+}
+
 func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID,
-	_ libpf.Address, _ remotememory.RemoteMemory) (interpreter.Instance, error) {
+	_ libpf.Address, _ remotememory.RemoteMemory,
+) (interpreter.Instance, error) {
 	if err := ebpf.UpdateProcData(libpf.GoLabels, pid, unsafe.Pointer(&d.offsets)); err != nil {
 		return nil, err
 	}
@@ -51,15 +59,22 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 		return nil, nil
 	}
 
-	if version.Compare(goVersion, "go1.26") >= 0 {
-		return nil, fmt.Errorf("unsupported Go version %s (need >= 1.13 and <= 1.25)", goVersion)
+	if version.Compare(goVersion, "go1.27") >= 0 {
+		return nil, fmt.Errorf("unsupported Go version %s (need >= 1.13 and <= 1.26)", goVersion)
 	}
 
 	log.Debugf("file %s detected as go version %s", info.FileName(), goVersion)
 
 	offsets := getOffsets(goVersion)
 	tlsOffset, err := extractTLSGOffset(file)
-	if err != nil {
+	switch {
+	case errors.Is(err, libpf.ErrSymbolNotFound):
+		return nil, fmt.Errorf("failed to lookup symbol in %s: %v", info.FileName(), err)
+	case errors.Is(err, errDecodeSymbol):
+		log.Warnf("In %s: %v", info.FileName(), err)
+	case errors.Is(err, nil):
+		// Nothing to do - just continue
+	default:
 		return nil, fmt.Errorf("failed to extract TLS offset: %w", err)
 	}
 	offsets.Tls_offset = tlsOffset

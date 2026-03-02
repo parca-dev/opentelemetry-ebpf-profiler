@@ -37,6 +37,9 @@ typedef enum ErrorCode {
   // Hotspot: Unwind instructions requested LR unwinding mid-trace (nonsensical)
   ERR_HOTSPOT_LR_UNWINDING_MID_TRACE = 1004,
 
+  // Hotspot: No entry for this process exists in the Hotspot process info array
+  ERR_HOTSPOT_NO_PROC_INFO = 1005,
+
   // Python: Unable to read current PyCodeObject
   ERR_PYTHON_BAD_CODE_OBJECT_ADDR = 2000,
 
@@ -82,11 +85,47 @@ typedef enum ErrorCode {
   // Ruby: Unable to read instruction sequence body
   ERR_RUBY_READ_ISEQ_BODY = 3005,
 
-  // Ruby: Unable to read the instruction sequence encoded size
+  // Ruby: Unable to read the instruction sequence encoded size (deprecated)
   ERR_RUBY_READ_ISEQ_ENCODED = 3006,
 
-  // Ruby: Unable to read the instruction sequence size
+  // Ruby: Unable to read the instruction sequence size (deprecated)
   ERR_RUBY_READ_ISEQ_SIZE = 3007,
+
+  // Ruby: Unable to determine the base address for thread-specific data
+  ERR_RUBY_READ_TSD_BASE = 3008,
+
+  // Ruby: Invalid instruction sequence
+  ERR_RUBY_INVALID_ISEQ = 3009,
+
+  // Ruby: Unable to read the method definition
+  ERR_RUBY_READ_METHOD_DEF = 3010,
+
+  // Ruby: Unable to read the method type
+  ERR_RUBY_READ_METHOD_TYPE = 3011,
+
+  // Ruby: Unable to read svar while locating CME from EP
+  ERR_RUBY_READ_SVAR = 3012,
+
+  // Ruby: Unable to read rbasic flags
+  ERR_RUBY_READ_RBASIC_FLAGS = 3013,
+
+  // Ruby: Exceeded maximum EP checks while locating CME
+  ERR_RUBY_READ_CME_MAX_EP = 3020,
+
+  // Ruby: Failed to pack additional into spare bytes of Frame field
+  ERR_RUBY_PACK_FRAME = 3021,
+
+  // Ruby: Unable to read current thread
+  ERR_RUBY_READ_CURRENT_THREAD = 3030,
+
+  // Ruby: Unable to read current vm
+  ERR_RUBY_READ_CURRENT_VM = 3031,
+
+  // Ruby: Unable to read objspace handle
+  ERR_RUBY_READ_OBJSPACE = 3032,
+
+  // Ruby: Unable to read objspace flags
+  ERR_RUBY_READ_OBJSPACE_FLAGS = 3033,
 
   // Native: Unable to find the code section in the stack delta page info map
   ERR_NATIVE_LOOKUP_TEXT_SECTION = 4000,
@@ -121,8 +160,7 @@ typedef enum ErrorCode {
   // Native: Unable to read the IRQ stack link
   ERR_NATIVE_CHASE_IRQ_STACK_LINK = 4010,
 
-  // Native: Unexpectedly encountered a kernel mode pointer while attempting to unwind user-mode
-  // stack
+  // Native: Unexpectedly encountered a kernel mode pointer while attempting to unwind user-mode stack
   ERR_NATIVE_UNEXPECTED_KERNEL_ADDRESS = 4011,
 
   // Native: Unable to locate the PID page mapping for the current instruction pointer
@@ -164,20 +202,41 @@ typedef enum ErrorCode {
   // Dotnet: Code object was too large to unwind in eBPF
   ERR_DOTNET_CODE_TOO_LARGE = 6003,
 
+  // BEAM: No entry for this process exists in the BEAM process info array
+  ERR_BEAM_NO_PROC_INFO = 7000,
+
+  // BEAM: PC was outside the expected address range
+  ERR_BEAM_PC_INVALID = 7001,
+
+  // BEAM: Hit the stack frame scan iteration limit looking for the next stack frame
+  ERR_BEAM_STACK_SCAN_EXHAUSTED = 7002,
+
+  // BEAM: Invalid frame pointer
+  ERR_BEAM_FRAME_POINTER_INVALID = 7003,
+
+  // BEAM: Unable to read the_active_code_index
+  ERR_BEAM_ACTIVE_CODE_INDEX_READ_FAILURE = 7004,
+
+  // BEAM: Unable to read modules table
+  ERR_BEAM_MODULES_READ_FAILURE = 7005,
+
+  // BEAM: Ran out of iterations searching for the current code header
+  ERR_BEAM_RANGE_SEARCH_EXHAUSTED = 7006,
+
   // LuaJIT: No entry for this process exists in the LuaJIT process info array
-  ERR_LUAJIT_NO_PROC_INFO = 7000,
+  ERR_LUAJIT_NO_PROC_INFO = 7007,
 
   // LuaJIT: Unable to read the Lua context
-  ERR_LUAJIT_READ_LUA_CONTEXT = 7001,
+  ERR_LUAJIT_READ_LUA_CONTEXT = 7008,
 
   // LuaJIT: Unable to read the Lua frame
-  ERR_LUAJIT_FRAME_READ = 7002,
+  ERR_LUAJIT_FRAME_READ = 7009,
 
   // LuaJIT: context pointer validity check failed
-  ERR_LUAJIT_L_MISMATCH = 7003,
+  ERR_LUAJIT_L_MISMATCH = 7010,
 
   // LuaJIT: PC exceeds 24 bits
-  ERR_LUAJIT_INVALID_PC = 7004
+  ERR_LUAJIT_INVALID_PC = 7011
 } ErrorCode;
 
 #endif // OPTI_ERRORS_H

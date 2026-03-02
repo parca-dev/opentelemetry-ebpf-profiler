@@ -52,7 +52,13 @@ case "$qemu_arch" in
         bb_args+=(-a amd64)
         ;;
     aarch64)
-        additionalQemuArgs+=" -machine virt -cpu max"
+        # Newer Linux kernels may fail to load with QEMU for arm64.
+        # This issue has been addressed in QEMU 9.2+ by
+        # https://github.com/qemu/qemu/commit/1505b651fdbd9af59a4a90876a62ae7ea2d4cd39.
+        #
+        # To test newer Linux kernels with older QEMU versions, a dedicated,
+        # unaffected CPU should be set for the QEMU configuration.
+        additionalQemuArgs+=" -machine virt -cpu cortex-a72"
         bb_args+=(-a arm64)
         ;;
 esac
@@ -63,18 +69,18 @@ echo Testing on "${kernel_version}"
 $sudo qemu-system-${qemu_arch} ${additionalQemuArgs} \
 	-nographic \
 	-monitor none \
-	-serial file:"${output}/test.log" \
+	-chardev stdio,id=char0,logfile="${output}/test.log",signal=off \
+	-serial chardev:char0 \
 	-no-user-config \
 	-m 4G \
 	-kernel "${kern_dir}/${kernel_version}/vmlinuz" \
 	-initrd "${output}/initramfs.cpio"
 
-# Dump the output of the VM run.
-cat "${output}/test.log"
-
 # Qemu will produce an escape sequence that disables line-wrapping in the terminal,
 # end result being truncated output. This restores line-wrapping after the fact.
-tput smam || true
+if [ "$TERM" ]; then
+  tput smam || true
+fi
 
 passes=$(grep -c "stdout: PASS" "${output}/test.log")
 

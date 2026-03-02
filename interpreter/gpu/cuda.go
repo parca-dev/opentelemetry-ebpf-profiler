@@ -9,7 +9,6 @@ import (
 	"unsafe"
 
 	log "github.com/sirupsen/logrus"
-	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
@@ -307,6 +306,20 @@ func (f *gpuTraceFixer) maybeClear() fixerStats {
 	return stats
 }
 
+var (
+	cudaDevice libpf.String
+	cudaStream libpf.String
+	cudaGraph  libpf.String
+	cudaId     libpf.String
+)
+
+func init() {
+	cudaDevice = libpf.Intern("cuda_device")
+	cudaStream = libpf.Intern("cuda_stream")
+	cudaGraph = libpf.Intern("cuda_graph")
+	cudaId = libpf.Intern("cuda_id")
+}
+
 // prepTrace attaches timing information and the demangled kernel name to a symbolized
 // CUDA trace, producing a CudaTraceOutput ready for reporting.
 func (f *gpuTraceFixer) prepTrace(st *SymbolizedCudaTrace, ev *CuptiTimingEvent) CudaTraceOutput {
@@ -331,16 +344,16 @@ func (f *gpuTraceFixer) prepTrace(st *SymbolizedCudaTrace, ev *CuptiTimingEvent)
 
 	out.Meta.OffTime = int64(ev.End - ev.Start)
 	if out.Trace.CustomLabels == nil {
-		out.Trace.CustomLabels = make(map[string]string)
+		out.Trace.CustomLabels = make(map[libpf.String]libpf.String)
 	}
 
-	out.Trace.CustomLabels["cuda_device"] = strconv.FormatUint(uint64(ev.Dev), 10)
+	out.Trace.CustomLabels[cudaDevice] = libpf.Intern(strconv.FormatUint(uint64(ev.Dev), 10))
 	if ev.Stream != 0 {
-		out.Trace.CustomLabels["cuda_stream"] = strconv.FormatUint(uint64(ev.Stream), 10)
+		out.Trace.CustomLabels[cudaStream] = libpf.Intern(strconv.FormatUint(uint64(ev.Stream), 10))
 	}
 	if ev.Graph != 0 {
-		out.Trace.CustomLabels["cuda_graph"] = strconv.FormatUint(uint64(ev.Graph), 10)
-		out.Trace.CustomLabels["cuda_id"] = strconv.FormatUint(uint64(ev.Id), 10)
+		out.Trace.CustomLabels[cudaGraph] = libpf.Intern(strconv.FormatUint(uint64(ev.Graph), 10))
+		out.Trace.CustomLabels[cudaId] = libpf.Intern(strconv.FormatUint(uint64(ev.Id), 10))
 	}
 
 	// Extract kernel name from timing event and update the CUDA frame.
@@ -461,9 +474,9 @@ func MaybeClearAll() []metrics.Metric {
 
 // Symbolize is a stub — ConvertTrace handles CUDA frames directly via `case libpf.CUDA`,
 // so this should never be called in normal operation.
-func (i *Instance) Symbolize(f *host.Frame, _ *libpf.Frames) error {
+func (i *Instance) Symbolize(f libpf.EbpfFrame, _ *libpf.Frames, _ libpf.FrameMapping) error {
 	return fmt.Errorf("CUDA Symbolize called unexpectedly for frame type %d: %w",
-		f.Type, interpreter.ErrMismatchInterpreterType)
+		f.Type(), interpreter.ErrMismatchInterpreterType)
 }
 
 func (d *data) Unload(ebpf interpreter.EbpfHandler) {

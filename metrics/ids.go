@@ -212,12 +212,6 @@ const (
 	// Number of unwound Ruby frames
 	IDUnwindRubyFrames = 109
 
-	// Number of cache hits for Ruby IseqBodyPCToFunction
-	IDRubyIseqBodyPCHit = 110
-
-	// Number of cache misses for Ruby IseqBodyPCToFunction
-	IDRubyIseqBodyPCMiss = 111
-
 	// Number of cache hits for Ruby AddrToString
 	IDRubyAddrToStringHit = 112
 
@@ -389,12 +383,6 @@ const (
 	// Number of deleted cache elements for Python AddrToCodeObject
 	IDPythonAddrToCodeObjectDel = 178
 
-	// Number of added cache elements for Ruby IseqBodyPCToFunction
-	IDRubyIseqBodyPCAdd = 179
-
-	// Number of deleted cache elements for Ruby IseqBodyPCToFunction
-	IDRubyIseqBodyPCDel = 180
-
 	// Number of added cache elements for Ruby AddrToString
 	IDRubyAddrToStringAdd = 181
 
@@ -545,12 +533,6 @@ const (
 	// Number of failures to read the instruction sequence body
 	IDUnwindRubyErrReadIseqBody = 243
 
-	// Number of failures to read the instruction sequence encoded size
-	IDUnwindRubyErrReadIseqEncoded = 244
-
-	// Number of failures to read the instruction sequence size
-	IDUnwindRubyErrReadIseqSize = 245
-
 	// Number of times the unwind instructions requested LR unwinding mid-trace
 	IDUnwindNativeErrLrUnwindingMidTrace = 246
 
@@ -647,63 +629,75 @@ const (
 	// Number of failures reading Go custom labels
 	IDUnwindGoLabelsFailures = 279
 
-	// Number of attempts to read Go custom labels (legacy)
-	IDUnwindGoCustomLabelsAttempts = 280
+	// Number of invalid instruction sequences sequence
+	IDUnwindRubyErrInvalidIseq = 280
 
-	// Number of failures reading Go custom labels (legacy)
-	IDUnwindGoCustomLabelsFailures = 281
+	// Number of failures to read the Ruby method definition
+	IDUnwindRubyErrReadMethodDef = 281
+
+	// Number of failures to read the Ruby method type
+	IDUnwindRubyErrReadMethodType = 282
+
+	// Number of failures to read the Ruby svar while finding CME
+	IDUnwindRubyErrReadSvar = 283
+
+	// Number of failures to read the Ruby rbasic flags
+	IDUnwindRubyErrReadRbasicFlags = 284
+
+	// Number of failed attempts to read a CME by exceeding max EP checks
+	IDUnwindRubyErrCmeMaxEp = 285
 
 	// Number of failures to get TSD base for native custom labels
-	IDUnwindNativeCustomLabelsErrReadTsdBase = 282
+	IDUnwindNativeCustomLabelsErrReadTsdBase = 286
 
 	// Number of failures to read native custom labels thread-local object
-	IDUnwindNativeCustomLabelsErrReadData = 283
+	IDUnwindNativeCustomLabelsErrReadData = 287
 
 	// Number of failures to read native custom labels key buffer
-	IDUnwindNativeCustomLabelsErrReadKey = 284
+	IDUnwindNativeCustomLabelsErrReadKey = 288
 
 	// Number of failures to read native custom labels value buffer
-	IDUnwindNativeCustomLabelsErrReadValue = 285
+	IDUnwindNativeCustomLabelsErrReadValue = 289
 
 	// Number of successful reads of native custom labels
-	IDUnwindNativeCustomLabelsReadSuccesses = 286
+	IDUnwindNativeCustomLabelsReadSuccesses = 290
 
 	// Total number of failures to add native custom labels
-	IDUnwindNativeCustomLabelsAddErrors = 287
+	IDUnwindNativeCustomLabelsAddErrors = 291
 
 	// Number of successes adding native custom labels
-	IDUnwindNativeCustomLabelsAddSuccesses = 288
+	IDUnwindNativeCustomLabelsAddSuccesses = 292
 
 	// Number of attempted LuaJIT unwinds
-	IDUnwindLuaJITAttempts = 289
+	IDUnwindLuaJITAttempts = 293
 
 	// Number of times we didn't find an entry for this process in the LuaJIT process info array
-	IDUnwindLuaJITErrNoProcInfo = 290
+	IDUnwindLuaJITErrNoProcInfo = 294
 
 	// Number of attempts to read Node.js custom labels
-	IDUnwindNodeCustomLabelsAttempts = 291
+	IDUnwindNodeCustomLabelsAttempts = 295
 
 	// Number of successful reads of Node.js custom labels
-	IDUnwindNodeCustomLabelsSuccesses = 292
+	IDUnwindNodeCustomLabelsSuccesses = 296
 
 	// Number of failed attempts to read Node.js custom labels
-	IDUnwindNodeCustomLabelsFailures = 293
+	IDUnwindNodeCustomLabelsFailures = 297
 
 	// Number of times dlopen uprobe was fired
-	IDDlopenUprobeHits = 294
+	IDDlopenUprobeHits = 298
 
 	// Number of GPU timing events waiting for matching traces
-	IDCudaTimesAwaitingTraces = 295
+	IDCudaTimesAwaitingTraces = 299
 
 	// Number of GPU traces waiting for matching timing events
-	IDCudaTracesAwaitingTimes = 296
+	IDCudaTracesAwaitingTimes = 300
 
 	// Number of GPU timing entries cleared due to threshold
-	IDCudaTimesCleared = 297
+	IDCudaTimesCleared = 301
 
 	// Number of GPU trace entries cleared due to threshold
-	IDCudaTracesCleared = 298
+	IDCudaTracesCleared = 302
 
 	// max number of ID values, keep this as *last entry*
-	IDMax = 299
+	IDMax = 303
 )

@@ -6,14 +6,13 @@ package interpreter // import "go.opentelemetry.io/ebpf-profiler/interpreter"
 import (
 	"errors"
 
-	log "github.com/sirupsen/logrus"
-	"go.opentelemetry.io/ebpf-profiler/host"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
+	"go.opentelemetry.io/ebpf-profiler/libc"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/process"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
-	"go.opentelemetry.io/ebpf-profiler/tpbase"
 )
 
 // MultiData implements the Data interface for multiple interpreters.
@@ -30,7 +29,8 @@ func NewMultiData(interpreters []Data) *MultiData {
 
 // Attach attaches all interpreters and returns a MultiInstance.
 func (m *MultiData) Attach(ebpf EbpfHandler, pid libpf.PID, bias libpf.Address,
-	rm remotememory.RemoteMemory) (Instance, error) {
+	rm remotememory.RemoteMemory,
+) (Instance, error) {
 	var instances []Instance
 	var errs []error
 
@@ -92,21 +92,22 @@ func (m *MultiInstance) Detach(ebpf EbpfHandler, pid libpf.PID) error {
 
 // SynchronizeMappings synchronizes mappings for all interpreter instances.
 func (m *MultiInstance) SynchronizeMappings(ebpf EbpfHandler,
-	symbolReporter reporter.SymbolReporter, pr process.Process, mappings []process.Mapping) error {
+	exeReporter reporter.ExecutableReporter, pr process.Process, mappings []process.Mapping,
+) error {
 	var errs []error
 	for _, instance := range m.instances {
-		if err := instance.SynchronizeMappings(ebpf, symbolReporter, pr, mappings); err != nil {
+		if err := instance.SynchronizeMappings(ebpf, exeReporter, pr, mappings); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
 }
 
-// UpdateTSDInfo updates TSD info for all interpreter instances.
-func (m *MultiInstance) UpdateTSDInfo(ebpf EbpfHandler, pid libpf.PID, info tpbase.TSDInfo) error {
+// UpdateLibcInfo updates libc info for all interpreter instances.
+func (m *MultiInstance) UpdateLibcInfo(ebpf EbpfHandler, pid libpf.PID, info libc.LibcInfo) error {
 	var errs []error
 	for _, instance := range m.instances {
-		if err := instance.UpdateTSDInfo(ebpf, pid, info); err != nil {
+		if err := instance.UpdateLibcInfo(ebpf, pid, info); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -114,10 +115,10 @@ func (m *MultiInstance) UpdateTSDInfo(ebpf EbpfHandler, pid libpf.PID, info tpba
 }
 
 // Symbolize tries to symbolize the frame with each interpreter instance until one succeeds.
-func (m *MultiInstance) Symbolize(ebpfFrame *host.Frame, frames *libpf.Frames) error {
+func (m *MultiInstance) Symbolize(ef libpf.EbpfFrame, frames *libpf.Frames, mapping libpf.FrameMapping) error {
 	// Try each interpreter in order
 	for _, instance := range m.instances {
-		err := instance.Symbolize(ebpfFrame, frames)
+		err := instance.Symbolize(ef, frames, mapping)
 		if err != ErrMismatchInterpreterType {
 			return err
 		}
@@ -140,4 +141,15 @@ func (m *MultiInstance) GetAndResetMetrics() ([]metrics.Metric, error) {
 	}
 
 	return allMetrics, errors.Join(errs...)
+}
+
+func (m *MultiInstance) ReleaseResources() error {
+	var errs []error
+	for _, instance := range m.instances {
+		err := instance.ReleaseResources()
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }

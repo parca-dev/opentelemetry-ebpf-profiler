@@ -8,6 +8,7 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
 	"go.opentelemetry.io/ebpf-profiler/support"
 )
@@ -36,6 +37,10 @@ type data struct {
 
 var _ interpreter.Data = &data{}
 
+func heapify[T any](t T) *T {
+	return &t
+}
+
 func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpreter.Data, error) {
 	ef, err := info.GetELF()
 	if err != nil {
@@ -62,41 +67,51 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 	isNodeExtension := (!isNativeSharedLibrary) && nodeRegex.MatchString(fn)
 	isSharedLibrary := isNativeSharedLibrary || isNodeExtension
 
-	var currentSetTlsAddr libpf.Address
-	var alsIdentityHashAddr, alsHandleAddr libpf.Address
-	var hasAlsId, hasAlsData bool
+	var currentSetTlsAddr *libpf.Address
+	var alsIdentityHashAddr, alsHandleAddr *libpf.Address
 	if isSharedLibrary {
 		// Resolve thread info TLS export.
-		tlsDescs, err := ef.TLSDescriptors()
-		if err != nil {
-			return nil, errors.New("failed to extract TLS descriptors")
-		}
-		var ok bool
-		currentSetTlsAddr, ok = tlsDescs[currentSetTlsExport]
-		if !ok {
-			return nil, errors.New("failed to locate TLS descriptor for custom labels")
-		}
-		if isNodeExtension {
-			alsIdentityHashAddr, hasAlsId = tlsDescs[alsIdentityHashExport]
-			if hasAlsId {
-				alsHandleAddr, hasAlsData = tlsDescs[alsHandleExport]
+		if err := ef.VisitTLSRelocations(func(r pfelf.ElfReloc, symName string) bool {
+			if symName == currentSetTlsExport {
+				currentSetTlsAddr = heapify(libpf.Address(r.Off))
+			} else if isNodeExtension {
+				if symName == alsIdentityHashExport {
+					alsIdentityHashAddr = heapify(libpf.Address(r.Off))
+				} else if symName == alsHandleExport {
+					alsHandleAddr = heapify(libpf.Address(r.Off))
+				}
 			}
+			return alsHandleAddr == nil ||
+				(isNodeExtension && (alsIdentityHashAddr == nil || alsHandleAddr == nil))
+		}); err != nil {
+			return nil, errors.New("failed to scan TLS symbols")
+		}
+		if currentSetTlsAddr == nil {
+			return nil, errors.New("failed to locate TLS descriptor for custom labels")
 		}
 	} else {
 		offset, err := ef.LookupTLSSymbolOffset(currentSetTlsExport)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get tls symbol offset: %w", err)
 		}
-		currentSetTlsAddr = libpf.Address(offset)
+		currentSetTlsAddr = heapify(libpf.Address(offset))
 	}
 
+	var idAddr libpf.Address
+	var handleAddr libpf.Address
+	if alsIdentityHashAddr != nil {
+		idAddr = *alsIdentityHashAddr
+	}
+	if alsHandleAddr != nil {
+		handleAddr = *alsHandleAddr
+	}
 	d := data{
 		abiVersionElfVA:     libpf.Address(abiVersionSym.Address),
-		currentSetTlsAddr:   currentSetTlsAddr,
+		currentSetTlsAddr:   *currentSetTlsAddr,
 		isSharedLibrary:     isSharedLibrary,
-		hasAlsData:          hasAlsData,
-		alsIdentityHashAddr: alsIdentityHashAddr,
-		alsHandleAddr:       alsHandleAddr,
+		hasAlsData:          alsHandleAddr != nil,
+		alsIdentityHashAddr: idAddr,
+		alsHandleAddr:       handleAddr,
 	}
 	return &d, nil
 }

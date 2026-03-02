@@ -56,8 +56,7 @@ func runTest(t *testing.T, ctx context.Context, host string, port nat.Port) {
 	enabledTracers, err := tracertypes.Parse("labels,v8")
 	require.NoError(t, err)
 
-	r := &testutils.MockReporter{}
-	traceCh, trc := testutils.StartTracer(ctx, t, enabledTracers, r, false)
+	traceCh, _ := testutils.StartTracer(ctx, t, enabledTracers, false)
 
 	testHTTPEndpoint(t, host, port)
 	framesPerWorkerId := make(map[int]int)
@@ -73,18 +72,16 @@ func runTest(t *testing.T, ctx context.Context, host string, port nat.Port) {
 		select {
 		case <-timer.C:
 			goto done
-		case trace := <-traceCh:
+		case traceEvent := <-traceCh:
+			trace := traceEvent.Trace
 			if trace == nil {
 				continue
 			}
-			ct, err := trc.TraceProcessor().ConvertTrace(trace)
-			require.NotNil(t, ct)
-			require.NoError(t, err)
-			workerId, okWid := trace.CustomLabels["workerId"]
-			filePath, okFname := trace.CustomLabels["filePath"]
+			workerId, okWid := trace.CustomLabels[libpf.Intern("workerId")]
+			filePath, okFname := trace.CustomLabels[libpf.Intern("filePath")]
 			var fileName string
 			if okFname {
-				fileName = path.Base(filePath)
+				fileName = path.Base(filePath.String())
 			}
 			knownWorkloadFrames := []string{
 				"lex",
@@ -95,9 +92,9 @@ func runTest(t *testing.T, ctx context.Context, host string, port nat.Port) {
 			}
 			hasWorkloadFrame := false
 
-			for i := range ct.Frames {
-				if ct.Frames[i].Value().Type == libpf.V8Frame {
-					name := ct.Frames[i].Value().FunctionName.String()
+			for i := range trace.Frames {
+				if trace.Frames[i].Value().Type == libpf.V8Frame {
+					name := trace.Frames[i].Value().FunctionName.String()
 					if slices.Contains(knownWorkloadFrames, name) {
 						hasWorkloadFrame = true
 					}
@@ -112,7 +109,7 @@ func runTest(t *testing.T, ctx context.Context, host string, port nat.Port) {
 			}
 
 			if okWid {
-				val, err := strconv.Atoi(workerId)
+				val, err := strconv.Atoi(workerId.String())
 				require.NoError(t, err)
 
 				require.GreaterOrEqual(t, val, 0)

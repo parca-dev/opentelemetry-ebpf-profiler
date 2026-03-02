@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
@@ -24,6 +23,8 @@ var (
 
 type goData struct {
 	refs atomic.Int32
+
+	version string
 
 	pclntab *elfunwindinfo.Gopclntab
 }
@@ -44,8 +45,9 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (
 	if err != nil {
 		return nil, err
 	}
-	if !ef.IsGolang() {
-		return nil, nil
+	goVersion, err := ef.GoVersion()
+	if goVersion == "" || err != nil {
+		return nil, err
 	}
 
 	pclntab, err := elfunwindinfo.NewGopclntab(ef)
@@ -53,7 +55,10 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (
 		return nil, err
 	}
 
-	g := &goData{pclntab: pclntab}
+	g := &goData{
+		version: goVersion,
+		pclntab: pclntab,
+	}
 	g.refs.Store(1)
 	return g, nil
 }
@@ -62,6 +67,10 @@ func (g *goData) unref() {
 	if g.refs.Add(-1) == 0 {
 		_ = g.pclntab.Close()
 	}
+}
+
+func (g *goData) String() string {
+	return "Golang symbolizer " + g.version
 }
 
 func (g *goData) Attach(_ interpreter.EbpfHandler, _ libpf.PID,
@@ -92,26 +101,35 @@ func (g *goInstance) Detach(_ interpreter.EbpfHandler, _ libpf.PID) error {
 	return nil
 }
 
-func (g *goInstance) Symbolize(frame *host.Frame, frames *libpf.Frames) error {
-	if !frame.Type.IsInterpType(libpf.Native) {
+func (g *goInstance) Symbolize(ef libpf.EbpfFrame, frames *libpf.Frames, mapping libpf.FrameMapping) error {
+	if !ef.Type().IsInterpType(libpf.Native) {
 		return interpreter.ErrMismatchInterpreterType
 	}
+
 	sfCounter := successfailurecounter.New(&g.successCount, &g.failCount)
 	defer sfCounter.DefaultToFailure()
 
-	sourceFile, lineNo, fn := g.d.pclntab.Symbolize(uintptr(frame.Lineno))
+	address := ef.Data()
+	sourceFile, lineNo, fn := g.d.pclntab.Symbolize(uintptr(address))
 	if fn == "" {
-		return fmt.Errorf("failed to symbolize 0x%x", frame.Lineno)
+		return fmt.Errorf("failed to symbolize 0x%x", address)
 	}
-
+	// See comment about return address handling in ProcessManager.convertFrame
+	if ef.Flags().ReturnAddress() {
+		address--
+	}
 	frames.Append(&libpf.Frame{
-		Type: libpf.GoFrame,
-		//TODO: File: convert the frame.File (host.FileID) to libpf.FileID here
-		AddressOrLineno: frame.Lineno,
+		Type:            libpf.GoFrame,
+		AddressOrLineno: libpf.AddressOrLineno(address),
+		Mapping:         mapping,
 		FunctionName:    libpf.Intern(fn),
 		SourceFile:      libpf.Intern(sourceFile),
 		SourceLine:      libpf.SourceLineno(lineNo),
 	})
 	sfCounter.ReportSuccess()
 	return nil
+}
+
+func (g *goInstance) ReleaseResources() error {
+	return g.d.pclntab.SetDontNeed()
 }

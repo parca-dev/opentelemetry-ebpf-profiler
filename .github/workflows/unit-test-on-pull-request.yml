@@ -15,9 +15,12 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Clone code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-      - name: Set up environment
-        uses: ./.github/workflows/env
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Set up Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
       - name: Check for changes in licenses of dependencies
         run: |
           make legal
@@ -28,42 +31,70 @@ jobs:
 
   lint:
     name: Lint (${{ matrix.target_arch }})
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
-        target_arch: [amd64, arm64]
+        include:
+          - { target_arch: amd64, runner: ubuntu-24.04 }
+          - { target_arch: arm64, runner: ubuntu-24.04-arm }
     steps:
       - name: Clone code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Set up environment
         uses: ./.github/workflows/env
-      - name: Get linter version
-        id: linter-version
-        run: (echo -n "version="; make linter-version) >> "$GITHUB_OUTPUT"
       - name: linter
         env:
-          GOARCH: ${{ matrix.target-arch }}
           CGO_ENABLED: 1
-        run: |
-          sudo apt update
-          sudo apt install -y clang-format-17
-          make lint
+        run: make lint
 
-  test:
-    name: Test (${{ matrix.target_arch }})
+  format:
+    name: Format Go and C code
     runs-on: ubuntu-24.04
-    strategy:
-      matrix:
-        target_arch: [amd64, arm64]
     steps:
       - name: Clone code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Set up environment
         uses: ./.github/workflows/env
-        with:
-          skip_rust: true
+      - name: formatter
+        env:
+          CGO_ENABLED: 1
+        run: |
+          make format
+          git diff --exit-code || (echo 'Code base is not Go or C formatted, please run "make format" and commit the changes in this PR.'; exit 1)
+
+  build-collector:
+    name: Build OTel Collector (${{ matrix.target_arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - { target_arch: amd64, runner: ubuntu-24.04 }
+          - { target_arch: arm64, runner: ubuntu-24.04-arm }
+    steps:
+      - name: Clone code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Set up environment
+        uses: ./.github/workflows/env
+      - name: build
+        run: make otelcol-ebpf-profiler
+
+  test:
+    name: Test (${{ matrix.target_arch }}${{ matrix.go_flags }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - { target_arch: amd64, runner: ubuntu-24.04, go_flags: "" }
+          - { target_arch: amd64, runner: ubuntu-24.04, go_flags: "-race" }
+          - { target_arch: arm64, runner: ubuntu-24.04-arm, go_flags: "" }
+          - { target_arch: arm64, runner: ubuntu-24.04-arm, go_flags: "-race" }
+    steps:
+      - name: Clone code
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Set up environment
+        uses: ./.github/workflows/env
       - name: Cache coredump modules
-        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: tools/coredump/modulecache
           key: coredumps-${{ matrix.target_arch }}-${{ hashFiles('tools/coredump/testdata/*/*.json') }}
@@ -71,68 +102,26 @@ jobs:
             coredumps-${{ matrix.target_arch }}
             coredumps-
       - name: Tests
-        run: make test TARGET_ARCH=${{ matrix.target_arch }}
-
-  rust-test:
-    name: Rust Tests (${{ matrix.target_arch }})
-    runs-on: ubuntu-24.04
-    strategy:
-      matrix:
-        target_arch: [amd64, arm64]
-    steps:
-      - name: Clone code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-      - name: Set up environment
-        uses: ./.github/workflows/env
-      - name: Tests
-        run: make rust-tests
-
-  check-binary-blobs:
-    name: Check for differences in the eBPF binary blobs
-    runs-on: ubuntu-24.04
-    container: otel/opentelemetry-ebpf-profiler-dev:latest@sha256:6ab9b5ff6c2a457be97a389887caf9f3cd5344f760fdab0101b9965236bbb2db
-    defaults:
-      run:
-        shell: bash --login {0}
-    steps:
-      - name: Clone code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-      - name: Hash binary blobs
-        run: |
-          sha256sum support/ebpf/tracer.ebpf.* > binary-blobs.hash
-      - name: Rebuild eBPF blobs
-        run: |
-          rm support/ebpf/tracer.ebpf.*
-          make amd64 -C support/ebpf
-          make arm64 -C support/ebpf
-      - name: Check for differences
-        run: |
-          if ! sha256sum --check binary-blobs.hash; then
-            echo "Please rebuild and commit the updated binary blobs."
-            exit 1
-          fi
-      - if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: binary-blobs
-          path: support/ebpf/tracer.ebpf.*
+        run: make test TARGET_ARCH=${{ matrix.target_arch }} GO_FLAGS="${{ matrix.go_flags }}"
 
   build-integration-test-binaries:
     name: Build integration test binaries (${{ matrix.target_arch }})
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
     strategy:
       matrix:
-        target_arch: [amd64, arm64]
+        include:
+          - { target_arch: amd64, runner: ubuntu-24.04 }
+          - { target_arch: arm64, runner: ubuntu-24.04-arm }
     steps:
       - name: Clone code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Set up environment
         uses: ./.github/workflows/env
       - name: Prepare integration test binaries for qemu tests
         run: make integration-test-binaries TARGET_ARCH=${{ matrix.target_arch }}
       - name: Upload integration test binaries
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: integration-test-binaries-${{ matrix.target_arch }}
           path: support/*.test
@@ -142,14 +131,14 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Clone code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Set up Go
-        uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
       - name: Cache coredump modules
-        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: tools/coredump/modulecache
           key: coredumps-arm64-${{ hashFiles('tools/coredump/testdata/*/*.json') }}
@@ -183,18 +172,22 @@ jobs:
           # (see https://github.com/parca-dev/opentelemetry-ebpf-profiler/pull/201)
           - { target_arch: amd64, kernel: 6.12.63 }
           - { target_arch: amd64, kernel: 6.16 }
+          - { target_arch: amd64, kernel: 6.18 }
 
           # ARM64 (NOTE: older ARM64 kernels are not available in Cilium repos)
           - { target_arch: arm64, kernel: 6.6.31 }
           - { target_arch: arm64, kernel: 6.8.4 }
           - { target_arch: arm64, kernel: 6.9.1 }
           - { target_arch: arm64, kernel: 6.12.16 }
-          # qemu has a bug that prevents booting the following kernel on ARM,
-          # fixed in qemu 9.2
-          #- { target_arch: arm64, kernel: 6.16 }
+          - { target_arch: arm64, kernel: 6.16 }
+          - { target_arch: arm64, kernel: 6.18 }
     steps:
+      - name: Disable man-db
+        run: |
+          echo "set man-db/auto-update false" | sudo debconf-communicate
+          sudo dpkg-reconfigure man-db
       - name: Clone code
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Install dependencies
         run: |
           sudo apt-get update -y
@@ -206,7 +199,7 @@ jobs:
           go install github.com/florianl/bluebox@v0.0.1
           sudo mv ~/go/bin/bluebox /usr/local/bin/.
       - name: Fetch integration test binaries
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
         with: { name: "integration-test-binaries-${{ matrix.target_arch }}" }
       - name: Fetch precompiled kernel
         run: |

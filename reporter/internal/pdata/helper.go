@@ -1,34 +1,10 @@
 package pdata // import "go.opentelemetry.io/ebpf-profiler/reporter/internal/pdata"
 
-// OrderedSet is a set that keeps order of insertion.
-type OrderedSet[T comparable] map[T]int32
+import (
+	"hash/fnv"
 
-// Add adds an element to the set and returns its index.
-func (os OrderedSet[T]) Add(key T) int32 {
-	idx, _ := os.AddWithCheck(key)
-	return idx
-}
-
-// AddWithCheck adds an element to the set, returns its index and presence state.
-func (os OrderedSet[T]) AddWithCheck(key T) (int32, bool) {
-	if idx, exists := os[key]; exists {
-		return idx, true
-	}
-
-	idx := int32(len(os))
-	os[key] = idx
-	return idx, false
-}
-
-// ToSlice returns the elements of the set as a slice, in insertion order.
-func (os OrderedSet[T]) ToSlice() []T {
-	ret := make([]T, len(os))
-	for key, idx := range os {
-		ret[idx] = key
-	}
-
-	return ret
-}
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
+)
 
 // locationInfo is a helper used to deduplicate Locations.
 type locationInfo struct {
@@ -37,11 +13,24 @@ type locationInfo struct {
 	frameType     string
 	hasLine       bool
 	lineNumber    int64
+	columnNumber  int64
 	functionIndex int32
 }
 
-// funcInfo is a helper to construct profile.Function messages.
+// funcInfo is a helper used to deduplicate Functions.
 type funcInfo struct {
 	nameIdx     int32
 	fileNameIdx int32
+}
+
+// stackInfo is a helper used to deduplicate Stacks.
+type stackInfo struct {
+	locationIndicesHash uint64
+}
+
+// hashLocationIndices computes a hash for a slice of location indices.
+func hashLocationIndices(locationIndices []int32) uint64 {
+	h := fnv.New64a()
+	h.Write(pfunsafe.FromSlice(locationIndices))
+	return h.Sum64()
 }

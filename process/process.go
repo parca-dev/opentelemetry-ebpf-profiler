@@ -12,21 +12,39 @@ import (
 	"io"
 	"os"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 
-	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"golang.org/x/sys/unix"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
 	"go.opentelemetry.io/ebpf-profiler/stringutil"
 )
 
 // GetMappings returns this error when no mappings can be extracted.
 var ErrNoMappings = errors.New("no mappings")
+
+const (
+	containerSource = "[0-9a-f]{64}"
+	taskSource      = "[0-9a-f]{32}-\\d+"
+)
+
+//nolint:lll
+var (
+	// expLine matches a line in the /proc/<pid>/cgroup file. It has a submatch for the last element (path), which contains the container ID. Supports both cgroup v1 and v2.
+	expLine = regexp.MustCompile(`^\d+:[^:]*:(.+)$`)
+
+	// Inspired from https://github.com/DataDog/dd-otel-host-profiler/blob/1e50a36d4c3a8a87f0cc828f37b48455ec436e55/containermetadata/container.go#L32-L47 with the following changes to handle unit tests in process_test.go:
+	// - support prefix after `scope` to handle "0::/system.slice/docker-b1eba9dfaeba29d8b80532a574a03ea3cac29384327f339c26da13649e2120df.scope/init"
+	// - remove uuidSource to doesn't match "0::/user.slice/user-1000.slice/user@1000.service/app.slice/app-org.gnome.Terminal.slice/vte-spawn-868f9513-eee8-457d-8e36-1b37ae8ae622.scope"
+	expContainerID = regexp.MustCompile(fmt.Sprintf(`(%s|%s)(?:\.scope)?(?:/[a-z]+)?$`, containerSource, taskSource))
+)
 
 // systemProcess provides an implementation of the Process interface for a
 // process that is currently running on this machine.
@@ -75,6 +93,90 @@ func (sp *systemProcess) GetMachineData() MachineData {
 	return MachineData{Machine: pfelf.CurrentMachine}
 }
 
+func (sp *systemProcess) GetExe() (libpf.String, error) {
+	str, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", sp.pid))
+	if err != nil {
+		return libpf.NullString, err
+	}
+	return libpf.Intern(str), nil
+}
+
+func (sp *systemProcess) GetProcessMeta(cfg MetaConfig) ProcessMeta {
+	var processName libpf.String
+	exePath, _ := sp.GetExe()
+	if name, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", sp.pid)); err == nil {
+		processName = libpf.Intern(pfunsafe.ToString(name))
+	}
+
+	var envVarMap map[libpf.String]libpf.String
+	if len(cfg.IncludeEnvVars) > 0 {
+		if envVars, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", sp.pid)); err == nil {
+			envVarMap = make(map[libpf.String]libpf.String, len(cfg.IncludeEnvVars))
+			// environ has environment variables separated by a null byte (hex: 00)
+			for envVar := range strings.SplitSeq(pfunsafe.ToString(envVars), "\000") {
+				var fields [2]string
+				if stringutil.SplitN(envVar, "=", fields[:]) < 2 {
+					continue
+				}
+				if _, ok := cfg.IncludeEnvVars[fields[0]]; ok {
+					envVarMap[libpf.Intern(fields[0])] = libpf.Intern(fields[1])
+				}
+			}
+		}
+	}
+
+	containerID, err := extractContainerID(sp.pid)
+	if err != nil {
+		log.Debugf("Failed extracting containerID for %d: %v", sp.pid, err)
+	}
+	return ProcessMeta{
+		Name:         processName,
+		Executable:   exePath,
+		ContainerID:  containerID,
+		EnvVariables: envVarMap,
+	}
+}
+
+// parseContainerID parses cgroup v1 and v2 container IDs
+func parseContainerID(cgroupFile io.Reader) libpf.String {
+	scanner := bufio.NewScanner(cgroupFile)
+	buf := make([]byte, 512)
+	// Providing a predefined buffer overrides the internal buffer that Scanner uses (4096 bytes).
+	// We can do that and also set a maximum allocation size on the following call.
+	// With a maximum of 4096 characters path in the kernel, 8192 should be fine here. We don't
+	// expect lines in /proc/<PID>/cgroup to be longer than that.
+	scanner.Buffer(buf, 8192)
+	for scanner.Scan() {
+		b := scanner.Bytes()
+		if bytes.Equal(b, []byte("0::/")) {
+			continue // Skip a common case
+		}
+		line := pfunsafe.ToString(b)
+		m := expLine.FindStringSubmatchIndex(line)
+		if len(m) == 4 {
+			sub := line[m[2]:m[3]]
+			if parts := expContainerID.FindStringSubmatchIndex(sub); len(parts) == 4 {
+				return libpf.Intern(sub[parts[2]:parts[3]])
+			}
+		}
+		log.Debugf("Could not extract container ID from line: %s", line)
+	}
+
+	// No containerID could be extracted
+	return libpf.NullString
+}
+
+// extractContainerID returns the containerID for pid (supports both cgroup v1 and v2)
+func extractContainerID(pid libpf.PID) (libpf.String, error) {
+	cgroupFile, err := os.Open(fmt.Sprintf("/proc/%d/cgroup", pid))
+	if err != nil {
+		return libpf.NullString, err
+	}
+	defer cgroupFile.Close()
+
+	return parseContainerID(cgroupFile), nil
+}
+
 func trimMappingPath(path string) string {
 	// Trim the deleted indication from the path.
 	// See path_with_deleted in linux/fs/d_path.c
@@ -109,7 +211,7 @@ func parseMappings(mapsFile io.Reader) ([]Mapping, uint32, error) {
 		var addrs [2]string
 		var devs [2]string
 
-		line := stringutil.ByteSlice2String(scanner.Bytes())
+		line := pfunsafe.ToString(scanner.Bytes())
 		if stringutil.FieldsN(line, fields[:]) < 5 {
 			numParseErrors++
 			continue
@@ -263,10 +365,12 @@ func (sp *systemProcess) GetMappings() ([]Mapping, uint32, error) {
 		}
 	}
 
-	fileToMapping := make(map[string]*Mapping, len(mappings))
+	fileToMapping := make(map[string]*Mapping)
 	for idx := range mappings {
 		m := &mappings[idx]
-		fileToMapping[m.Path.String()] = m
+		if m.Path != libpf.NullString {
+			fileToMapping[m.Path.String()] = m
+		}
 	}
 	sp.fileToMapping = fileToMapping
 	return mappings, numParseErrors, nil
@@ -329,11 +433,11 @@ func (sp *systemProcess) GetMappingFileLastModified(m *Mapping) int64 {
 
 // vdsoFileID caches the VDSO FileID. This assumes there is single instance of
 // VDSO for the system.
-var vdsoFileID libpf.FileID = libpf.UnsymbolizedFileID
+var vdsoFileID libpf.FileID
 
 func (sp *systemProcess) CalculateMappingFileID(m *Mapping) (libpf.FileID, error) {
 	if m.IsVDSO() {
-		if vdsoFileID != libpf.UnsymbolizedFileID {
+		if vdsoFileID != (libpf.FileID{}) {
 			return vdsoFileID, nil
 		}
 		vdso, err := sp.extractMapping(m)
@@ -365,8 +469,4 @@ func (sp *systemProcess) OpenELF(file string) (*pfelf.File, error) {
 
 	// Fall back to opening the file using the process specific root
 	return pfelf.Open(path.Join("/proc", strconv.Itoa(int(sp.pid)), "root", file))
-}
-
-func (sp *systemProcess) ExtractAsFile(file string) (string, error) {
-	return path.Join("/proc", strconv.Itoa(int(sp.pid)), "root", file), nil
 }

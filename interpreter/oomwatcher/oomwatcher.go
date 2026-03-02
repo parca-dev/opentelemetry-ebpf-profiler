@@ -59,15 +59,15 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 	}
 
 	// Read the symbol table
-	symtab, err := file.ReadSymbols()
-	if err != nil {
-		return nil, fmt.Errorf("failed to read symbols for file %s: %w", info.FileName(), err)
-	}
-
-	// Check for mbuckets symbol
-	sym, err := symtab.LookupSymbol("runtime.mbuckets")
-	if err != nil {
-		return nil, err
+	var sym *libpf.Symbol
+	if err := file.VisitSymbols(func(sym2 libpf.Symbol) bool {
+		if sym2.Name == "runtime.mbuckets" {
+			sym = &sym2
+			return false
+		}
+		return true
+	}); err != nil {
+		return nil, fmt.Errorf("failed to visit symbols for file %s: %w", info.FileName(), err)
 	}
 
 	if sym != nil {

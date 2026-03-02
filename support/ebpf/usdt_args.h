@@ -8,7 +8,7 @@
 #include "usdt.h"
 
 // Forward declarations for USDT maps (defined in usdt.ebpf.c)
-extern bpf_map_def __bpf_usdt_specs;
+extern struct usdt_specs_t __bpf_usdt_specs;
 
 // Helper to get the offset into pt_regs for a given register ID
 // This returns the byte offset that can be used with bpf_probe_read_kernel

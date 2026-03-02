@@ -121,7 +121,7 @@ import (
 	"fmt"
 	"regexp"
 
-	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
@@ -143,7 +143,7 @@ var (
 )
 
 type opcacheData struct {
-	version uint
+	version uint32
 
 	// dasmBuf is the address of the shared memory that is used for the JIT'd code.
 	// This is defined here:
@@ -193,7 +193,8 @@ func (i *opcacheInstance) Detach(ebpf interpreter.EbpfHandler, pid libpf.PID) er
 }
 
 func (i *opcacheInstance) SynchronizeMappings(ebpf interpreter.EbpfHandler,
-	_ reporter.SymbolReporter, pr process.Process, _ []process.Mapping) error {
+	_ reporter.ExecutableReporter, pr process.Process, _ []process.Mapping,
+) error {
 	if i.prefixes != nil {
 		// Already attached
 		return nil
@@ -239,7 +240,8 @@ func (d *opcacheData) String() string {
 }
 
 func (d *opcacheData) Attach(_ interpreter.EbpfHandler, _ libpf.PID, bias libpf.Address,
-	rm remotememory.RemoteMemory) (interpreter.Instance, error) {
+	rm remotememory.RemoteMemory,
+) (interpreter.Instance, error) {
 	return &opcacheInstance{
 		d:    d,
 		rm:   rm,
@@ -250,7 +252,7 @@ func (d *opcacheData) Attach(_ interpreter.EbpfHandler, _ libpf.PID, bias libpf.
 func (d *opcacheData) Unload(_ interpreter.EbpfHandler) {
 }
 
-func determineOPCacheVersion(ef *pfelf.File) (uint, error) {
+func determineOPCacheVersion(ef *pfelf.File) (uint32, error) {
 	// In contrast to interpreterphp, the opcache actually contains
 	// a really straightforward way to recover the version. As the opcache
 	// is a Zend extension, it has to provide a version, which just so
@@ -343,7 +345,8 @@ func getOpcacheJITInfo(ef *pfelf.File) (dasmBuf, dasmSize libpf.Address, err err
 }
 
 func OpcacheLoader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (
-	interpreter.Data, error) {
+	interpreter.Data, error,
+) {
 	if !opcacheRegex.MatchString(info.FileName()) {
 		return nil, nil
 	}

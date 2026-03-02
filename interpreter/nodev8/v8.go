@@ -165,16 +165,17 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
 	"github.com/elastic/go-freelru"
 
-	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	"go.opentelemetry.io/ebpf-profiler/lpm"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
+	"go.opentelemetry.io/ebpf-profiler/nativeunwind/elfunwindinfo"
 	npsr "go.opentelemetry.io/ebpf-profiler/nopanicslicereader"
 	"go.opentelemetry.io/ebpf-profiler/process"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
@@ -571,7 +572,8 @@ func (i *v8Instance) Detach(ebpf interpreter.EbpfHandler, pid libpf.PID) error {
 }
 
 func (i *v8Instance) SynchronizeMappings(ebpf interpreter.EbpfHandler,
-	_ reporter.SymbolReporter, pr process.Process, mappings []process.Mapping) error {
+	_ reporter.ExecutableReporter, pr process.Process, mappings []process.Mapping,
+) error {
 	pid := pr.PID()
 	i.mappingGeneration++
 	for idx := range mappings {
@@ -790,7 +792,8 @@ func (i *v8Instance) getObjectAddrAndType(taggedPtr libpf.Address) (libpf.Addres
 
 // getTypedObject checks the object's type, and returns its address or error.
 func (i *v8Instance) getTypedObject(taggedPtr libpf.Address, expectedType uint16) (
-	libpf.Address, error) {
+	libpf.Address, error,
+) {
 	addr, tag, err := i.getObjectAddrAndType(taggedPtr)
 	if err != nil {
 		return 0, err
@@ -808,7 +811,8 @@ func (i *v8Instance) readObjectPtr(addr libpf.Address) (libpf.Address, uint16, e
 
 // readTypedObjectPtr reads an object pointer and makes sure it is a HeapObject of expected type
 func (i *v8Instance) readTypedObjectPtr(addr libpf.Address, expectedType uint16) (
-	libpf.Address, error) {
+	libpf.Address, error,
+) {
 	addr, tag, err := i.readObjectPtr(addr)
 	if err != nil {
 		return 0, err
@@ -859,7 +863,7 @@ func (i *v8Instance) extractString(ptr libpf.Address, tag uint16, cb func(string
 				if err != nil {
 					return err
 				}
-				if err = cb(unsafe.String(unsafe.SliceData(buf), len(buf))); err != nil {
+				if err = cb(pfunsafe.ToString(buf)); err != nil {
 					return err
 				}
 			}
@@ -926,7 +930,8 @@ func (i *v8Instance) getStringPtr(ptr libpf.Address) (libpf.String, error) {
 // analyzeScopeInfo reads and heuristically analyzes V8 ScopeInfo data. It tries to
 // extract the function name, and its start and end line.
 func (i *v8Instance) analyzeScopeInfo(ptr libpf.Address) (name libpf.String,
-	startPos, endPos int) {
+	startPos, endPos int,
+) {
 	vms := &i.d.vmStructs
 	var data libpf.Address
 	if vms.ScopeInfo.HeapObject {
@@ -1004,7 +1009,8 @@ func (i *v8Instance) readFixedTable(addr libpf.Address, itemSize, maxItems uint3
 
 // readFixedTablePtr read the data of a FixedArray object.
 func (i *v8Instance) readFixedTablePtr(taggedPtr libpf.Address, tag uint16,
-	itemSize, maxItems uint32) ([]byte, error) {
+	itemSize, maxItems uint32,
+) ([]byte, error) {
 	addr, err := i.readTypedObjectPtr(taggedPtr, tag)
 	if err != nil {
 		return nil, err
@@ -1137,8 +1143,7 @@ func (i *v8Instance) getSFI(taggedPtr libpf.Address) (*v8SFI, error) {
 	if sodiType == vms.Type.Script {
 		sfi.source = i.getSource(sodiAddr)
 		if sfi.funcStartPos != sfi.funcEndPos {
-			sfi.funcStartLine = mapPositionToLine(sfi.source.lineTable,
-				int32(sfi.funcStartPos))
+			sfi.funcStartLine, _ = mapPositionToLine(sfi.source.lineTable, int32(sfi.funcStartPos))
 		}
 	}
 
@@ -1211,14 +1216,11 @@ func (i *v8Instance) readCode(taggedPtr libpf.Address, cookie uint32, sfi *v8SFI
 	// Read the deoptimization data
 	deoptimizationDataPtr := npsr.Ptr(code, uint(vms.Code.DeoptimizationData))
 	if vms.DeoptimizationData.ProtectedFixedArray {
-		deoptimizationDataPtr, err =
-			i.getTypedObject(deoptimizationDataPtr, vms.Type.ProtectedFixedArray)
+		deoptimizationDataPtr, err = i.getTypedObject(deoptimizationDataPtr, vms.Type.ProtectedFixedArray)
 	} else if vms.DeoptimizationData.TrustedFixedArray {
-		deoptimizationDataPtr, err =
-			i.getTypedObject(deoptimizationDataPtr, vms.Type.TrustedFixedArray)
+		deoptimizationDataPtr, err = i.getTypedObject(deoptimizationDataPtr, vms.Type.TrustedFixedArray)
 	} else {
-		deoptimizationDataPtr, err =
-			i.getTypedObject(deoptimizationDataPtr, vms.Type.FixedArray)
+		deoptimizationDataPtr, err = i.getTypedObject(deoptimizationDataPtr, vms.Type.FixedArray)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("deoptimization data pointer read: %v", err)
@@ -1469,33 +1471,43 @@ func decodePosition(table []byte, delta uint64) sourcePosition {
 	}
 }
 
-// mapPositionToLine maps a file position (byte offset) to a line number. This is
-// done against a table containing a offsets where each line ends.
-func mapPositionToLine(lineEnds []uint32, pos int32) libpf.SourceLineno {
+// mapPositionToLine maps a file position (byte offset) to a line number and column
+// number. This is done against a table containing offsets where each line ends.
+func mapPositionToLine(lineEnds []uint32, pos int32) (libpf.SourceLineno, libpf.SourceColumn) {
 	if len(lineEnds) == 0 || pos < 0 {
-		return 0
+		return 0, 0
 	}
 	// Use binary search to locate the line number
 	index := sort.Search(len(lineEnds), func(ndx int) bool {
 		return lineEnds[ndx] >= uint32(pos)
 	})
-	return libpf.SourceLineno(index + 1)
+
+	// Calculate column: position - start of line
+	// The start of line is the end of previous line + 1 (or 0 for first line)
+	var lineStart uint32
+	if index > 0 {
+		lineStart = lineEnds[index-1] + 1
+	}
+
+	column := uint32(pos) - lineStart
+
+	return libpf.SourceLineno(index + 1), libpf.SourceColumn(column)
 }
 
-// scriptOffsetToLine maps a sourcePosition to a line number in the corresponding source
-func (sfi *v8SFI) scriptOffsetToLine(position sourcePosition) libpf.SourceLineno {
+// scriptOffsetToLine maps a sourcePosition to a line and column number in the corresponding source
+func (sfi *v8SFI) scriptOffsetToLine(position sourcePosition) (libpf.SourceLineno, libpf.SourceColumn) {
 	scriptOffset := position.scriptOffset()
 	// The scriptOffset is offset by one, to make kNoSourcePosition zero.
 	//nolint:lll
 	// https://chromium.googlesource.com/v8/v8.git/+/refs/tags/9.2.230.1/src/codegen/source-position.h#93
 	if scriptOffset == 0 {
-		return sfi.funcStartLine
+		return sfi.funcStartLine, 0
 	}
 	return mapPositionToLine(sfi.source.lineTable, scriptOffset-1)
 }
 
 // appendFrame adds a new frame to frames.
-func (i *v8Instance) appendFrame(frames *libpf.Frames, sfi *v8SFI, lineNo libpf.SourceLineno) {
+func (i *v8Instance) appendFrame(frames *libpf.Frames, sfi *v8SFI, lineNo libpf.SourceLineno, column libpf.SourceColumn) {
 	funcOffset := uint32(0)
 	if lineNo > sfi.funcStartLine {
 		funcOffset = uint32(lineNo - sfi.funcStartLine)
@@ -1505,6 +1517,7 @@ func (i *v8Instance) appendFrame(frames *libpf.Frames, sfi *v8SFI, lineNo libpf.
 		FunctionName:   sfi.funcName,
 		SourceFile:     sfi.source.fileName,
 		SourceLine:     lineNo,
+		SourceColumn:   column,
 		FunctionOffset: funcOffset,
 	})
 }
@@ -1513,7 +1526,8 @@ var externalFunctionTag = libpf.Intern("<external-file>")
 
 // generateNativeFrame and conditionally symbolizes a native frame.
 func (i *v8Instance) generateNativeFrame(sourcePos sourcePosition, sfi *v8SFI,
-	frames *libpf.Frames) {
+	frames *libpf.Frames,
+) {
 	if sourcePos.isExternal() {
 		frames.Append(&libpf.Frame{
 			Type:         libpf.V8Frame,
@@ -1522,15 +1536,15 @@ func (i *v8Instance) generateNativeFrame(sourcePos sourcePosition, sfi *v8SFI,
 		return
 	}
 
-	lineNo := sfi.scriptOffsetToLine(sourcePos)
-	i.appendFrame(frames, sfi, lineNo)
+	lineNo, column := sfi.scriptOffsetToLine(sourcePos)
+	i.appendFrame(frames, sfi, lineNo, column)
 }
 
 // appendBytecodeFrame symbolizes and records to a trace a Bytecode based frame.
 func (i *v8Instance) appendBytecodeFrame(sfi *v8SFI, delta uint64, frames *libpf.Frames) {
 	sourcePos := decodePosition(sfi.bytecodePositionTable, delta)
-	lineNo := sfi.scriptOffsetToLine(sourcePos)
-	i.appendFrame(frames, sfi, lineNo)
+	lineNo, column := sfi.scriptOffsetToLine(sourcePos)
+	i.appendFrame(frames, sfi, lineNo, column)
 }
 
 // symbolizeSFI symbolizes and records to a trace a SharedFunctionInfo based frame.
@@ -1656,7 +1670,8 @@ func (i *v8Instance) symbolizeBaselineCode(code *v8Code, delta uint32, frames *l
 
 // symbolizeCode symbolizes and records to a trace a Code based frame.
 func (i *v8Instance) symbolizeCode(code *v8Code, delta uint64, returnAddress bool,
-	frames *libpf.Frames) error {
+	frames *libpf.Frames,
+) error {
 	var err error
 	sfi := code.sfi
 	delta &= support.V8LineDeltaMask
@@ -1716,21 +1731,21 @@ func (i *v8Instance) symbolizeCode(code *v8Code, delta uint64, returnAddress boo
 	return nil
 }
 
-func (i *v8Instance) Symbolize(frame *host.Frame, frames *libpf.Frames) error {
-	if !frame.Type.IsInterpType(libpf.V8) {
+func (i *v8Instance) Symbolize(ef libpf.EbpfFrame, frames *libpf.Frames, _ libpf.FrameMapping) error {
+	if !ef.Type().IsInterpType(libpf.V8) {
 		return interpreter.ErrMismatchInterpreterType
 	}
 
 	sfCounter := successfailurecounter.New(&i.successCount, &i.failCount)
 	defer sfCounter.DefaultToFailure()
 
-	pointerAndType := libpf.Address(frame.File)
-	deltaOrMarker := uint64(frame.Lineno)
-	frameType := pointerAndType & support.V8FileTypeMask
+	pointerAndType := libpf.Address(ef.Variable(0))
+	deltaOrMarker := uint64(ef.Variable(1))
+	subframeType := pointerAndType & support.V8FileTypeMask
 	pointer := pointerAndType&^support.V8FileTypeMask | HeapObjectTag
 
 	var err error
-	switch frameType {
+	switch subframeType {
 	case support.V8FileTypeMarker:
 		// This is a stub V8 frame, with deltaOrMarker containing the marker.
 		// Convert the V8 build specific marker ID to a static ID and symbolize
@@ -1741,16 +1756,16 @@ func (i *v8Instance) Symbolize(frame *host.Frame, frames *libpf.Frames) error {
 	case support.V8FileTypeNativeCode, support.V8FileTypeNativeJSFunc:
 		var code *v8Code
 		codeCookie := uint32(deltaOrMarker & support.V8LineCookieMask >> support.V8LineCookieShift)
-		if frameType == support.V8FileTypeNativeCode {
+		if subframeType == support.V8FileTypeNativeCode {
 			code, err = i.getCode(pointer, codeCookie)
 		} else {
 			code, err = i.getCodeFromJSFunc(pointer, codeCookie)
 		}
 		if err == nil {
-			err = i.symbolizeCode(code, deltaOrMarker, frame.ReturnAddress, frames)
+			err = i.symbolizeCode(code, deltaOrMarker, ef.Flags().ReturnAddress(), frames)
 		}
 	default:
-		err = fmt.Errorf("unsupported frame type %#x", frameType)
+		err = fmt.Errorf("unsupported frame type %#x", subframeType)
 	}
 	if err != nil {
 		// TODO: emit error frame
@@ -1777,8 +1792,17 @@ func mapFramePointerOffset(relBytes uint8) uint8 {
 }
 
 func (d *v8Data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Address,
-	rm remotememory.RemoteMemory) (interpreter.Instance, error) {
+	rm remotememory.RemoteMemory,
+) (interpreter.Instance, error) {
 	vms := &d.vmStructs
+
+	// Starting V8 11.1.204 the instruction/code start is a pointer field instead
+	// of offset where the code starts.
+	codeInstructionsIsPointer := uint8(0)
+	if d.version >= v8Ver(11, 1, 204) {
+		codeInstructionsIsPointer = 1
+	}
+
 	data := support.V8ProcInfo{
 		Version: d.version,
 
@@ -1796,9 +1820,10 @@ func (d *v8Data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Add
 		Off_JSFunction_code:   uint8(vms.JSFunction.Code),
 		Off_JSFunction_shared: uint8(vms.JSFunction.SharedFunctionInfo),
 
-		Off_Code_instruction_start: uint8(vms.Code.InstructionStart),
-		Off_Code_instruction_size:  uint8(vms.Code.InstructionSize),
-		Off_Code_flags:             uint8(vms.Code.Flags),
+		Code_instructions_is_pointer: codeInstructionsIsPointer,
+		Off_Code_instruction_start:   uint8(vms.Code.InstructionStart),
+		Off_Code_instruction_size:    uint8(vms.Code.InstructionSize),
+		Off_Code_flags:               uint8(vms.Code.Flags),
 
 		Codekind_shift:        vms.CodeKind.FieldShift,
 		Codekind_mask:         uint8(vms.CodeKind.FieldMask),
@@ -1885,7 +1910,7 @@ func (d *v8Data) readIntrospectionData(ef *pfelf.File) error {
 				memberName = nameTag
 			}
 
-			for _, n := range strings.Split(memberName, ",") {
+			for n := range strings.SplitSeq(memberName, ",") {
 				s := prefix + n
 				if memberVal.Kind() == reflect.Bool {
 					s = "v8dbg_parent_" + className + "__" + memberName
@@ -2122,17 +2147,118 @@ func (d *v8Data) readIntrospectionData(ef *pfelf.File) error {
 	return nil
 }
 
-// loadNodeClData loads various offsets that are needed for custom labels handling.
-func (d *v8Data) loadNodeClData(ef *pfelf.File) error {
-	syms, err := ef.ReadSymbols()
+func locateSnapshotArea(ef *pfelf.File, syms relevantSymbols) util.Range {
+	sym := syms.DefaultSnapshotBlob
+	if sym == nil {
+		return util.Range{}
+	}
+	addr := sym.Address
+
+	// If there is a big stack delta soon after v8::internal::Snapshot::DefaultSnapshotBlob()
+	// assume it is the V8 snapshot data.
+	eft, err := elfunwindinfo.NewEhFrameTable(ef)
 	if err != nil {
-		return fmt.Errorf("failed to read symbols: %w", err)
+		return util.Range{}
+	}
+	ndx, err := eft.LookupIndex(libpf.Address(addr))
+	if err != nil {
+		return util.Range{}
 	}
 
-	sym, err := syms.LookupSymbol("_ZZ21napi_get_node_versionE7version")
-	if err != nil {
-		return fmt.Errorf("failed to lookup Node version symbol: %w", err)
+	for prevEnd := uintptr(addr); prevEnd-uintptr(addr) < 1024; ndx++ {
+		fde, err := eft.DecodeIndex(ndx)
+		if err != nil {
+			return util.Range{}
+		}
+		// Check that there is a large gap.
+		if fde.PCBegin-prevEnd > 512*1024 {
+			log.Debugf("located snapshot area: %#x - %#x", prevEnd, fde.PCBegin)
+			return util.Range{
+				Start: uint64(prevEnd),
+				End:   uint64(fde.PCBegin),
+			}
+		}
+		prevEnd = fde.PCBegin + fde.PCRange
 	}
+	return util.Range{}
+}
+
+type relevantSymbols struct {
+	DefaultSnapshotBlob *libpf.Symbol
+	BytecodeSizes       *libpf.Symbol
+	NodeVersion         *libpf.Symbol
+	CurrentIsolate      *libpf.Symbol
+}
+
+const (
+	defaultSnapshotBlobSymbol libpf.SymbolName = "_ZN2v88internal8Snapshot19DefaultSnapshotBlobEv"
+	bytecodeSizesSymbol       libpf.SymbolName = "_ZN2v88internal11interpreter9Bytecodes14kBytecodeSizesE"
+	nodeVersionSymbol         libpf.SymbolName = "_ZZ21napi_get_node_versionE7version"
+	currentIsolateSymbol      libpf.SymbolName = "_ZN2v88internal18g_current_isolate_E"
+)
+
+// scanForRelevantSymbols gets the symbols needed for Node unwinding
+// by scanning the symtab.
+func scanForRelevantSymbols(ef *pfelf.File) (relevantSymbols, error) {
+	rv := relevantSymbols{}
+	err := ef.VisitSymbols(func(sym libpf.Symbol) bool {
+		if sym.Name == defaultSnapshotBlobSymbol {
+			rv.DefaultSnapshotBlob = &sym
+		}
+		if sym.Name == bytecodeSizesSymbol {
+			rv.BytecodeSizes = &sym
+		}
+		if sym.Name == nodeVersionSymbol {
+			rv.NodeVersion = &sym
+		}
+		if sym.Name == currentIsolateSymbol {
+			rv.CurrentIsolate = &sym
+		}
+		return rv.DefaultSnapshotBlob == nil || rv.BytecodeSizes == nil ||
+			rv.NodeVersion == nil || rv.CurrentIsolate == nil
+	})
+	if err != nil {
+		return relevantSymbols{}, err
+	}
+	return rv, nil
+}
+
+// lookupRelevantSymbols tries to get the symbols needed for Node unwinding.
+// It first tries using the DT_GNU_HASH mechanism to look them up as dynamic symbols.
+//
+// If this doesn't work (which we know to be true for Node v24.11.1 and above,
+// see: https://github.com/nodejs/node/pull/56290)
+// then fall back to scanning for them in the symtab.
+func lookupRelevantSymbols(ef *pfelf.File) (relevantSymbols, error) {
+	rv := relevantSymbols{}
+	sym, err := ef.LookupSymbol(defaultSnapshotBlobSymbol)
+	if errors.Is(err, libpf.ErrSymbolNotFound) {
+		// If the first one failed, they are probably all going to fail.
+		// Scan instead.
+		return scanForRelevantSymbols(ef)
+	}
+	// Match historic behavior: keep going, even if we can't get the snapshot blob.
+	// (TODO: Figure out when/why this can happen)
+	if err != nil {
+		log.Warnf("Couldn't get V8 DefaultSnapshotBlob: %v", err)
+	} else {
+		rv.DefaultSnapshotBlob = sym
+	}
+	// If the first one succeeded, they should all succeed, so keep
+	// using `ef.LookupSymbol`.
+	sym, err = ef.LookupSymbol(bytecodeSizesSymbol)
+	if err != nil {
+		// As above, keep going to match historic behavior (why?)
+		log.Warnf("Couldn't get V8 BytecodeSizes: %v", err)
+	} else {
+		rv.BytecodeSizes = sym
+	}
+	return rv, nil
+}
+
+// loadNodeClData loads various offsets that are needed for custom labels handling.
+func (d *v8Data) loadNodeClData(ef *pfelf.File, syms relevantSymbols) error {
+	sym := syms.NodeVersion
 
 	if sym == nil {
 		return errors.New("Node version symbol not found")
@@ -2143,7 +2269,7 @@ func (d *v8Data) loadNodeClData(ef *pfelf.File) error {
 	}
 
 	versBuf := make([]byte, 12)
-	if _, err = ef.ReadVirtualMemory(versBuf, int64(sym.Address)); err != nil {
+	if _, err := ef.ReadVirtualMemory(versBuf, int64(sym.Address)); err != nil {
 		return fmt.Errorf("failed to read Node version data: %w", err)
 	}
 
@@ -2168,6 +2294,7 @@ func (d *v8Data) loadNodeClData(ef *pfelf.File) error {
 	}
 
 	var offset int64
+	var err error
 
 	if major < 26 {
 		offset, err = ef.LookupTLSSymbolOffset("_ZN2v88internal18g_current_isolate_E")
@@ -2177,9 +2304,9 @@ func (d *v8Data) loadNodeClData(ef *pfelf.File) error {
 	} else {
 		// Node started building v8 without external dynamic symbols
 		// in major version v26.
-		sym, err = syms.LookupSymbol("_ZN2v88internal18g_current_isolate_E")
-		if err != nil {
-			return fmt.Errorf("failed to look up g_current_isolate (in major 26): %w", err)
+		sym := syms.CurrentIsolate
+		if sym == nil {
+			return fmt.Errorf("couldn't find g_current_isolate (in major >= 26)")
 		}
 		offset, err = ef.AdjustTLSSymbol(sym)
 		if err != nil {
@@ -2219,25 +2346,17 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 			vers[0], vers[1], vers[2])
 	}
 
+	syms, err := lookupRelevantSymbols(ef)
+	if err != nil {
+		return nil, err
+	}
 	d := &v8Data{
-		version: version,
+		version:       version,
+		snapshotRange: locateSnapshotArea(ef, syms),
 	}
 
-	addr, err := ef.LookupSymbolAddress("_ZN2v88internal8Snapshot19DefaultSnapshotBlobEv")
-	if err == nil {
-		// If there is a big stack delta soon after v8::internal::Snapshot::DefaultSnapshotBlob()
-		// assume it is the V8 snapshot data.
-		for _, gap := range info.Gaps() {
-			if gap.Start-uint64(addr) < 1024 {
-				d.snapshotRange = gap
-				log.Debugf("V8 JIT Area: %#v", d.snapshotRange)
-				break
-			}
-		}
-	}
-
-	sym, err := ef.LookupSymbol("_ZN2v88internal11interpreter9Bytecodes14kBytecodeSizesE")
-	if err == nil && sym.Size%3 == 0 && sym.Size < 3*256 {
+	sym := syms.BytecodeSizes
+	if sym != nil && sym.Size%3 == 0 && sym.Size < 3*256 {
 		// Symbol v8::internal::interpreter::Bytecodes::kBytecodeSizes:
 		// static const uint8_t Bytecodes::kBytecodeSizes[3][kBytecodeCount];
 		log.Debugf("V8: bytecode sizes at %x, length %d, %d opcodes",
@@ -2258,7 +2377,7 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		}
 	}
 
-	if err = d.loadNodeClData(ef); err != nil {
+	if err = d.loadNodeClData(ef, syms); err != nil {
 		log.Warnf("Failed to load extra data for Node.js custom labels handling: %v", err)
 	}
 

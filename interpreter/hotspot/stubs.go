@@ -7,16 +7,16 @@ import (
 	"encoding/binary"
 	"fmt"
 	"runtime"
-	"sort"
+	"slices"
 	"strings"
 
-	"go.opentelemetry.io/ebpf-profiler/armhelpers"
+	"go.opentelemetry.io/ebpf-profiler/asm/arm"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
 	"go.opentelemetry.io/ebpf-profiler/support"
 	aa "golang.org/x/arch/arm64/arm64asm"
 
-	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 )
 
 // nextAligned aligns a pointer up, to the next multiple of align.
@@ -28,6 +28,18 @@ func nextAligned(ptr libpf.Address, align uint64) libpf.Address {
 type StubRoutine struct {
 	name       string
 	start, end libpf.Address
+}
+
+func compareStubRoutine(a, b StubRoutine) int {
+	if a.start < b.start {
+		return -1
+	}
+	if a.start > b.start {
+		return 1
+	}
+	// Secondary ordering by name to ensure that we produce deterministic
+	// results even in the presence of stub aliases (same start address).
+	return strings.Compare(a.name, b.name)
 }
 
 // findStubBounds heuristically determines the bounds of individual functions
@@ -47,7 +59,8 @@ type StubRoutine struct {
 // not need alignment. Also in some cases the JVM devs omitted/forgot to insert
 // the padding. The two heuristics combined, however, yield reliable results.
 func findStubBounds(vmd *hotspotVMData, bias libpf.Address,
-	rm remotememory.RemoteMemory) []StubRoutine {
+	rm remotememory.RemoteMemory,
+) []StubRoutine {
 	const CodeAlign = 64
 	const MaxStubLen = 8 * 1024
 
@@ -70,15 +83,7 @@ func findStubBounds(vmd *hotspotVMData, bias libpf.Address,
 		})
 	}
 
-	sort.Slice(stubs, func(i, j int) bool {
-		if stubs[i].start != stubs[j].start {
-			return stubs[i].start < stubs[j].start
-		}
-
-		// Secondary ordering by name to ensure that we produce deterministic
-		// results even in the presence of stub aliases (same start address).
-		return stubs[i].name < stubs[j].name
-	})
+	slices.SortFunc(stubs, compareStubRoutine)
 
 	filtered := make([]StubRoutine, 0, len(stubs))
 	for i := 0; i < len(stubs); i++ {
@@ -173,7 +178,8 @@ func findStubBounds(vmd *hotspotVMData, bias libpf.Address,
 // >>> B.LT  loc_4600
 // >>> SUB   SP, SP, #0x40
 func analyzeStubArm64(rm remotememory.RemoteMemory, addr libpf.Address) (
-	hasFrame bool, spOffs int64, err error) {
+	hasFrame bool, spOffs int64, err error,
+) {
 	code := make([]byte, 64)
 	if err := rm.Read(addr, code); err != nil {
 		return false, 0, err
@@ -202,7 +208,7 @@ Outer:
 				if arg.Mode != aa.AddrPostIndex && arg.Mode != aa.AddrPreIndex {
 					continue
 				}
-				imm, ok := armhelpers.DecodeImmediate(arg)
+				imm, ok := arm.DecodeImmediate(arg)
 				if !ok {
 					continue
 				}
@@ -215,7 +221,7 @@ Outer:
 					continue Outer
 				}
 			}
-			imm, ok := armhelpers.DecodeImmediate(insn.Args[2])
+			imm, ok := arm.DecodeImmediate(insn.Args[2])
 			if !ok {
 				continue
 			}
@@ -235,7 +241,8 @@ Outer:
 // that sampling catches the pro/epilogues that it isn't really worth special
 // casing this any further.
 func jitAreaForStubArm64(stub *StubRoutine, heap *jitArea,
-	rm remotememory.RemoteMemory) (jitArea, error) {
+	rm remotememory.RemoteMemory,
+) (jitArea, error) {
 	var hasFrame bool
 	var spOffs int64
 	if stub.name == "call_stub_return_address" {

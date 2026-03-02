@@ -9,22 +9,21 @@ import (
 	"github.com/cilium/ebpf/perf"
 	log "github.com/sirupsen/logrus"
 
-	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
+	"go.opentelemetry.io/ebpf-profiler/processmanager"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/support"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
-	"go.opentelemetry.io/ebpf-profiler/tracehandler"
 )
 
 // Start starts a goroutine that reads GPU timing events and returns a TraceInterceptor
 // that diverts CUDA traces (post-symbolization) into the GPU fixer.
 // Completed CUDA traces are reported directly via rep.
 func Start(ctx context.Context, tr *tracer.Tracer,
-	rep reporter.TraceReporter) tracehandler.TraceInterceptor {
+	rep reporter.TraceReporter) processmanager.TraceInterceptor {
 	gpuTimingEvents := tr.GetEbpfMaps()["cuda_timing_events"]
 
 	// Per-CPU buffer size for timing events. CuptiTimingEvent is ~300 bytes,
@@ -101,7 +100,7 @@ func Start(ctx context.Context, tr *tracer.Tracer,
 
 	// Return the interceptor function that diverts CUDA traces post-symbolization.
 	return func(trace *libpf.Trace, meta *samples.TraceEventMeta,
-		rawTrace *host.Trace) bool {
+		rawTrace *libpf.EbpfTrace) bool {
 		if meta.Origin != support.TraceOriginCuda {
 			return false
 		}
@@ -110,10 +109,11 @@ func Start(ctx context.Context, tr *tracer.Tracer,
 		// symbolized trace, which may be a cached template with stale values).
 		var correlationID uint32
 		var cbid int32
-		for i := range rawTrace.Frames {
-			if rawTrace.Frames[i].Type == libpf.CUDAKernelFrame {
-				correlationID = uint32(rawTrace.Frames[i].Lineno)
-				cbid = int32(rawTrace.Frames[i].Lineno >> 32)
+		for frames := libpf.EbpfFrame(rawTrace.FrameData); len(frames) > 0; frames = frames[frames.Length():] {
+			if frames.Type() == libpf.CUDAKernelFrame {
+				lineno := frames.Data()
+				correlationID = uint32(lineno)
+				cbid = int32(lineno >> 32)
 				break
 			}
 		}

@@ -13,13 +13,14 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
 	"github.com/elastic/go-freelru"
 
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	"go.opentelemetry.io/ebpf-profiler/lpm"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	npsr "go.opentelemetry.io/ebpf-profiler/nopanicslicereader"
@@ -204,7 +205,7 @@ func (d *hotspotInstance) getSymbol(addr libpf.Address) libpf.String {
 			return libpf.NullString
 		}
 	}
-	s := unsafe.String(unsafe.SliceData(tmp), len(tmp))
+	s := pfunsafe.ToString(tmp)
 	if !util.IsValidString(s) {
 		log.Debugf("Extracted Hotspot symbol is invalid at 0x%x '%v'", addr, tmp)
 		return libpf.NullString
@@ -396,7 +397,8 @@ func (d *hotspotInstance) getMethod(addr libpf.Address, _ uint32) (*hotspotMetho
 
 // getJITInfo reads and returns the interesting data from "class nmethod" at given address
 func (d *hotspotInstance) getJITInfo(addr libpf.Address, addrCheck uint32) (
-	*hotspotJITInfo, error) {
+	*hotspotJITInfo, error,
+) {
 	// Each JIT-ted function is contained in a "class nmethod" (derived from CodeBlob,
 	// and CompiledMethod [JDK22 and earlier]).
 	//
@@ -408,7 +410,7 @@ func (d *hotspotInstance) getJITInfo(addr libpf.Address, addrCheck uint32) (
 	// scopes_pcs is a look up table to map RIP to scope_data
 	// metadata is the array that maps scope_data method indices to "class Method"
 
-	const maxMetadataSize = 4 * 1024 * 1024
+	const maxMetadataSize = 1024 * 1024
 
 	if jit, ok := d.addrToJITInfo.Get(addr); ok {
 		if jit.compileID == addrCheck {
@@ -463,16 +465,16 @@ func (d *hotspotInstance) getJITInfo(addr libpf.Address, addrCheck uint32) (
 		scopesPcsOff := npsr.PtrDiff32(nmethod, vms.Nmethod.ScopesPcsOffset)
 		depsOff := npsr.PtrDiff32(nmethod, vms.Nmethod.DependenciesOffset)
 
-		if depsOff >= maxMetadataSize {
-			return nil, fmt.Errorf("unreasonably large metadata data region: %d bytes",
-				depsOff)
-		}
 		if metadataOff > scopesDataOff || scopesDataOff > scopesPcsOff || scopesPcsOff > depsOff {
 			return nil, fmt.Errorf("unexpected nmethod layout: %v <= %v <= %v <= %v",
 				metadataOff, scopesDataOff, scopesPcsOff, depsOff)
 		}
-
-		scopesData := make([]byte, depsOff-metadataOff)
+		metadataSize := depsOff - metadataOff
+		if metadataSize >= maxMetadataSize {
+			return nil, fmt.Errorf("unreasonably large metadata data region: %d bytes",
+				metadataSize)
+		}
+		scopesData := make([]byte, metadataSize)
 		if err := d.rm.Read(addr+metadataOff, scopesData); err != nil {
 			return nil, fmt.Errorf("invalid nmethod metadata: %v", err)
 		}
@@ -500,7 +502,8 @@ func (d *hotspotInstance) getJITInfo(addr libpf.Address, addrCheck uint32) (
 		// ...
 		// [JIT_code]		@ this + CodeBlob._code_start
 		// ...
-		// [metadata]		@ this + CodeBlob._code_end + nmethod._metadata_offset
+		// [metadata]		@ this + CodeBlob._code_end + nmethod._metadata_offset (JDK -24)
+		// [metadata]		@ CodeBlob._mutable_data + CodeBlob._relocation_size   (JDK 25+)
 		//
 		// [scopes_data]	@ _immutable_data + nmethod._scopes_data_begin	\ arrays we need
 		// [scopes_pcs]		@ _immutable_data + nmethod._scopes_pcs_offset	/ for inlining info
@@ -509,9 +512,22 @@ func (d *hotspotInstance) getJITInfo(addr libpf.Address, addrCheck uint32) (
 		// ...
 		// speculations presence depends on JDK build, and is not used. Instead the scopes
 		// end is determined from immutable data size.
-		metadataOff := npsr.PtrDiff32(nmethod, vms.CodeBlob.CodeEnd) +
-			npsr.PtrDiff16(nmethod, vms.Nmethod.MetadataOffset)
-		codeBlobSize := npsr.Uint32(nmethod, vms.CodeBlob.Size)
+
+		var metadataPtr, metadataSize libpf.Address
+		if vms.CodeBlob.MutableData != 0 {
+			relocationSize := npsr.PtrDiff32(nmethod, vms.CodeBlob.RelocationSize)
+			mutableDataSize := npsr.PtrDiff32(nmethod, vms.CodeBlob.MutableDataSize)
+			metadataPtr = npsr.Ptr(nmethod, vms.CodeBlob.MutableData) + relocationSize
+			metadataSize = mutableDataSize - relocationSize
+		} else {
+			metadataOff := npsr.PtrDiff32(nmethod, vms.CodeBlob.CodeEnd) +
+				npsr.PtrDiff16(nmethod, vms.Nmethod.MetadataOffset)
+			metadataPtr = addr + metadataOff
+			// Actually the metadata only spans to `_jvmci_data_offset`, but that field isn't exposed
+			// through VMstructs, and the codeblob size is the next boundary after that.
+			metadataSize = npsr.PtrDiff32(nmethod, vms.CodeBlob.Size) - metadataOff
+		}
+
 		scopesPcsOff := npsr.PtrDiff32(nmethod, vms.Nmethod.ScopesPcsOffset)
 		scopesDataOff := npsr.PtrDiff32(nmethod, vms.Nmethod.ScopesDataOffset)
 		immutableDataPtr := npsr.Ptr(nmethod, vms.Nmethod.ImmutableData)
@@ -524,17 +540,13 @@ func (d *hotspotInstance) getJITInfo(addr libpf.Address, addrCheck uint32) (
 			return nil, fmt.Errorf("unexpected immutable data layout: %v, %v, %v",
 				scopesDataOff, scopesPcsOff, immutableDataSize)
 		}
-
-		// Actually the metadata only spans to `_jvmci_data_offset`, but that field isn't exposed
-		// through VMstructs, and the codeblob size is the next boundary after that.
-		metadataSize := libpf.Address(codeBlobSize) - metadataOff
-		if metadataOff >= maxMetadataSize {
+		if metadataSize >= maxMetadataSize {
 			return nil, fmt.Errorf("unreasonably large nmethod metadata: %v",
 				metadataSize)
 		}
 
 		metadata := make([]byte, metadataSize)
-		if err := d.rm.Read(addr+metadataOff, metadata); err != nil {
+		if err := d.rm.Read(metadataPtr, metadata); err != nil {
 			return nil, fmt.Errorf("invalid nmethod metadata ptr: %v", err)
 		}
 
@@ -664,7 +676,8 @@ func (d *hotspotInstance) gatherHeapInfo(vmd *hotspotVMData) (*heapInfo, error) 
 
 // addJitArea inserts an entry into the PID<->interpreter BPF map.
 func (d *hotspotInstance) addJitArea(ebpf interpreter.EbpfHandler,
-	pid libpf.PID, area jitArea) error {
+	pid libpf.PID, area jitArea,
+) error {
 	prefixes, err := lpm.CalculatePrefixList(uint64(area.start), uint64(area.end))
 	if err != nil {
 		return fmt.Errorf("LPM prefix calculation error for %x-%x", area.start, area.end)
@@ -697,7 +710,8 @@ func (d *hotspotInstance) addJitArea(ebpf interpreter.EbpfHandler,
 // allows the BPF code to start unwinding even if some more detailed information
 // about e.g. stub routines is not yet available.
 func (d *hotspotInstance) populateMainMappings(vmd *hotspotVMData,
-	ebpf interpreter.EbpfHandler, pid libpf.PID) error {
+	ebpf interpreter.EbpfHandler, pid libpf.PID,
+) error {
 	if d.mainMappingsInserted {
 		// Already populated: nothing to do here.
 		return nil
@@ -729,6 +743,12 @@ func (d *hotspotInstance) populateMainMappings(vmd *hotspotVMData,
 		d.heapAreas = append(d.heapAreas, area)
 	}
 
+	// JDK9+ frame has new 'mirror' slot which offsets the BCP slot
+	newBcpSlot := uint8(0)
+	if vmd.version >= 0x09000000 {
+		newBcpSlot = 1
+	}
+
 	// Set up the main eBPF info structure.
 	vms := &vmd.vmStructs
 	procInfo := support.HotspotProcInfo{
@@ -746,6 +766,7 @@ func (d *hotspotInstance) populateMainMappings(vmd *hotspotVMData,
 		Jvm_version:            uint8(vmd.version >> 24),
 		Segment_shift:          uint8(heap.segmentShift),
 		Nmethod_uses_offsets:   vmd.nmethodUsesOffsets,
+		New_bcp_slot:           newBcpSlot,
 	}
 
 	if vms.CodeCache.LowBound == 0 {
@@ -770,7 +791,8 @@ func (d *hotspotInstance) populateMainMappings(vmd *hotspotVMData,
 // stubs map and, if necessary on the architecture, inserts unwinding instructions
 // for them in the PID mappings BPF map.
 func (d *hotspotInstance) updateStubMappings(vmd *hotspotVMData,
-	ebpf interpreter.EbpfHandler, pid libpf.PID) {
+	ebpf interpreter.EbpfHandler, pid libpf.PID,
+) {
 	for _, stub := range findStubBounds(vmd, d.bias, d.rm) {
 		if _, exists := d.stubs[stub.start]; exists {
 			continue
@@ -814,7 +836,8 @@ func (d *hotspotInstance) updateStubMappings(vmd *hotspotVMData,
 }
 
 func (d *hotspotInstance) SynchronizeMappings(ebpf interpreter.EbpfHandler,
-	_ reporter.SymbolReporter, pr process.Process, _ []process.Mapping) error {
+	_ reporter.ExecutableReporter, pr process.Process, _ []process.Mapping,
+) error {
 	vmd, err := d.d.GetOrInit(func() (hotspotVMData, error) { return d.d.newVMData(d.rm, d.bias) })
 	if err != nil {
 		return err
@@ -844,16 +867,16 @@ func (d *hotspotInstance) SynchronizeMappings(ebpf interpreter.EbpfHandler,
 // Symbolize interpreters Hotspot eBPF uwinder given data containing target
 // process address and translates it to decorated frames expanding any inlined
 // frames to multiple new frames.
-func (d *hotspotInstance) Symbolize(frame *host.Frame, frames *libpf.Frames) error {
-	if !frame.Type.IsInterpType(libpf.HotSpot) {
+func (d *hotspotInstance) Symbolize(ef libpf.EbpfFrame, frames *libpf.Frames, _ libpf.FrameMapping) error {
+	if !ef.Type().IsInterpType(libpf.HotSpot) {
 		return interpreter.ErrMismatchInterpreterType
 	}
 
 	// Extract the HotSpot frame bitfields from the file and line variables
-	ptr := libpf.Address(frame.File)
-	subtype := uint32(frame.Lineno>>60) & 0xf
-	ripOrBci := uint32(frame.Lineno>>32) & 0x0fffffff
-	ptrCheck := uint32(frame.Lineno)
+	ptr := libpf.Address(ef.Variable(0))
+	subtype := uint32(ef.Variable(1)>>60) & 0xf
+	ripOrBci := uint32(ef.Variable(1)>>32) & 0x0fffffff
+	ptrCheck := uint32(ef.Variable(1))
 
 	var err error
 	sfCounter := successfailurecounter.New(&d.successCount, &d.failCount)

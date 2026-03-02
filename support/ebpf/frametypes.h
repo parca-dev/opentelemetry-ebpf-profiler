@@ -7,10 +7,6 @@
 #ifndef OPTI_FRAMETYPES_H
 #define OPTI_FRAMETYPES_H
 
-// Defines the bit mask that, when ORed with it, turn any of the below
-// frame types into an error frame.
-#define FRAME_MARKER_ERROR_BIT 0x80
-
 // Indicates that the interpreter/runtime this frame belongs to is unknown.
 #define FRAME_MARKER_UNKNOWN     0x0
 // Indicates a Python frame
@@ -32,17 +28,25 @@
 // Indicates a PHP JIT frame
 #define FRAME_MARKER_PHP_JIT     0x9
 // Indicates a Dotnet frame
-#define FRAME_MARKER_DOTNET      0xA
-// Indicates a LuaJIT frame
-#define FRAME_MARKER_LUAJIT      0xB
+#define FRAME_MARKER_DOTNET  0xA
 // Indicates a Go frame
-#define FRAME_MARKER_GO          0xC
-// Indicate a CUDA kernel frame
-#define FRAME_MARKER_CUDA_KERNEL 0xD
+#define FRAME_MARKER_GO      0xB
+// Indicates a BEAM frame
+#define FRAME_MARKER_BEAM    0xC
+// Indicates a LuaJIT frame
+#define FRAME_MARKER_LUAJIT  0xD
+// Indicates a CUDA kernel frame
+#define FRAME_MARKER_CUDA_KERNEL 0xE
 
-// Indicates a frame containing information about a critical unwinding error
-// that caused further unwinding to be aborted.
-#define FRAME_MARKER_ABORT (0x7F | FRAME_MARKER_ERROR_BIT)
+
+// Frame flags
+// Indicates that this frame is an error frame.
+#define FRAME_FLAG_ERROR          (1U << 0)
+// Indicates that this frame PC is a return address.
+#define FRAME_FLAG_RETURN_ADDRESS (1U << 1)
+// Indicates that the frame contains process specific addresses,
+// and the PID should be included in the caching key.
+#define FRAME_FLAG_PID_SPECIFIC   (1U << 2)
 
 // HotSpot frame subtypes stored in a bitfield of the trace->lines[]
 #define FRAME_HOTSPOT_STUB        0
@@ -50,4 +54,9 @@
 #define FRAME_HOTSPOT_INTERPRETER 2
 #define FRAME_HOTSPOT_NATIVE      3
 
+#define RUBY_FRAME_TYPE_NONE      0
+#define RUBY_FRAME_TYPE_CME_ISEQ  1
+#define RUBY_FRAME_TYPE_CME_CFUNC 2
+#define RUBY_FRAME_TYPE_ISEQ      3
+#define RUBY_FRAME_TYPE_GC        4
 #endif

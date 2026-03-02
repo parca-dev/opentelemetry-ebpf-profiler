@@ -12,7 +12,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/process"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
-	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
 func BenchmarkGolang(b *testing.B) {
@@ -34,12 +33,11 @@ func BenchmarkGolang(b *testing.B) {
 	if err != nil {
 		b.Fatalf("Failed to create hostID: %v", err)
 	}
-	loaderInfo := interpreter.NewLoaderInfo(hostFileID, elfRef, []util.Range{}, nil)
+	loaderInfo := interpreter.NewLoaderInfo(hostFileID, elfRef, nil)
 	rm := remotememory.NewProcessVirtualMemory(libpfPID)
 
-	b.ResetTimer()
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for b.Loop() {
 		gD, err := Loader(nil, loaderInfo)
 		if err != nil {
 			b.Fatalf("Failed to create loader: %v", err)
@@ -51,12 +49,10 @@ func BenchmarkGolang(b *testing.B) {
 		}
 
 		frames := libpf.Frames{}
+		ef := libpf.NewEbpfFrame(libpf.NativeFrame, 0, 1, uint64(pc))
+		ef[1] = uint64(hostFileID)
 
-		if err := gI.Symbolize(&host.Frame{
-			File:   hostFileID,
-			Lineno: libpf.AddressOrLineno(pc),
-			Type:   libpf.FrameType(libpf.Native),
-		}, &frames); err != nil {
+		if err := gI.Symbolize(ef, &frames, libpf.FrameMapping{}); err != nil {
 			b.Fatalf("Failed to symbolize 0x%x: %v", pc, err)
 		}
 

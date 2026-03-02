@@ -44,7 +44,6 @@ func test(t *testing.T) {
 	// Start the tracer with all tracers enabled
 	traceCh, trc := testutils.StartTracer(ctx, t,
 		tracertypes.IncludedTracers(0),
-		&testutils.MockReporter{},
 		false)
 	defer trc.Close()
 

@@ -35,12 +35,12 @@ struct kernel_timing {
   char kernel_name[256];
 };
 
-bpf_map_def SEC("maps") cuda_timing_events = {
-  .type        = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
-  .key_size    = sizeof(u32),
-  .value_size  = sizeof(u32),
-  .max_entries = 0,
-};
+struct cuda_timing_events_t {
+  __uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
+  __type(key, u32);
+  __type(value, u32);
+  __uint(max_entries, 0);
+} cuda_timing_events SEC(".maps");
 
 SEC("usdt/parcagpu/cuda_kernel")
 int BPF_USDT(

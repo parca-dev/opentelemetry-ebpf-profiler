@@ -17,13 +17,16 @@ import (
 	cebpf "github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/features"
 	"github.com/cilium/ebpf/link"
-	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
+	"go.opentelemetry.io/ebpf-profiler/tracer/types"
 	"golang.org/x/exp/constraints"
+	"golang.org/x/sys/unix"
 
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	"go.opentelemetry.io/ebpf-profiler/lpm"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	sdtypes "go.opentelemetry.io/ebpf-profiler/nativeunwind/stackdeltatypes"
@@ -51,6 +54,7 @@ type ebpfMapsImpl struct {
 	PhpProcs           *cebpf.Map `name:"php_procs"`
 	RubyProcs          *cebpf.Map `name:"ruby_procs"`
 	V8Procs            *cebpf.Map `name:"v8_procs"`
+	BeamProcs          *cebpf.Map `name:"beam_procs"`
 	ApmIntProcs        *cebpf.Map `name:"apm_int_procs"`
 	GoLabelsProcs      *cebpf.Map `name:"go_labels_procs"`
 	ClProcs            *cebpf.Map `name:"cl_procs"`
@@ -63,11 +67,15 @@ type ebpfMapsImpl struct {
 	UnwindInfoArray       *cebpf.Map `name:"unwind_info_array"`
 	ReportedPIDs          *cebpf.Map `name:"reported_pids"`
 
+	// Template used to update the inner maps of ExeIDToStackDeltaMaps
+	stackdeltaInnerMapTemplate *cebpf.MapSpec
+
 	errCounterLock sync.Mutex
 	errCounter     map[metrics.MetricID]int64
 
-	hasGenericBatchOperations bool
-	hasLPMTrieBatchOperations bool
+	hasGenericBatchOperations      bool
+	hasGenericBatchLookupAndDelete bool
+	hasLPMTrieBatchOperations      bool
 
 	updateWorkers *asyncMapUpdaterPool
 
@@ -90,19 +98,20 @@ var _ ebpfapi.EbpfHandler = &ebpfMapsImpl{}
 //
 // It further spawns background workers for deferred map updates; the given
 // context can be used to terminate them on shutdown.
-func LoadMaps(ctx context.Context, maps map[string]*cebpf.Map,
+func LoadMaps(ctx context.Context, includeTracers types.IncludedTracers, maps map[string]*cebpf.Map, stackdeltaInnerMapSpec *cebpf.MapSpec,
 	progs map[string]*cebpf.Program, coll *cebpf.CollectionSpec) (ebpfapi.EbpfHandler, error) {
 	impl := &ebpfMapsImpl{
-		coll:          coll,
-		perfProgsFD:   maps["perf_progs"].FD(),
-		probeProgsMap: maps["kprobe_progs"],
-		usdtSpecsMap:  maps["__bpf_usdt_specs"],
-		nextSpecID:    0,
+		stackdeltaInnerMapTemplate: stackdeltaInnerMapSpec,
+		coll:                       coll,
+		perfProgsFD:                maps["perf_progs"].FD(),
+		probeProgsMap:              maps["kprobe_progs"],
+		usdtSpecsMap:               maps["__bpf_usdt_specs"],
+		nextSpecID:                 0,
 	}
 	impl.errCounter = make(map[metrics.MetricID]int64)
 
 	implRefVal := reflect.ValueOf(impl).Elem()
-	implRefType := reflect.TypeOf(impl).Elem()
+	implRefType := reflect.TypeFor[ebpfMapsImpl]()
 	for i := 0; i < implRefType.NumField(); i++ {
 		fieldType := implRefType.Field(i)
 		nameTag, ok := fieldType.Tag.Lookup("name")
@@ -111,6 +120,9 @@ func LoadMaps(ctx context.Context, maps map[string]*cebpf.Map,
 		}
 		mapVal, ok := maps[nameTag]
 		if !ok {
+			if !types.IsMapEnabled(nameTag, includeTracers) {
+				continue
+			}
 			log.Fatalf("Map %v is not available", nameTag)
 		}
 		implRefVal.Field(i).Set(reflect.ValueOf(mapVal))
@@ -130,6 +142,11 @@ func LoadMaps(ctx context.Context, maps map[string]*cebpf.Map,
 	if err := probeBatchOperations(cebpf.Hash); err == nil {
 		log.Infof("Supports generic eBPF map batch operations")
 		impl.hasGenericBatchOperations = true
+	}
+
+	if err := probeBatchLookupAndDelete(cebpf.Hash); err == nil {
+		log.Infof("Supports generic eBPF map batch lookup-and-delete")
+		impl.hasGenericBatchLookupAndDelete = true
 	}
 
 	if err := probeBatchOperations(cebpf.LPMTrie); err == nil {
@@ -413,12 +430,12 @@ func (impl *ebpfMapsImpl) loadUSDTProgram(progName string, useMulti bool) error 
 		if ve, ok := err.(*cebpf.VerifierError); ok {
 			log.Errorf("failed to load %s: %v", progSpec.Name, ve.Unwrap())
 			for _, line := range ve.Log {
-				log.Error(line)
+				log.Errorf("%s", line)
 			}
 		} else {
 			scanner := bufio.NewScanner(strings.NewReader(err.Error()))
 			for scanner.Scan() {
-				log.Error(scanner.Text())
+				log.Errorf("%s", scanner.Text())
 			}
 		}
 		return fmt.Errorf("failed to load %s: %w", progSpec.Name, err)
@@ -469,7 +486,8 @@ func (impl *ebpfMapsImpl) CoredumpTest() bool {
 
 // UpdateInterpreterOffsets adds the given moduleRanges to the eBPF map interpreterOffsets.
 func (impl *ebpfMapsImpl) UpdateInterpreterOffsets(ebpfProgIndex uint16, fileID host.FileID,
-	offsetRanges []util.Range) error {
+	offsetRanges []util.Range,
+) error {
 	key, value, err := ebpfapi.InterpreterOffsetKeyValue(ebpfProgIndex, fileID, offsetRanges)
 	if err != nil {
 		return err
@@ -500,6 +518,8 @@ func (impl *ebpfMapsImpl) getInterpreterTypeMap(typ libpf.InterpreterType) (*ceb
 		return impl.RubyProcs, nil
 	case libpf.V8:
 		return impl.V8Procs, nil
+	case libpf.BEAM:
+		return impl.BeamProcs, nil
 	case libpf.APMInt:
 		return impl.ApmIntProcs, nil
 	case libpf.GoLabels:
@@ -515,7 +535,8 @@ func (impl *ebpfMapsImpl) getInterpreterTypeMap(typ libpf.InterpreterType) (*ceb
 
 // UpdateProcData adds the given PID specific data to the specified interpreter data eBPF map.
 func (impl *ebpfMapsImpl) UpdateProcData(typ libpf.InterpreterType, pid libpf.PID,
-	data unsafe.Pointer) error {
+	data unsafe.Pointer,
+) error {
 	log.Debugf("Loading symbol addresses into eBPF map for PID %d type %d",
 		pid, typ)
 	ebpfMap, err := impl.getInterpreterTypeMap(typ)
@@ -525,6 +546,10 @@ func (impl *ebpfMapsImpl) UpdateProcData(typ libpf.InterpreterType, pid libpf.PI
 
 	pid32 := uint32(pid)
 	if err := ebpfMap.Update(unsafe.Pointer(&pid32), data, cebpf.UpdateAny); err != nil {
+		if errors.Is(err, unix.E2BIG) {
+			return fmt.Errorf("no more space in map %v", typ)
+		}
+
 		return fmt.Errorf("failed to add %v info: %s", typ, err)
 	}
 	return nil
@@ -565,7 +590,8 @@ func getPIDPageFromPrefix(pid libpf.PID, prefix lpm.Prefix) support.PIDPage {
 // UpdatePidInterpreterMapping updates the eBPF map pidPageToMappingInfo with the
 // data required to call the correct interpreter unwinder for that memory region.
 func (impl *ebpfMapsImpl) UpdatePidInterpreterMapping(pid libpf.PID, prefix lpm.Prefix,
-	interpreterProgram uint8, fileID host.FileID, bias uint64) error {
+	interpreterProgram uint8, fileID host.FileID, bias uint64,
+) error {
 	cKey := getPIDPageFromPrefix(pid, prefix)
 	biasAndUnwindProgram, err := support.EncodeBiasAndUnwindProgram(bias, interpreterProgram)
 	if err != nil {
@@ -653,9 +679,9 @@ func getPIDPageMappingInfo(fileID, biasAndUnwindProgram uint64) *support.PIDPage
 	return cInfo
 }
 
-// probeBatchOperations tests if the BPF syscall accepts batch operations. It
-// returns nil if batch operations are supported for mapType or an error otherwise.
-func probeBatchOperations(mapType cebpf.MapType) error {
+// probeMapOperations tests if the BPF syscall supports operations by running a supplied closure.
+// It returns nil if batch operations are supported for mapType or an error otherwise.
+func probeMapOperations[T constraints.Unsigned](mapType cebpf.MapType, probe func(*cebpf.Map, ptrCastMarshaler[T], ptrCastMarshaler[uint64]) error) error {
 	restoreRlimit, err := rlimit.MaximizeMemlock()
 	if err != nil {
 		// In environment like github action runners, we can not adjust rlimit.
@@ -673,16 +699,11 @@ func probeBatchOperations(mapType cebpf.MapType) error {
 		Flags:      features.BPF_F_NO_PREALLOC,
 	}
 
-	var keys any
-	switch mapType {
-	case cebpf.Array:
+	if mapType == cebpf.Array {
 		// KeySize for Array maps always needs to be 4.
 		mapSpec.KeySize = 4
 		// Array maps are always preallocated.
 		mapSpec.Flags = 0
-		keys = generateSlice[uint32](updates)
-	default:
-		keys = generateSlice[uint64](updates)
 	}
 
 	probeMap, err := cebpf.NewMap(mapSpec)
@@ -692,17 +713,68 @@ func probeBatchOperations(mapType cebpf.MapType) error {
 	}
 	defer probeMap.Close()
 
-	values := generateSlice[uint64](updates)
+	return probe(probeMap, generateSlice[T](updates), generateSlice[uint64](updates))
+}
 
+// probeBatchLookupAndDeleteInner is the inner check to be used by probeBatchLookupAndDelete.
+func probeBatchLookupAndDeleteInner[T constraints.Unsigned](probeMap *cebpf.Map, keys ptrCastMarshaler[T], values ptrCastMarshaler[uint64]) error {
 	n, err := probeMap.BatchUpdate(keys, values, nil)
 	if err != nil {
 		// Older kernel do not support batch operations on maps.
 		// This is just fine and we return here.
 		return err
 	}
-	if n != updates {
+
+	if n != len(keys) {
 		return fmt.Errorf("unexpected batch update return: expected %d but got %d",
-			updates, n)
+			len(keys), n)
+	}
+
+	batchKeys := make([]T, 16)
+	batchValues := make([]uint64, 16)
+
+	n, err = probeMap.BatchLookupAndDelete(&cebpf.MapBatchCursor{}, batchKeys, batchValues, nil)
+	if err != nil && !errors.Is(err, cebpf.ErrKeyNotExist) {
+		return err
+	}
+
+	if n != len(keys) {
+		return fmt.Errorf("unexpected batch lookup-and-delete return: expected %d but got %d",
+			len(keys), n)
+	}
+
+	for i := range n {
+		// Keys can come out of order, so we're checking them against returned values instead of input keys.
+		if uint64(batchKeys[i]) != batchValues[i] {
+			return fmt.Errorf("mismatched batch lookup-and-delete at index %d: expected %d but got %d",
+				i, batchKeys[i], batchValues[i])
+		}
+	}
+
+	return nil
+}
+
+// probeBatchLookupAndDelete tests if the BPF syscall supports batch lookup-and-delete operations.
+// It returns nil if batch operations are supported for mapType or an error otherwise.
+func probeBatchLookupAndDelete(mapType cebpf.MapType) error {
+	if mapType == cebpf.Array {
+		return probeMapOperations(mapType, probeBatchLookupAndDeleteInner[uint32])
+	}
+
+	return probeMapOperations(mapType, probeBatchLookupAndDeleteInner[uint64])
+}
+
+// probeBatchOperationsInner is the inner check to be used by probeBatchOperations.
+func probeBatchOperationsInner[T constraints.Unsigned](probeMap *cebpf.Map, keys ptrCastMarshaler[T], values ptrCastMarshaler[uint64]) error {
+	n, err := probeMap.BatchUpdate(keys, values, nil)
+	if err != nil {
+		// Older kernel do not support batch operations on maps.
+		// This is just fine and we return here.
+		return err
+	}
+	if n != len(keys) {
+		return fmt.Errorf("unexpected batch update return: expected %d but got %d",
+			len(keys), n)
 	}
 
 	// Remove the probe entries from the map.
@@ -710,11 +782,21 @@ func probeBatchOperations(mapType cebpf.MapType) error {
 	if err != nil {
 		return err
 	}
-	if m != updates {
+	if m != len(keys) {
 		return fmt.Errorf("unexpected batch delete return: expected %d but got %d",
-			updates, m)
+			len(keys), m)
 	}
 	return nil
+}
+
+// probeBatchOperations tests if the BPF syscall supports batch update and delete operations.
+// It returns nil if batch operations are supported for mapType or an error otherwise.
+func probeBatchOperations(mapType cebpf.MapType) error {
+	if mapType == cebpf.Array {
+		return probeMapOperations(mapType, probeBatchOperationsInner[uint32])
+	}
+
+	return probeMapOperations(mapType, probeBatchOperationsInner[uint64])
 }
 
 // getMapID returns the mapID number to use for given number of stack deltas.
@@ -747,20 +829,12 @@ func (impl *ebpfMapsImpl) RemoveReportedPID(pid libpf.PID) {
 }
 
 // UpdateUnwindInfo writes UnwindInfo into the unwind info array at the given index
-func (impl *ebpfMapsImpl) UpdateUnwindInfo(index uint16, info sdtypes.UnwindInfo) error {
+func (impl *ebpfMapsImpl) UpdateUnwindInfo(index uint16, value sdtypes.UnwindInfo) error {
 	if uint32(index) >= impl.UnwindInfoArray.MaxEntries() {
 		return fmt.Errorf("unwind info array full (%d/%d items)",
 			index, impl.UnwindInfoArray.MaxEntries())
 	}
-
 	key := uint32(index)
-	value := support.UnwindInfo{
-		Opcode:      info.Opcode,
-		FpOpcode:    info.FPOpcode,
-		MergeOpcode: info.MergeOpcode,
-		Param:       info.Param,
-		FpParam:     info.FPParam,
-	}
 	return impl.trackMapError(metrics.IDUnwindInfoArrayUpdate,
 		impl.UnwindInfoArray.Update(unsafe.Pointer(&key), unsafe.Pointer(&value),
 			cebpf.UpdateAny))
@@ -770,7 +844,8 @@ func (impl *ebpfMapsImpl) UpdateUnwindInfo(index uint16, info sdtypes.UnwindInfo
 // and inserts the elements of the deltas array in this nested map. Returns mapID or error.
 func (impl *ebpfMapsImpl) UpdateExeIDToStackDeltas(fileID host.FileID,
 	deltas []ebpfapi.StackDeltaEBPF) (
-	uint16, error) {
+	uint16, error,
+) {
 	numDeltas := len(deltas)
 	mapID, err := getMapID(uint32(numDeltas))
 	if err != nil {
@@ -783,12 +858,14 @@ func (impl *ebpfMapsImpl) UpdateExeIDToStackDeltas(fileID host.FileID,
 		return 0, fmt.Errorf("failed to increase rlimit: %v", err)
 	}
 	defer restoreRlimit()
-	innerMap, err := cebpf.NewMap(&cebpf.MapSpec{
-		Type:       cebpf.Array,
-		KeySize:    4,
-		ValueSize:  support.Sizeof_StackDelta,
-		MaxEntries: 1 << mapID,
-	})
+
+	innerMapSpec := impl.stackdeltaInnerMapTemplate.Copy()
+	// Set the name of the inner map for easier debugging and
+	// set the MaxEntries depending on mapID.
+	innerMapSpec.Name = fmt.Sprintf("exe_id_to_%d_stack_deltas_inner", mapID)
+	innerMapSpec.MaxEntries = 1 << mapID
+
+	innerMap, err := cebpf.NewMap(innerMapSpec)
 	if err != nil {
 		return 0, fmt.Errorf("failed to create inner map: %v", err)
 	}
@@ -869,7 +946,8 @@ func (impl *ebpfMapsImpl) DeleteExeIDToStackDeltas(fileID host.FileID, mapID uin
 // UpdateStackDeltaPages adds fileID/page with given information to eBPF map. If the entry exists,
 // it will return an error. Otherwise the key/value pairs will be appended to the hash.
 func (impl *ebpfMapsImpl) UpdateStackDeltaPages(fileID host.FileID, numDeltasPerPage []uint16,
-	mapID uint16, firstPageAddr uint64) error {
+	mapID uint16, firstPageAddr uint64,
+) error {
 	firstDelta := uint32(0)
 	keys := make([]support.StackDeltaPageKey, len(numDeltasPerPage))
 	values := make([]support.StackDeltaPageInfo, len(numDeltasPerPage))
@@ -924,7 +1002,8 @@ func (impl *ebpfMapsImpl) DeleteStackDeltaPage(fileID host.FileID, page uint64) 
 // text section that this page can be found at on disk.
 // If the key/value pair already exists it will return an error.
 func (impl *ebpfMapsImpl) UpdatePidPageMappingInfo(pid libpf.PID, prefix lpm.Prefix,
-	fileID, bias uint64) error {
+	fileID, bias uint64,
+) error {
 	biasAndUnwindProgram, err := support.EncodeBiasAndUnwindProgram(bias, support.ProgUnwindNative)
 	if err != nil {
 		return err
@@ -944,7 +1023,8 @@ func (impl *ebpfMapsImpl) UpdatePidPageMappingInfo(pid libpf.PID, prefix lpm.Pre
 // DeletePidPageMappingInfo removes the elements specified by prefixes from eBPF map
 // pid_page_to_mapping_info and returns the number of elements removed.
 func (impl *ebpfMapsImpl) DeletePidPageMappingInfo(pid libpf.PID, prefixes []lpm.Prefix) (int,
-	error) {
+	error,
+) {
 	if impl.hasLPMTrieBatchOperations {
 		deleted, err := impl.DeletePidPageMappingInfoBatch(pid, prefixes)
 		if err != nil {
@@ -959,8 +1039,9 @@ func (impl *ebpfMapsImpl) DeletePidPageMappingInfo(pid libpf.PID, prefixes []lpm
 }
 
 func (impl *ebpfMapsImpl) DeletePidPageMappingInfoSingle(pid libpf.PID, prefixes []lpm.Prefix) (int,
-	error) {
-	var cKey = &support.PIDPage{}
+	error,
+) {
+	cKey := &support.PIDPage{}
 	var deleted int
 	var combinedErrors error
 	for _, prefix := range prefixes {
@@ -976,7 +1057,8 @@ func (impl *ebpfMapsImpl) DeletePidPageMappingInfoSingle(pid libpf.PID, prefixes
 }
 
 func (impl *ebpfMapsImpl) DeletePidPageMappingInfoBatch(pid libpf.PID, prefixes []lpm.Prefix) (int,
-	error) {
+	error,
+) {
 	// Prepare all keys based on the given prefixes.
 	cKeys := make([]support.PIDPage, 0, len(prefixes))
 	for _, prefix := range prefixes {
@@ -992,7 +1074,8 @@ func (impl *ebpfMapsImpl) DeletePidPageMappingInfoBatch(pid libpf.PID, prefixes 
 // the eBPF map pid_page_to_mapping_info.
 // So far this function is used only in tests.
 func (impl *ebpfMapsImpl) LookupPidPageInformation(pid libpf.PID, page uint64) (host.FileID,
-	uint64, error) {
+	uint64, error,
+) {
 	cKey := getPIDPage(pid, page, support.BitWidthPage)
 	cValue := support.PIDPageMappingInfo{}
 	if err := impl.PidPageToMappingInfo.Lookup(unsafe.Pointer(&cKey),
@@ -1008,6 +1091,12 @@ func (impl *ebpfMapsImpl) LookupPidPageInformation(pid libpf.PID, page uint64) (
 // on hash and array maps.
 func (impl *ebpfMapsImpl) SupportsGenericBatchOperations() bool {
 	return impl.hasGenericBatchOperations
+}
+
+// SupportsGenericBatchLookupAndDelete returns true if the kernel supports eBPF batch
+// lookup-and-delete operations on hash and array maps.
+func (impl *ebpfMapsImpl) SupportsGenericBatchLookupAndDelete() bool {
+	return impl.hasGenericBatchLookupAndDelete
 }
 
 // SupportsLPMTrieBatchOperations returns true if the kernel supports eBPF batch operations
@@ -1033,7 +1122,7 @@ func (impl *ebpfMapsImpl) SupportsLPMTrieBatchOperations() bool {
 type ptrCastMarshaler[T any] []T
 
 func (r ptrCastMarshaler[T]) MarshalBinary() (data []byte, err error) {
-	return libpf.SliceFrom(r), nil
+	return pfunsafe.FromSlice(r), nil
 }
 
 // generateSlice returns a slice of type T and populates every value with its index.
