@@ -8,6 +8,7 @@ package golabels // import "go.opentelemetry.io/ebpf-profiler/interpreter/golabe
 import (
 	"fmt"
 
+	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/ebpf-profiler/asm/amd"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
