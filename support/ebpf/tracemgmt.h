@@ -781,7 +781,8 @@ static inline EBPF_INLINE int collect_trace(
 
   if (cuda_id != 0) {
     // Create a CUDA kernel frame, Symbolize will later resolve the kernel name from the ID.
-    u64 *data = push_frame(&record->state, trace, FRAME_MARKER_CUDA_KERNEL, FRAME_FLAG_PID_SPECIFIC, 0, 2);
+    u64 *data =
+      push_frame(&record->state, trace, FRAME_MARKER_CUDA_KERNEL, FRAME_FLAG_PID_SPECIFIC, 0, 2);
     if (!data)
       return ERR_STACK_LENGTH_EXCEEDED;
     data[0] = cuda_id;

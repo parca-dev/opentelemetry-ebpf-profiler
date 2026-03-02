@@ -258,10 +258,11 @@ lj_debug_framepc(PerCPURecord *record, void *fn, u32 *startpc, TValue *prevframe
 // bytecode which we will walk backwards in userland to figure out a name for the
 // callee. The callee_pc is for information purposes only, so the user can see where
 // execution was.
-static inline __attribute__((__always_inline__)) ErrorCode
-lj_push_frame(UnwindState *state, Trace *trace, u64 callee_pt, u64 caller_pt, u32 callee_pc, u32 caller_pc)
+static inline __attribute__((__always_inline__)) ErrorCode lj_push_frame(
+  UnwindState *state, Trace *trace, u64 callee_pt, u64 caller_pt, u32 callee_pc, u32 caller_pc)
 {
-  u64 *data = push_frame(state, trace, FRAME_MARKER_LUAJIT, FRAME_FLAG_PID_SPECIFIC, LUAJIT_NORMAL_FRAME, 3);
+  u64 *data =
+    push_frame(state, trace, FRAME_MARKER_LUAJIT, FRAME_FLAG_PID_SPECIFIC, LUAJIT_NORMAL_FRAME, 3);
   if (!data)
     return ERR_STACK_LENGTH_EXCEEDED;
   data[0] = callee_pt;
@@ -293,7 +294,13 @@ lj_record_frame(PerCPURecord *record, TValue *frame, TValue frame_value, TValue 
     DEBUG_PRINT("lj: lj_record_frame: ffi function %lx", (unsigned long)f->ffid);
     // We can't derive a name for this function, so we'll just emit a pseudo frame.
     // XXX[btv] where does this get read?
-    u64 *data = push_frame(&record->state, &record->trace, FRAME_MARKER_LUAJIT, FRAME_FLAG_PID_SPECIFIC, LUAJIT_FFI_FUNC, 1);
+    u64 *data = push_frame(
+      &record->state,
+      &record->trace,
+      FRAME_MARKER_LUAJIT,
+      FRAME_FLAG_PID_SPECIFIC,
+      LUAJIT_FFI_FUNC,
+      1);
     if (!data)
       return ERR_STACK_LENGTH_EXCEEDED;
     data[0] = frame_value;
@@ -321,7 +328,8 @@ lj_record_frame(PerCPURecord *record, TValue *frame, TValue frame_value, TValue 
 
   DEBUG_PRINT("lj: record frame callee %lx:%u", (unsigned long)scr->prev_proto, scr->prev_pc);
   DEBUG_PRINT("lj: record frame caller %lx:%u", (unsigned long)proto, pc);
-  err = lj_push_frame(&record->state, &record->trace, (u64)scr->prev_proto, (u64)proto, scr->prev_pc, pc);
+  err = lj_push_frame(
+    &record->state, &record->trace, (u64)scr->prev_proto, (u64)proto, scr->prev_pc, pc);
 exit:
   scr->prev_proto = proto;
   scr->prev_pc    = pc;
@@ -414,7 +422,8 @@ walk_luajit_stack(PerCPURecord *record, const LuaJITProcInfo *info, int *next_un
       // a callee proto/pc and no caller proto/pc.  This is fine, we'll make one
       // up, e.g. "main".
       LJScratchSpace *scr = &record->luajitUnwindScratch;
-      if ((err = lj_push_frame(&record->state, &record->trace, (u64)scr->prev_proto, (u64)0, scr->prev_pc, 0))) {
+      if ((err = lj_push_frame(
+             &record->state, &record->trace, (u64)scr->prev_proto, (u64)0, scr->prev_pc, 0))) {
         return err;
       }
       if (record->luajitUnwindState.is_jit) {
@@ -563,7 +572,13 @@ find_context(struct pt_regs *ctx, PerCPURecord *record, const LuaJITProcInfo *in
 
   // If we have valid context let's report it if we haven't mapped its traces yet.
   if (reportG) {
-    u64 *data = push_frame(&record->state, &record->trace, FRAME_MARKER_LUAJIT, FRAME_FLAG_PID_SPECIFIC, LUAJIT_G_REPORT, 1);
+    u64 *data = push_frame(
+      &record->state,
+      &record->trace,
+      FRAME_MARKER_LUAJIT,
+      FRAME_FLAG_PID_SPECIFIC,
+      LUAJIT_G_REPORT,
+      1);
     if (!data)
       return ERR_STACK_LENGTH_EXCEEDED;
     data[0] = (u64)G_ptr;

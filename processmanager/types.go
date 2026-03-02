@@ -109,7 +109,6 @@ type ProcessManager struct {
 	// If it returns true the trace is consumed and not cached or reported.
 	interceptor TraceInterceptor
 
-
 	// exeReporter is the interface to report executables
 	exeReporter reporter.ExecutableReporter
 

@@ -455,8 +455,8 @@ func (l *luajitInstance) Symbolize(frame libpf.EbpfFrame, frames *libpf.Frames, 
 			funcName = "ff-pcall-hook"
 		}
 		frames.Append(&libpf.Frame{
-			Type:           libpf.LuaJITFrame,
-			FunctionName:   libpf.Intern(funcName),
+			Type:         libpf.LuaJITFrame,
+			FunctionName: libpf.Intern(funcName),
 		})
 		return nil
 	case support.LJGReport:

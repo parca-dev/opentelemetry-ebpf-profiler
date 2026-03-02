@@ -180,7 +180,7 @@ type offsetData struct {
 func (o *offsetData) init(ef *pfelf.File) error {
 	o.f = ef
 	o.e = newExtractor(ef)
-	
+
 	var err error
 	o.foundSymbols = scanSymbols(ef)
 	// Two extractors use luaopen_jit so cache it.
