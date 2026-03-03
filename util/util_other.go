@@ -6,7 +6,7 @@
 package util // import "go.opentelemetry.io/ebpf-profiler/internal/linux"
 
 import (
-	"fmt" 
+	"fmt"
 	"runtime"
 )
 
