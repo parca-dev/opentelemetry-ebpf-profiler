@@ -223,6 +223,11 @@ static inline EBPF_INLINE PerCPURecord *get_pristine_per_cpu_record()
   record->rubyUnwindState.stack_ptr         = 0;
   record->rubyUnwindState.last_stack_frame  = 0;
   record->rubyUnwindState.cfunc_saved_frame = 0;
+  record->luajitUnwindState.frame           = 0;
+  record->luajitUnwindState.prevframe       = 0;
+  record->luajitUnwindState.L_ptr           = 0;
+  record->luajitUnwindState.cframe          = 0;
+  record->luajitUnwindState.is_jit          = false;
   record->unwindersDone                     = 0;
   record->tailCalls                         = 0;
   record->ratelimitAction                   = RATELIMIT_ACTION_DEFAULT;
