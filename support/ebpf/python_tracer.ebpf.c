@@ -263,7 +263,7 @@ static EBPF_INLINE ErrorCode get_PyFrame(const PyProcInfo *pyinfo, void **frame)
 // Number of loop iterations in unwind_python. Each iteration handles either
 // one Python frame or one native frame depending on the current unwinder state.
 // This bounds the BPF verifier instruction count.
-#define PYTHON_NATIVE_LOOP_ITERS 9
+#define PYTHON_NATIVE_LOOP_ITERS 8
 
 // step_python processes one Python frame and updates *unwinder to indicate
 // what should happen next
