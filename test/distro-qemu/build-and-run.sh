@@ -14,8 +14,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
+timer_start() { TIMER_START=$(date +%s); }
+timer_end() { echo "::> $1 took $(( $(date +%s) - TIMER_START ))s"; }
+
 # Download parcagpu library
+timer_start
 PARCAGPU_DIR="${PARCAGPU_DIR}" ./download-parcagpu.sh
+timer_end "download parcagpu"
 
 # Determine architecture
 case "$QEMU_ARCH" in
@@ -25,6 +30,7 @@ case "$QEMU_ARCH" in
 esac
 
 # Build test binaries (must be dynamic for dlopen to work)
+timer_start
 echo "Building test binaries for $GOARCH..."
 REPO_ROOT="$(cd ../.. && pwd)"
 TEST_PKGS="./interpreter/rtld ./support/usdt/test ./test/cudaverify"
@@ -38,8 +44,10 @@ TEST_PKGS="./interpreter/rtld ./support/usdt/test ./test/cudaverify"
             go test -c -o "${OUTPUT_DIR}/" ${TEST_PKGS}
     fi
 )
+timer_end "go test -c (build test binaries)"
 
 # Create minimal rootfs (busybox + shared libs only, no debootstrap)
+timer_start
 echo "Creating minimal rootfs..."
 mkdir -p "$ROOTFS_DIR"/{bin,proc,sys,dev,tmp}
 
@@ -131,8 +139,19 @@ mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null || true
 
 # Run the tests
 echo ""
-/rtld.test -test.v && /test.test -test.v && /cudaverify.test -test.v -so-path=/libparcagpucupti.so
-RESULT=$?
+RESULT=0
+for test_bin in /rtld.test /test.test "/cudaverify.test -so-path=/libparcagpucupti.so"; do
+    name=$(echo "$test_bin" | cut -d' ' -f1)
+    T0=$(cat /proc/uptime | cut -d' ' -f1)
+    $test_bin -test.v
+    rc=$?
+    T1=$(cat /proc/uptime | cut -d' ' -f1)
+    echo "::> $name took ${T0}s-${T1}s (uptime)"
+    if [ $rc -ne 0 ]; then
+        RESULT=$rc
+        break
+    fi
+done
 
 if [ $RESULT -eq 0 ]; then
     echo ""
@@ -155,11 +174,14 @@ poweroff -f 2>/dev/null || halt -f
 INIT_EOF
 chmod +x "$ROOTFS_DIR/init"
 
+timer_end "create rootfs"
+
 # Create initramfs
+timer_start
 echo "Creating initramfs..."
 (cd "$ROOTFS_DIR" && find . | cpio -o -H newc | gzip > "$OUTPUT_DIR/initramfs.gz")
-
 echo "Rootfs created: $OUTPUT_DIR/initramfs.gz ($(du -h $OUTPUT_DIR/initramfs.gz | cut -f1))"
+timer_end "create initramfs"
 
 # Check if kernel exists
 if [[ ! -f "${KERN_DIR}/${KERNEL_VERSION}/vmlinuz" ]]; then
@@ -203,6 +225,7 @@ echo "===== Starting QEMU with kernel ${KERNEL_VERSION} on ${QEMU_ARCH} ====="
 echo ""
 
 # Run QEMU and capture output
+timer_start
 QEMU_OUTPUT=$(mktemp)
 ${sudo} qemu-system-${QEMU_ARCH} ${additionalQemuArgs} \
     -nographic \
@@ -215,6 +238,7 @@ ${sudo} qemu-system-${QEMU_ARCH} ${additionalQemuArgs} \
     -no-reboot \
     -display none \
     | tee "$QEMU_OUTPUT"
+timer_end "QEMU execution"
 
 # Parse output for test result
 if grep -q "===== TEST PASSED =====" "$QEMU_OUTPUT"; then
