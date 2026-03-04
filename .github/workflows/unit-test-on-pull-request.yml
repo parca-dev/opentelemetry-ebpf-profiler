@@ -292,7 +292,7 @@ jobs:
             arm64) sudo apt-get -y install qemu-system-arm ipxe-qemu gcc-aarch64-linux-gnu libc6-arm64-cross libc6:arm64 binutils-aarch64-linux-gnu musl-dev:arm64 systemtap-sdt-dev:arm64;;
             *) echo >&2 "bug: bad arch selected"; exit 1;;
           esac
-          sudo apt-get install -y --no-install-recommends debootstrap systemtap-sdt-dev
+          sudo apt-get install -y --no-install-recommends busybox systemtap-sdt-dev
       - name: Get parcagpu image digest
         id: parcagpu-digest
         run: |
