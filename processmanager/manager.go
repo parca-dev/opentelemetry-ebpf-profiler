@@ -260,7 +260,7 @@ func (pm *ProcessManager) convertFrame(pid libpf.PID, ef libpf.EbpfFrame, dst *l
 		// Preserve AddressOrLineno which encodes correlation ID | (CBID << 32).
 		dst.Append(&libpf.Frame{
 			Type:            ef.Type(),
-			AddressOrLineno: libpf.AddressOrLineno(ef.Data()),
+			AddressOrLineno: libpf.AddressOrLineno(ef.Variable(0)),
 		})
 	default:
 		err := pm.symbolizeFrame(pid, ef, dst, libpf.FrameMapping{})

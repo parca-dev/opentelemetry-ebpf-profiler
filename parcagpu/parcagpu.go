@@ -111,7 +111,7 @@ func Start(ctx context.Context, tr *tracer.Tracer,
 		var cbid int32
 		for frames := libpf.EbpfFrame(rawTrace.FrameData); len(frames) > 0; frames = frames[frames.Length():] {
 			if frames.Type() == libpf.CUDAKernelFrame {
-				lineno := frames.Data()
+				lineno := frames.Variable(0)
 				correlationID = uint32(lineno)
 				cbid = int32(lineno >> 32)
 				break
