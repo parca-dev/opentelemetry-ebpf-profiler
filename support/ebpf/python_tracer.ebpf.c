@@ -64,7 +64,7 @@ static EBPF_INLINE ErrorCode process_python_frame(
 
   // Read PyFrameObject
   if (bpf_probe_read_user(pss->frame, sizeof(pss->frame), py_frameobject)) {
-    DEBUG_PRINT("Failed to read PyFrameObject 0x%lx", (unsigned long)py_frameobject);
+    // DEBUG_PRINT("Failed to read PyFrameObject 0x%lx", (unsigned long)py_frameobject);
     increment_metric(metricID_UnwindPythonErrBadFrameCodeObjectAddr);
     return ERR_PYTHON_BAD_FRAME_OBJECT_ADDR;
   }
@@ -119,10 +119,10 @@ static EBPF_INLINE ErrorCode process_python_frame(
   }
 
   if (!py_codeobject) {
-    DEBUG_PRINT(
-      "Null codeobject for PyFrameObject 0x%lx 0x%lx",
-      (unsigned long)py_frameobject,
-      (unsigned long)(py_frameobject + pyinfo->PyFrameObject_f_code));
+    // DEBUG_PRINT(
+    //   "Null codeobject for PyFrameObject 0x%lx 0x%lx",
+    //   (unsigned long)py_frameobject,
+    //   (unsigned long)(py_frameobject + pyinfo->PyFrameObject_f_code));
     increment_metric(metricID_UnwindPythonZeroFrameCodeObject);
     goto push_frame;
   }
@@ -139,8 +139,8 @@ static EBPF_INLINE ErrorCode process_python_frame(
   // Read PyCodeObject
   long pycode_err = bpf_probe_read_user(pss->code, sizeof(pss->code), py_codeobject);
   if (pycode_err) {
-    DEBUG_PRINT(
-      "Failed to read PyCodeObject at 0x%lx err=%ld", (unsigned long)(py_codeobject), pycode_err);
+    // DEBUG_PRINT(
+    //   "Failed to read PyCodeObject at 0x%lx err=%ld", (unsigned long)(py_codeobject), pycode_err);
     increment_metric(metricID_UnwindPythonErrBadCodeObjectArgCountAddr);
     // Push the frame with the code object address so the agent can try to
     // read it via /proc/pid/mem (which supports page faults unlike BPF).
@@ -263,7 +263,7 @@ static EBPF_INLINE ErrorCode get_PyFrame(const PyProcInfo *pyinfo, void **frame)
 // Number of loop iterations in unwind_python. Each iteration handles either
 // one Python frame or one native frame depending on the current unwinder state.
 // This bounds the BPF verifier instruction count.
-#define PYTHON_NATIVE_LOOP_ITERS 8
+#define PYTHON_NATIVE_LOOP_ITERS 9
 
 // step_python processes one Python frame and updates *unwinder to indicate
 // what should happen next
