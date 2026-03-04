@@ -57,11 +57,10 @@ const (
 var (
 	// ErrNotELF is returned when the file is not an ELF file.
 	ErrNotELF = errors.New("not an ELF file")
-	ErrNoTLS = errors.New("no TLS program header")
+	ErrNoTLS  = errors.New("no TLS program header")
 	// ErrSectionNotPreset is returned when a section is not present
 	ErrSectionNotPresent = errors.New("section not present")
 )
-
 
 // File represents an open ELF file
 type File struct {
