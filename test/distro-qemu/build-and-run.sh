@@ -4,150 +4,122 @@ set -ex
 # Configuration
 KERNEL_VERSION="${1:-5.10.217}"
 QEMU_ARCH="${QEMU_ARCH:-x86_64}"
-DISTRO="${DISTRO:-ubuntu}"  # debian or ubuntu
-RELEASE="${RELEASE:-jammy}"  # jammy/noble for ubuntu (with USDT probes), bullseye for debian
 ROOTFS_DIR=$(mktemp -d /tmp/distro-qemu-rootfs.XXXXXX)
 OUTPUT_DIR=$(mktemp -d /tmp/distro-qemu-output.XXXXXX)
 KERN_DIR="${KERN_DIR:-ci-kernels}"
 PARCAGPU_DIR="${PARCAGPU_DIR:-parcagpu-lib}"
-CACHE_DIR="${CACHE_DIR:-/tmp/debootstrap-cache}"
 
 cleanup() {
-    if [ -d "$ROOTFS_DIR" ]; then
-        findmnt -o TARGET -n -l | grep "^${ROOTFS_DIR}" | sort -r | while read -r mp; do
-            sudo umount "$mp" || sudo umount -l "$mp" || true
-        done
-        sudo rm -rf "$ROOTFS_DIR"
-    fi
-    rm -rf "$OUTPUT_DIR"
+    rm -rf "$ROOTFS_DIR" "$OUTPUT_DIR"
 }
 trap cleanup EXIT
 
 # Download parcagpu library
 PARCAGPU_DIR="${PARCAGPU_DIR}" ./download-parcagpu.sh
 
-echo "Building rootfs with $DISTRO $RELEASE..."
-
-mkdir -p "$CACHE_DIR"
-
-# Determine debootstrap architecture
-DEBOOTSTRAP_ARCH="amd64"
+# Determine architecture
 case "$QEMU_ARCH" in
-    x86_64)
-        DEBOOTSTRAP_ARCH="amd64"
-        ;;
-    aarch64)
-        DEBOOTSTRAP_ARCH="arm64"
-        ;;
-    *)
-        echo "Unsupported QEMU_ARCH: $QEMU_ARCH"
-        exit 1
-        ;;
+    x86_64)  GOARCH="amd64";;
+    aarch64) GOARCH="arm64";;
+    *) echo "Unsupported QEMU_ARCH: $QEMU_ARCH"; exit 1;;
 esac
 
-GOARCH=$DEBOOTSTRAP_ARCH
-
-# Choose mirror based on distro and architecture
-if [[ "$DISTRO" == "ubuntu" ]]; then
-    # Ubuntu ARM64 packages are on ports.ubuntu.com
-    if [[ "$DEBOOTSTRAP_ARCH" == "arm64" ]]; then
-        MIRROR="http://ports.ubuntu.com/ubuntu-ports/"
-    else
-        MIRROR="http://mirrors.layeronline.com/ubuntu/"
-    fi
-else
-    MIRROR="http://deb.debian.org/debian/"
-fi
-
-# Create minimal rootfs with debootstrap (requires sudo for chroot operations)
-echo "Running debootstrap to create $DISTRO $RELEASE rootfs for $DEBOOTSTRAP_ARCH..."
-sudo debootstrap --variant=minbase \
-    --arch="$DEBOOTSTRAP_ARCH" \
-    --cache-dir="$CACHE_DIR" \
-    "$RELEASE" "$ROOTFS_DIR" "$MIRROR" || cat "$ROOTFS_DIR/debootstrap/debootstrap.log"
-
-# Change ownership of rootfs to current user to avoid needing sudo for subsequent operations
-sudo chown -R "$(id -u):$(id -g)" "$ROOTFS_DIR"
-
-# Build the test binary (must be dynamic for dlopen to work)
-echo "Building test binary for $DISTRO $RELEASE $DEBOOTSTRAP_ARCH..."
-
+# Build test binaries (must be dynamic for dlopen to work)
+echo "Building test binaries for $GOARCH..."
 REPO_ROOT="$(cd ../.. && pwd)"
 TEST_PKGS="./interpreter/rtld ./support/usdt/test ./test/cudaverify"
-
-# For cross-compilation or Ubuntu jammy/noble, local build works (host has compatible or newer glibc)
-# For older distros, would need Docker build (disabled by default for speed)
-if [[ "${USE_DOCKER}" == "1" ]] && command -v docker &> /dev/null; then
-    # Determine base image
-    if [[ "$DISTRO" == "ubuntu" ]]; then
-        BASE_IMAGE="ubuntu:${RELEASE}"
+(
+    cd "${REPO_ROOT}"
+    if [ "$GOARCH" = "arm64" ] && [ "$(uname -m)" = "x86_64" ]; then
+        CGO_ENABLED=1 GOARCH=${GOARCH} CC=aarch64-linux-gnu-gcc \
+            go test -c -o "${OUTPUT_DIR}/" ${TEST_PKGS}
     else
-        BASE_IMAGE="debian:${RELEASE}"
+        CGO_ENABLED=1 GOARCH=${GOARCH} \
+            go test -c -o "${OUTPUT_DIR}/" ${TEST_PKGS}
     fi
+)
 
-    # Build in container to match target glibc (slow, downloads Go)
-    echo "Using Docker to build with matching glibc version..."
-    docker run --rm \
-        -v "${REPO_ROOT}:/workspace" \
-        -v "${OUTPUT_DIR}:/output" \
-        -w /workspace \
-        --platform "linux/${DEBOOTSTRAP_ARCH}" \
-        "$BASE_IMAGE" \
-        bash -c "apt-get update -qq && apt-get install -y -qq wget libc6-dev gcc > /dev/null 2>&1 && \
-                 wget -q https://go.dev/dl/go1.24.7.linux-${GOARCH}.tar.gz && \
-                 tar -C /usr/local -xzf go1.24.7.linux-${GOARCH}.tar.gz && \
-                 export PATH=/usr/local/go/bin:\$PATH && \
-                 CGO_ENABLED=1 go test -c -o /output/ ${TEST_PKGS}"
-else
-    # Local build with cross-compilation if needed
-    echo "Building locally for ${GOARCH}..."
-    (
-        cd "${REPO_ROOT}"
-        if [ "$GOARCH" = "arm64" ]; then
-            CGO_ENABLED=1 GOARCH=${GOARCH} CC=aarch64-linux-gnu-gcc \
-                go test -c -o "${OUTPUT_DIR}/" ${TEST_PKGS}
-        else
-            CGO_ENABLED=1 GOARCH=${GOARCH} \
-                go test -c -o "${OUTPUT_DIR}/" ${TEST_PKGS}
+# Create minimal rootfs (busybox + shared libs only, no debootstrap)
+echo "Creating minimal rootfs..."
+mkdir -p "$ROOTFS_DIR"/{bin,proc,sys,dev,tmp}
+
+# Install busybox for shell and basic utilities
+BUSYBOX=$(command -v busybox 2>/dev/null || true)
+if [ -z "$BUSYBOX" ]; then
+    echo "ERROR: busybox not found. Install busybox-static."
+    exit 1
+fi
+cp "$BUSYBOX" "$ROOTFS_DIR/bin/busybox"
+chmod +x "$ROOTFS_DIR/bin/busybox"
+for cmd in sh mount umount dmesg poweroff halt reboot hostname uname find head tail sleep cat grep; do
+    ln -sf busybox "$ROOTFS_DIR/bin/$cmd"
+done
+
+# Copy shared libraries needed by test binaries
+copy_lib_deps() {
+    local binary="$1"
+    # Copy ELF interpreter
+    local interp
+    interp=$(readelf -l "$binary" 2>/dev/null | grep -oP 'Requesting program interpreter: \K[^\]]+' || true)
+    if [ -n "$interp" ] && [ -f "$interp" ]; then
+        install -Dm755 "$interp" "$ROOTFS_DIR$interp"
+    fi
+    # Copy all shared library dependencies
+    ldd "$binary" 2>/dev/null | while read -r line; do
+        # Match lines like: libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x...)
+        lib=$(echo "$line" | grep -oP '=> \K/\S+' || true)
+        if [ -n "$lib" ] && [ -f "$lib" ] && [ ! -f "$ROOTFS_DIR$lib" ]; then
+            real=$(readlink -f "$lib")
+            install -Dm755 "$real" "$ROOTFS_DIR$real"
+            # Preserve symlink if the path differs from the real file
+            if [ "$real" != "$lib" ]; then
+                mkdir -p "$ROOTFS_DIR$(dirname "$lib")"
+                ln -sf "$real" "$ROOTFS_DIR$lib"
+            fi
         fi
-    )
+    done
+}
+
+for binary in "${OUTPUT_DIR}"/*.test; do
+    copy_lib_deps "$binary"
+done
+
+# Ensure libm.so is available for rtld test (it dlopens libm at runtime,
+# so it won't appear in ldd output)
+LIBM=$(find /lib* /usr/lib* -name 'libm.so.6' -type f 2>/dev/null | head -1)
+if [ -n "$LIBM" ] && [ ! -f "$ROOTFS_DIR$LIBM" ]; then
+    real=$(readlink -f "$LIBM")
+    install -Dm755 "$real" "$ROOTFS_DIR$real"
+    if [ "$real" != "$LIBM" ]; then
+        mkdir -p "$ROOTFS_DIR$(dirname "$LIBM")"
+        ln -sf "$real" "$ROOTFS_DIR$LIBM"
+    fi
 fi
 
 # Copy test binaries and parcagpu .so into rootfs
 cp "${OUTPUT_DIR}"/*.test "$ROOTFS_DIR/"
 cp "${PARCAGPU_DIR}/libparcagpucupti.so" "$ROOTFS_DIR/"
 
-# List dynamic dependencies for debugging
+# Show what we have for debugging
 echo "Test binary dependencies:"
 ldd "${OUTPUT_DIR}/rtld.test" || true
+echo ""
+echo "Rootfs contents:"
+find "$ROOTFS_DIR" -type f -o -type l | sort
+echo ""
 
 # Create init script
-cat << 'EOF' > "$ROOTFS_DIR/init"
+cat << 'INIT_EOF' > "$ROOTFS_DIR/init"
 #!/bin/sh
+export PATH=/bin
+
 echo "===== Test Environment ====="
 echo "Kernel: $(uname -r)"
-echo "Hostname: $(hostname)"
-
-# Find and display ld.so info
-LDSO=$(find /lib* /usr/lib* -name 'ld-linux*' -o -name 'ld-*.so*' 2>/dev/null | head -1)
-echo "ld.so location: $LDSO"
-if [ -n "$LDSO" ]; then
-    echo "ld.so version: $($LDSO --version | head -1)"
-fi
-
-# Find libm for dlopen test
-LIBM=$(find /lib* /usr/lib* -name 'libm.so*' 2>/dev/null | head -1)
-echo "libm.so location: $LIBM"
-
-echo "================================="
 
 # Mount required filesystems
 mount -t proc proc /proc 2>/dev/null || true
 mount -t sysfs sys /sys 2>/dev/null || true
 mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null || true
-
-# Enable debug logging
-export DEBUG_TEST=1
 
 # Run the tests
 echo ""
@@ -167,17 +139,12 @@ else
     echo "===== TEST FAILED (exit code: $RESULT) ====="
 fi
 
-# Give time to see output before shutdown
+# Shutdown
 sleep 1
-
-# Try to cleanly shutdown QEMU
-# The sysrq 'o' trigger will power off the system
 echo o > /proc/sysrq-trigger 2>/dev/null
-
-# If sysrq doesn't work, force halt
 sleep 1
 poweroff -f 2>/dev/null || halt -f
-EOF
+INIT_EOF
 chmod +x "$ROOTFS_DIR/init"
 
 # Create initramfs
