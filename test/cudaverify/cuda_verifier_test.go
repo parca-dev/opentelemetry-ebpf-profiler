@@ -3,16 +3,20 @@
 package cudaverify
 
 import (
+	"bytes"
 	"context"
 	"flag"
 	"math"
 	"os"
 	"testing"
 	"time"
+	"unsafe"
 
+	"github.com/cilium/ebpf/perf"
 	"github.com/stretchr/testify/require"
 
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
+	"go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
@@ -204,4 +208,147 @@ func TestCUDAVerifierMultiProbe(t *testing.T) {
 	defer lc.Unload()
 
 	t.Log("MultiProbe: all CUDA eBPF programs passed the BPF verifier")
+}
+
+// runEndToEnd is the shared implementation for end-to-end CUDA USDT probe tests.
+// It loads eBPF programs, attaches probes, simulates kernel launches via the mock
+// CUPTI layer, and verifies that timing events arrive on the cuda_timing_events
+// perf buffer with expected data.
+func runEndToEnd(t *testing.T, multiProbe bool) {
+	t.Helper()
+
+	probes := parseProbes(t)
+	tr, ebpfHandler, cancel := createTracer(t)
+	defer tr.Close()
+	defer cancel()
+
+	if !multiProbe {
+		noMulti := false
+		util.SetTestOnlyMultiUprobeSupport(&noMulti)
+		defer util.SetTestOnlyMultiUprobeSupport(nil)
+	}
+
+	cookies, progNames := buildCookiesAndProgNames(probes)
+
+	// For multi-probe, set up the tail-call prog array.
+	if multiProbe {
+		for _, probe := range probes {
+			if probe.Name == "activity_batch" {
+				err := ebpfHandler.UpdateProgArray("cuda_progs", 0, "cuda_activity_batch_tail")
+				require.NoError(t, err, "UpdateProgArray failed for cuda_activity_batch")
+				break
+			}
+		}
+	}
+
+	// Determine multi-probe program name.
+	multiProgName := ""
+	if multiProbe {
+		multiProgName = "cuda_probe"
+	}
+
+	lc, err := ebpfHandler.AttachUSDTProbes(
+		libpf.PID(os.Getpid()),
+		*soPath,
+		multiProgName,
+		probes,
+		cookies,
+		progNames,
+	)
+	require.NoError(t, err, "AttachUSDTProbes failed")
+	defer lc.Unload()
+
+	// Set up perf reader on the cuda_timing_events map.
+	timingMap := tr.GetEbpfMaps()["cuda_timing_events"]
+	require.NotNil(t, timingMap, "cuda_timing_events map not found")
+
+	reader, err := perf.NewReader(timingMap, 1024*1024)
+	require.NoError(t, err, "perf.NewReader failed")
+	defer reader.Close()
+
+	// Load the .so and call InitializeInjection via mock CUPTI.
+	rc := cInitParcaGPU(*soPath)
+	require.Equal(t, 0, rc, "init_parcagpu failed")
+	defer cCleanupParcaGPU()
+
+	// Simulate a kernel launch (fires cuda_correlation USDT).
+	cSimulateKernelLaunch(42)
+
+	// Simulate buffer completion (fires kernel_executed + activity_batch USDTs).
+	cSimulateBufferCompletion(42, 0, 7, "testKernel")
+
+	// Poll perf reader for timing events.
+	var events []gpu.CuptiTimingEvent
+	deadline := time.After(5 * time.Second)
+	var rec perf.Record
+
+	for {
+		// Set a read deadline so we don't block forever.
+		reader.SetDeadline(time.Now().Add(200 * time.Millisecond))
+		err := reader.ReadInto(&rec)
+		if err != nil {
+			select {
+			case <-deadline:
+				goto done
+			default:
+				continue
+			}
+		}
+		if rec.LostSamples != 0 || len(rec.RawSample) == 0 {
+			continue
+		}
+		ev := (*gpu.CuptiTimingEvent)(unsafe.Pointer(&rec.RawSample[0]))
+		events = append(events, *ev)
+		t.Logf("Received timing event: pid=%d id=%d dev=%d stream=%d kernel=%s",
+			ev.Pid, ev.Id, ev.Dev, ev.Stream,
+			string(ev.KernelName[:bytes.IndexByte(ev.KernelName[:], 0)]))
+	}
+done:
+
+	require.NotEmpty(t, events, "no timing events received from cuda_timing_events perf buffer")
+
+	// Verify at least one event matches our simulated kernel.
+	found := false
+	for _, ev := range events {
+		nameBytes := ev.KernelName[:]
+		if idx := bytes.IndexByte(nameBytes, 0); idx >= 0 {
+			nameBytes = nameBytes[:idx]
+		}
+		if ev.Id == 42 && ev.Dev == 0 && ev.Stream == 7 &&
+			string(nameBytes) == "testKernel" {
+			found = true
+			break
+		}
+	}
+	require.True(t, found,
+		"expected timing event with correlation_id=42, device_id=0, stream_id=7, kernel_name=testKernel; got %+v", events)
+}
+
+// TestCUDAEndToEndSingleShot verifies that CUDA USDT probes fire correctly
+// using individual per-probe attachment (kernel 5.15+).
+func TestCUDAEndToEndSingleShot(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("requires root to load eBPF programs")
+	}
+	if !util.HasBpfGetAttachCookie() {
+		t.Skip("requires kernel support for bpf_get_attach_cookie (5.15+)")
+	}
+
+	runEndToEnd(t, false)
+}
+
+// TestCUDAEndToEndMultiProbe verifies that CUDA USDT probes fire correctly
+// using multi-uprobe attachment with tail calls (kernel 6.6+).
+func TestCUDAEndToEndMultiProbe(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("requires root to load eBPF programs")
+	}
+	if !util.HasBpfGetAttachCookie() {
+		t.Skip("requires kernel support for bpf_get_attach_cookie (5.15+)")
+	}
+	if !util.HasMultiUprobeSupport() {
+		t.Skip("requires kernel support for uprobe multi-attach (6.6+)")
+	}
+
+	runEndToEnd(t, true)
 }
