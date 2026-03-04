@@ -257,8 +257,7 @@ fi
 
 # Determine additional QEMU args based on architecture
 additionalQemuArgs=""
-supportKVM=$(grep -E 'vmx|svm' /proc/cpuinfo || true)
-if [ "$supportKVM" ] && [ "$QEMU_ARCH" = "$(uname -m)" ]; then
+if [ -e /dev/kvm ] && [ "$QEMU_ARCH" = "$(uname -m)" ]; then
   additionalQemuArgs="-enable-kvm"
 fi
 
