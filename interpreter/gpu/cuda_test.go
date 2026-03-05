@@ -210,17 +210,14 @@ func TestAddTraceAndTimes(t *testing.T) {
 	trace := makeSymbolizedTrace(0, 2, 100, 1) // CUDA frame at index 0
 	meta := &samples.TraceEventMeta{PID: pid}
 
-	st := &gpu.SymbolizedCudaTrace{
-		Trace:         trace,
-		Meta:          meta,
-		CUDAFrameIdx:  0,
-		CorrelationID: 100,
-		CBID:          1,
+	var finished []gpu.CudaTraceOutput
+	finishTrace := func(t *libpf.Trace, m *samples.TraceEventMeta) {
+		finished = append(finished, gpu.CudaTraceOutput{Trace: t, Meta: m})
 	}
 
-	// AddTrace with no pending timing -> stored, no outputs.
-	outputs := gpu.AddTrace(st)
-	assert.Empty(t, outputs, "no timing yet, should produce no outputs")
+	// InterceptTrace with no pending timing -> stored, finishTrace not called.
+	gpu.InterceptTrace(trace, meta, finishTrace)
+	assert.Empty(t, finished, "no timing yet, should produce no outputs")
 
 	// Now timing arrives.
 	kernelName := [256]byte{}
@@ -236,7 +233,7 @@ func TestAddTraceAndTimes(t *testing.T) {
 		KernelName: kernelName,
 	}}
 
-	outputs = gpu.AddTimes(events)
+	outputs := gpu.AddTimes(events)
 	require.Len(t, outputs, 1, "timing matched, should produce one output")
 
 	out := outputs[0]
@@ -274,22 +271,19 @@ func TestAddTimeThenTrace(t *testing.T) {
 	outputs := gpu.AddTimes(events)
 	assert.Empty(t, outputs)
 
-	// Now trace arrives and matches.
+	// Now trace arrives and matches — finishTrace called immediately.
 	trace := makeSymbolizedTrace(0, 1, 200, 1)
 	meta := &samples.TraceEventMeta{PID: pid}
 
-	st := &gpu.SymbolizedCudaTrace{
-		Trace:         trace,
-		Meta:          meta,
-		CUDAFrameIdx:  0,
-		CorrelationID: 200,
-		CBID:          1,
+	var finished []gpu.CudaTraceOutput
+	finishTrace := func(t *libpf.Trace, m *samples.TraceEventMeta) {
+		finished = append(finished, gpu.CudaTraceOutput{Trace: t, Meta: m})
 	}
 
-	outputs = gpu.AddTrace(st)
-	require.Len(t, outputs, 1)
+	gpu.InterceptTrace(trace, meta, finishTrace)
+	require.Len(t, finished, 1)
 
-	out := outputs[0]
+	out := finished[0]
 	assert.Equal(t, int64(3000), out.Meta.OffTime)
 	assert.Equal(t, "1", out.Trace.CustomLabels[libpf.Intern("cuda_device")].String())
 
@@ -303,12 +297,12 @@ func TestCachedTemplateWithDifferentCorrelationIDs(t *testing.T) {
 	gpu.RegisterTestFixer(pid)
 	t.Cleanup(func() { gpu.UnregisterTestFixer(pid) })
 
-	// Simulate two launches from the same call site (same template) with
-	// different correlation IDs and different kernel names from timing.
-	// This is the scenario where the cache provides the template.
-	// The template's cuda_id will be overwritten by prepTrace anyway,
-	// so we use the first correlation ID here.
-	template := makeSymbolizedTrace(0, 2, 300, 1)
+	// Simulate two launches from the same call site with different correlation
+	// IDs and different kernel names from timing. Trace arrives first each time.
+	var finished []gpu.CudaTraceOutput
+	finishTrace := func(t *libpf.Trace, m *samples.TraceEventMeta) {
+		finished = append(finished, gpu.CudaTraceOutput{Trace: t, Meta: m})
+	}
 
 	for _, tc := range []struct {
 		corrID     uint32
@@ -318,16 +312,10 @@ func TestCachedTemplateWithDifferentCorrelationIDs(t *testing.T) {
 		{corrID: 300, kernelName: "_Z7kernelAv", offTime: 100},
 		{corrID: 301, kernelName: "_Z7kernelBv", offTime: 200},
 	} {
+		trace := makeSymbolizedTrace(0, 2, tc.corrID, 1)
 		meta := &samples.TraceEventMeta{PID: pid}
 
-		st := &gpu.SymbolizedCudaTrace{
-			Trace:         template,
-			Meta:          meta,
-			CUDAFrameIdx:  0,
-			CorrelationID: tc.corrID,
-			CBID:          1,
-		}
-		gpu.AddTrace(st)
+		gpu.InterceptTrace(trace, meta, finishTrace)
 
 		kn := [256]byte{}
 		copy(kn[:], tc.kernelName)
@@ -361,17 +349,17 @@ func TestCUDAFrameIdxNonZero(t *testing.T) {
 	trace := makeSymbolizedTrace(2, 2, 400, 1) // [native, native, CUDA, native, native]
 	meta := &samples.TraceEventMeta{PID: pid}
 
+	var finished []gpu.CudaTraceOutput
+	finishTrace := func(t *libpf.Trace, m *samples.TraceEventMeta) {
+		finished = append(finished, gpu.CudaTraceOutput{Trace: t, Meta: m})
+	}
+
+	// Trace first, timing second.
+	gpu.InterceptTrace(trace, meta, finishTrace)
+	assert.Empty(t, finished)
+
 	kernelName := [256]byte{}
 	copy(kernelName[:], "_Z4testv")
-
-	st := &gpu.SymbolizedCudaTrace{
-		Trace:         trace,
-		Meta:          meta,
-		CUDAFrameIdx:  2,
-		CorrelationID: 400,
-		CBID:          1,
-	}
-	gpu.AddTrace(st)
 
 	outputs := gpu.AddTimes([]gpu.CuptiTimingEvent{{
 		Pid:        uint32(pid),

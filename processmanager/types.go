@@ -41,11 +41,12 @@ type frameCacheKey struct {
 	data [3]uint64
 }
 
-// TraceInterceptor is called after ConvertTrace with the symbolized trace,
-// metadata, and original BPF trace. Return true to consume the trace
-// (skip caching and reporting), false to proceed normally.
+// TraceInterceptor is called after ConvertTrace with the symbolized trace
+// and metadata. Return true to consume the trace (skip caching and
+// reporting), false to proceed normally. The finishTrace callback reports
+// the trace via the normal path (APM notification + reporter).
 type TraceInterceptor func(trace *libpf.Trace, meta *samples.TraceEventMeta,
-	rawTrace *libpf.EbpfTrace) bool
+	finishTrace func(*libpf.Trace, *samples.TraceEventMeta)) bool
 
 // ProcessManager is responsible for managing the events happening throughout the lifespan of a
 // process.
