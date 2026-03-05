@@ -52,8 +52,6 @@ func TestProgramNamesExist(t *testing.T) {
 }
 
 // packCudaID encodes a correlation ID and CBID into the AddressOrLineno value
-// that convertFrame produces for CUDA kernel frames.
-// Layout: correlationID in low 32 bits, cbid in high 32 bits.
 func packCudaID(correlationID uint32, cbid int32) libpf.AddressOrLineno {
 	return libpf.AddressOrLineno(uint64(correlationID) | (uint64(uint32(cbid)) << 32))
 }
