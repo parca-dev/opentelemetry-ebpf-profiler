@@ -27,7 +27,7 @@ const (
 	USDTProgCudaActivityBatchTail = "cuda_activity_batch_tail"
 	USDTProgCudaProbe             = "cuda_probe"
 
-	// BPF attach cookie values — must match CUDA_PROG_* in cuda.ebpf.c.
+	// BPF attach cookie values - must match CUDA_PROG_* in cuda.ebpf.c.
 	// Used in the low 32 bits of the BPF attach cookie so cuda_probe can
 	// distinguish probes.  The cuda_progs prog array uses a fixed key (0)
 	// for the single tail-call target (activity_batch).
@@ -607,7 +607,7 @@ func MaybeClearAll() []metrics.Metric {
 	return out
 }
 
-// Symbolize is a stub — ConvertTrace handles CUDA frames directly via `case libpf.CUDA`,
+// Symbolize is a stub - CUDA frames are handled directly by convertFrame,
 // so this should never be called in normal operation.
 func (i *Instance) Symbolize(f libpf.EbpfFrame, _ *libpf.Frames, _ libpf.FrameMapping) error {
 	return fmt.Errorf("CUDA Symbolize called unexpectedly for frame type %d: %w",

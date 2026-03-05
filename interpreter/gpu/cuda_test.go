@@ -52,7 +52,7 @@ func TestProgramNamesExist(t *testing.T) {
 }
 
 // packCudaID encodes a correlation ID and CBID into the AddressOrLineno value
-// that ConvertTrace produces for CUDA kernel frames.
+// that convertFrame produces for CUDA kernel frames.
 // Layout: correlationID in low 32 bits, cbid in high 32 bits.
 func packCudaID(correlationID uint32, cbid int32) libpf.AddressOrLineno {
 	return libpf.AddressOrLineno(uint64(correlationID) | (uint64(uint32(cbid)) << 32))
@@ -109,7 +109,7 @@ func TestCUDATraceHashStability(t *testing.T) {
 	assert.NotEqual(t, hash1, hash3,
 		"before prepTrace: different CBIDs should produce different hashes")
 
-	// After zeroing (simulating what prepTrace does): same call site → same hash.
+	// After zeroing (simulating what prepTrace does): same call site -> same hash.
 	tr1.Frames[0] = unique.Make(libpf.Frame{Type: libpf.CUDAKernelFrame})
 	tr2.Frames[0] = unique.Make(libpf.Frame{Type: libpf.CUDAKernelFrame})
 	tr3.Frames[0] = unique.Make(libpf.Frame{Type: libpf.CUDAKernelFrame})
@@ -178,7 +178,7 @@ func TestNonCUDATraceHashIncludesAddrOrLine(t *testing.T) {
 		"non-CUDA traces with different addresses must have different hashes")
 }
 
-// makeSymbolizedTrace builds a libpf.Trace that looks like what ConvertTrace
+// makeSymbolizedTrace builds a libpf.Trace that looks like what HandleTrace
 // produces for a CUDA trace: frames before cudaFrameIdx are native, then the
 // CUDAKernelFrame (with packed cuda_id in AddressOrLineno), then more native frames.
 func makeSymbolizedTrace(cudaFrameIdx int, nativeFrameCount int,
@@ -271,7 +271,7 @@ func TestAddTimeThenTrace(t *testing.T) {
 	outputs := gpu.AddTimes(events)
 	assert.Empty(t, outputs)
 
-	// Now trace arrives and matches — finishTrace called immediately.
+	// Now trace arrives and matches - finishTrace called immediately.
 	trace := makeSymbolizedTrace(0, 1, 200, 1)
 	meta := &samples.TraceEventMeta{PID: pid}
 

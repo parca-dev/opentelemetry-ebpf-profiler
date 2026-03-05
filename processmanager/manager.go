@@ -389,7 +389,7 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace) {
 	// finishTrace is the reporting callback passed to the interceptor. It does
 	// not call maybeNotifyAPMAgent: intercepted traces may also be completed on
 	// a different path that lacks bpfTrace context for APM notification, so we
-	// skip it here too for consistency — intercepted traces never notify APM.
+	// skip it here too for consistency - intercepted traces never notify APM.
 	finishTrace := func(t *libpf.Trace, m *samples.TraceEventMeta) {
 		t.Hash = traceutil.HashTrace(t)
 		if err := pm.traceReporter.ReportTraceEvent(t, m); err != nil {
