@@ -6,17 +6,15 @@ package gpu_test
 import (
 	"testing"
 	"unique"
-	"unsafe"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/zeebo/xxh3"
 
-	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/support"
+	"go.opentelemetry.io/ebpf-profiler/traceutil"
 )
 
 // TestProgramNamesExist verifies that the eBPF program names used in cuda.go
@@ -53,148 +51,150 @@ func TestProgramNamesExist(t *testing.T) {
 	})
 }
 
-// computeTraceHash replicates the hash logic from tracer.loadBpfTrace:
-// zero per-sample fields, then hash the raw bytes.
-func computeTraceHash(tr *support.Trace) host.TraceHash {
-	// Work on a copy so we don't mutate the caller's data.
-	clone := *tr
-	clone.ZeroPerSampleFields()
-	raw := unsafe.Slice((*byte)(unsafe.Pointer(&clone)), unsafe.Sizeof(clone))
-	return host.TraceHash(xxh3.Hash128(raw).Lo)
+// packCudaID encodes a correlation ID and CBID into the AddressOrLineno value
+// that ConvertTrace produces for CUDA kernel frames.
+// Layout: correlationID in low 32 bits, cbid in high 32 bits.
+func packCudaID(correlationID uint32, cbid int32) libpf.AddressOrLineno {
+	return libpf.AddressOrLineno(uint64(correlationID) | (uint64(uint32(cbid)) << 32))
 }
 
-// makeCUDATrace builds a support.Trace with one CUDA kernel frame (at position 0)
-// followed by nativFrames native frames. The CUDA frame encodes the given
-// correlationID and cbid.
-func makeCUDATrace(pid uint32, correlationID uint32, cbid int32,
-	nativeFrames []support.Frame) support.Trace {
-	tr := support.Trace{
-		Pid:             pid,
-		Tid:             pid,
-		Origin:          support.TraceOriginCuda,
-		Kernel_stack_id: -1, // no kernel stack
-	}
-
-	// CUDA kernel frame first (matches BPF collect_trace ordering).
-	cudaID := uint64(correlationID) | (uint64(uint32(cbid)) << 32)
-	tr.Frames[0] = support.Frame{
-		Kind:         support.FrameMarkerCUDAKernel,
-		Addr_or_line: cudaID,
-	}
-	tr.Stack_len = 1
-
-	for i, f := range nativeFrames {
-		tr.Frames[1+i] = f
-		tr.Stack_len++
-	}
-
-	return tr
+// makeMapping creates a FrameMapping with the given FileID high bits.
+func makeMapping(fileIDHi uint64) libpf.FrameMapping {
+	return libpf.NewFrameMapping(libpf.FrameMappingData{
+		File: libpf.NewFrameMappingFile(libpf.FrameMappingFileData{
+			FileID: libpf.NewFileID(fileIDHi, 0),
+		}),
+	})
 }
 
+// TestCUDATraceHashStability verifies that traceutil.HashTrace produces the same
+// hash for CUDA traces from the same call site after the CUDA frame's
+// AddressOrLineno is zeroed (as prepTrace does). Different correlation IDs
+// encoded in AddressOrLineno must not affect the output hash.
 func TestCUDATraceHashStability(t *testing.T) {
-	// Two launches from the same call site (identical native frames)
-	// with different correlation IDs must produce the same hash.
-	nativeFrames := []support.Frame{
-		{File_id: 0xaaaa, Addr_or_line: 0x1000, Kind: 8}, // native
-		{File_id: 0xaaaa, Addr_or_line: 0x2000, Kind: 8}, // native
-		{File_id: 0xbbbb, Addr_or_line: 0x3000, Kind: 8}, // native
+	mapping1 := makeMapping(0xaaaa)
+	mapping2 := makeMapping(0xbbbb)
+
+	makeTrace := func(correlationID uint32, cbid int32) *libpf.Trace {
+		trace := &libpf.Trace{}
+		trace.Frames = append(trace.Frames, unique.Make(libpf.Frame{
+			Type:            libpf.CUDAKernelFrame,
+			AddressOrLineno: packCudaID(correlationID, cbid),
+		}))
+		trace.Frames = append(trace.Frames, unique.Make(libpf.Frame{
+			Type:            libpf.NativeFrame,
+			AddressOrLineno: 0x1000,
+			Mapping:         mapping1,
+		}))
+		trace.Frames = append(trace.Frames, unique.Make(libpf.Frame{
+			Type:            libpf.NativeFrame,
+			AddressOrLineno: 0x2000,
+			Mapping:         mapping2,
+		}))
+		return trace
 	}
 
-	tr1 := makeCUDATrace(100, 42, 1, nativeFrames)
-	tr2 := makeCUDATrace(100, 999, 1, nativeFrames)
+	// Same call site, different correlation IDs, same CBID.
+	tr1 := makeTrace(42, 1)
+	tr2 := makeTrace(999, 1)
 
-	hash1 := computeTraceHash(&tr1)
-	hash2 := computeTraceHash(&tr2)
-	assert.Equal(t, hash1, hash2,
-		"same call site with different correlation IDs should produce identical hashes")
+	hash1 := traceutil.HashTrace(tr1)
+	hash2 := traceutil.HashTrace(tr2)
+	assert.NotEqual(t, hash1, hash2,
+		"before prepTrace: different cuda_ids should produce different hashes")
 
-	// Different CBID (different API call type) with same native stack should
-	// also produce the same hash since cbid is part of addr_or_line.
-	tr3 := makeCUDATrace(100, 42, 7, nativeFrames)
-	hash3 := computeTraceHash(&tr3)
-	assert.Equal(t, hash1, hash3,
-		"same call site with different CBIDs should produce identical hashes")
+	// Same call site, same correlation ID, different CBID.
+	tr3 := makeTrace(42, 7)
+	hash3 := traceutil.HashTrace(tr3)
+	assert.NotEqual(t, hash1, hash3,
+		"before prepTrace: different CBIDs should produce different hashes")
+
+	// After zeroing (simulating what prepTrace does): same call site → same hash.
+	tr1.Frames[0] = unique.Make(libpf.Frame{Type: libpf.CUDAKernelFrame})
+	tr2.Frames[0] = unique.Make(libpf.Frame{Type: libpf.CUDAKernelFrame})
+	tr3.Frames[0] = unique.Make(libpf.Frame{Type: libpf.CUDAKernelFrame})
+
+	hash1z := traceutil.HashTrace(tr1)
+	hash2z := traceutil.HashTrace(tr2)
+	hash3z := traceutil.HashTrace(tr3)
+	assert.Equal(t, hash1z, hash2z,
+		"after prepTrace: same call site with different correlation IDs must hash equal")
+	assert.Equal(t, hash1z, hash3z,
+		"after prepTrace: same call site with different CBIDs must hash equal")
 }
 
+// TestCUDATraceHashDiffers verifies that traces with different native stacks
+// produce different hashes.
 func TestCUDATraceHashDiffers(t *testing.T) {
-	framesA := []support.Frame{
-		{File_id: 0xaaaa, Addr_or_line: 0x1000, Kind: 8},
-	}
-	framesB := []support.Frame{
-		{File_id: 0xaaaa, Addr_or_line: 0x2000, Kind: 8}, // different addr
-	}
+	mapping := makeMapping(0xaaaa)
 
-	trA := makeCUDATrace(100, 42, 1, framesA)
-	trB := makeCUDATrace(100, 42, 1, framesB)
+	trA := &libpf.Trace{}
+	trA.Frames = append(trA.Frames, unique.Make(libpf.Frame{
+		Type: libpf.CUDAKernelFrame,
+	}))
+	trA.Frames = append(trA.Frames, unique.Make(libpf.Frame{
+		Type:            libpf.NativeFrame,
+		AddressOrLineno: 0x1000,
+		Mapping:         mapping,
+	}))
 
-	hashA := computeTraceHash(&trA)
-	hashB := computeTraceHash(&trB)
+	trB := &libpf.Trace{}
+	trB.Frames = append(trB.Frames, unique.Make(libpf.Frame{
+		Type: libpf.CUDAKernelFrame,
+	}))
+	trB.Frames = append(trB.Frames, unique.Make(libpf.Frame{
+		Type:            libpf.NativeFrame,
+		AddressOrLineno: 0x2000, // different addr
+		Mapping:         mapping,
+	}))
+
+	hashA := traceutil.HashTrace(trA)
+	hashB := traceutil.HashTrace(trB)
 	assert.NotEqual(t, hashA, hashB,
 		"different native stacks should produce different hashes")
 }
 
-func TestCUDATraceHashExcludesPerSampleFields(t *testing.T) {
-	frames := []support.Frame{
-		{File_id: 0xaaaa, Addr_or_line: 0x1000, Kind: 8},
-	}
-
-	tr1 := makeCUDATrace(100, 42, 1, frames)
-	tr2 := makeCUDATrace(100, 42, 1, frames)
-
-	// Vary all the per-sample fields that should be excluded.
-	tr2.Ktime = 99999
-	tr2.Origin = support.TraceOriginOffCPU
-	tr2.Offtime = 12345
-	tr2.Comm = [16]byte{'d', 'i', 'f', 'f', 'e', 'r', 'e', 'n', 't'}
-
-	hash1 := computeTraceHash(&tr1)
-	hash2 := computeTraceHash(&tr2)
-	assert.Equal(t, hash1, hash2,
-		"per-sample fields (ktime, origin, offtime, comm) must not affect hash")
-}
-
+// TestNonCUDATraceHashIncludesAddrOrLine verifies that for non-CUDA frames,
+// AddressOrLineno is included in the hash.
 func TestNonCUDATraceHashIncludesAddrOrLine(t *testing.T) {
-	// For non-CUDA frames, addr_or_line MUST be included in the hash.
-	makeNative := func(addr uint64) support.Trace {
-		tr := support.Trace{
-			Pid:             100,
-			Tid:             100,
-			Origin:          support.TraceOriginSampling,
-			Stack_len:       1,
-			Kernel_stack_id: -1,
-		}
-		tr.Frames[0] = support.Frame{
-			File_id:      0xaaaa,
-			Addr_or_line: addr,
-			Kind:         8, // native
-		}
-		return tr
+	mapping := makeMapping(0xaaaa)
+
+	makeNative := func(addr uint64) *libpf.Trace {
+		trace := &libpf.Trace{}
+		trace.Frames = append(trace.Frames, unique.Make(libpf.Frame{
+			Type:            libpf.NativeFrame,
+			AddressOrLineno: libpf.AddressOrLineno(addr),
+			Mapping:         mapping,
+		}))
+		return trace
 	}
 
 	tr1 := makeNative(0x1000)
 	tr2 := makeNative(0x2000)
 
-	hash1 := computeTraceHash(&tr1)
-	hash2 := computeTraceHash(&tr2)
+	hash1 := traceutil.HashTrace(tr1)
+	hash2 := traceutil.HashTrace(tr2)
 	assert.NotEqual(t, hash1, hash2,
 		"non-CUDA traces with different addresses must have different hashes")
 }
 
 // makeSymbolizedTrace builds a libpf.Trace that looks like what ConvertTrace
 // produces for a CUDA trace: frames before cudaFrameIdx are native, then the
-// CUDAKernelFrame, then more native frames.
-func makeSymbolizedTrace(cudaFrameIdx int, nativeFrameCount int) *libpf.Trace {
+// CUDAKernelFrame (with packed cuda_id in AddressOrLineno), then more native frames.
+func makeSymbolizedTrace(cudaFrameIdx int, nativeFrameCount int,
+	correlationID uint32, cbid int32) *libpf.Trace {
 	trace := &libpf.Trace{}
 	for i := range cudaFrameIdx + 1 + nativeFrameCount {
 		if i == cudaFrameIdx {
 			trace.Frames = append(trace.Frames, unique.Make(libpf.Frame{
-				Type: libpf.CUDAKernelFrame,
+				Type:            libpf.CUDAKernelFrame,
+				AddressOrLineno: packCudaID(correlationID, cbid),
 			}))
 		} else {
 			trace.Frames = append(trace.Frames, unique.Make(libpf.Frame{
 				Type:            libpf.NativeFrame,
 				AddressOrLineno: libpf.AddressOrLineno(0x1000 * (i + 1)),
-				FileID:          libpf.NewFileID(uint64(i+1), 0),
+				Mapping:         makeMapping(uint64(i + 1)),
 			}))
 		}
 	}
@@ -207,7 +207,7 @@ func TestAddTraceAndTimes(t *testing.T) {
 	t.Cleanup(func() { gpu.UnregisterTestFixer(pid) })
 
 	// Simulate: trace arrives first, timing arrives second.
-	trace := makeSymbolizedTrace(0, 2) // CUDA frame at index 0
+	trace := makeSymbolizedTrace(0, 2, 100, 1) // CUDA frame at index 0
 	meta := &samples.TraceEventMeta{PID: pid}
 
 	st := &gpu.SymbolizedCudaTrace{
@@ -241,8 +241,8 @@ func TestAddTraceAndTimes(t *testing.T) {
 
 	out := outputs[0]
 	assert.Equal(t, int64(1000), out.Meta.OffTime, "OffTime should be End-Start")
-	assert.Equal(t, "0", out.Trace.CustomLabels["cuda_device"])
-	assert.Equal(t, "7", out.Trace.CustomLabels["cuda_stream"])
+	assert.Equal(t, "0", out.Trace.CustomLabels[libpf.Intern("cuda_device")].String())
+	assert.Equal(t, "7", out.Trace.CustomLabels[libpf.Intern("cuda_stream")].String())
 
 	// Verify the CUDA frame got the kernel name and zeroed AddressOrLineno.
 	cudaFrame := out.Trace.Frames[0].Value()
@@ -275,7 +275,7 @@ func TestAddTimeThenTrace(t *testing.T) {
 	assert.Empty(t, outputs)
 
 	// Now trace arrives and matches.
-	trace := makeSymbolizedTrace(0, 1)
+	trace := makeSymbolizedTrace(0, 1, 200, 1)
 	meta := &samples.TraceEventMeta{PID: pid}
 
 	st := &gpu.SymbolizedCudaTrace{
@@ -291,7 +291,7 @@ func TestAddTimeThenTrace(t *testing.T) {
 
 	out := outputs[0]
 	assert.Equal(t, int64(3000), out.Meta.OffTime)
-	assert.Equal(t, "1", out.Trace.CustomLabels["cuda_device"])
+	assert.Equal(t, "1", out.Trace.CustomLabels[libpf.Intern("cuda_device")].String())
 
 	cudaFrame := out.Trace.Frames[0].Value()
 	assert.Equal(t, "_Z6squarePfS_", cudaFrame.FunctionName.String())
@@ -306,7 +306,9 @@ func TestCachedTemplateWithDifferentCorrelationIDs(t *testing.T) {
 	// Simulate two launches from the same call site (same template) with
 	// different correlation IDs and different kernel names from timing.
 	// This is the scenario where the cache provides the template.
-	template := makeSymbolizedTrace(0, 2)
+	// The template's cuda_id will be overwritten by prepTrace anyway,
+	// so we use the first correlation ID here.
+	template := makeSymbolizedTrace(0, 2, 300, 1)
 
 	for _, tc := range []struct {
 		corrID     uint32
@@ -355,8 +357,8 @@ func TestCUDAFrameIdxNonZero(t *testing.T) {
 	gpu.RegisterTestFixer(pid)
 	t.Cleanup(func() { gpu.UnregisterTestFixer(pid) })
 
-	// CUDA frame at index 2 (after two kernel/native frames).
-	trace := makeSymbolizedTrace(2, 2) // [native, native, CUDA, native, native]
+	// CUDA frame at index 2 (after two native frames).
+	trace := makeSymbolizedTrace(2, 2, 400, 1) // [native, native, CUDA, native, native]
 	meta := &samples.TraceEventMeta{PID: pid}
 
 	kernelName := [256]byte{}
