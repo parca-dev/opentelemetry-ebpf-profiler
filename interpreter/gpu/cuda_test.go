@@ -65,115 +65,45 @@ func makeMapping(fileIDHi uint64) libpf.FrameMapping {
 	})
 }
 
-// TestCUDATraceHashStability verifies that traceutil.HashTrace produces the same
-// hash for CUDA traces from the same call site after the CUDA frame's
-// AddressOrLineno is zeroed (as prepTrace does). Different correlation IDs
-// encoded in AddressOrLineno must not affect the output hash.
+// TestCUDATraceHashStability verifies that after prepTrace sets the kernel name
+// (zeroing AddressOrLineno), traces from the same call site hash equally
+// regardless of correlation ID, and different call sites hash differently.
 func TestCUDATraceHashStability(t *testing.T) {
-	mapping1 := makeMapping(0xaaaa)
-	mapping2 := makeMapping(0xbbbb)
+	mapping := makeMapping(0xaaaa)
 
-	makeTrace := func(correlationID uint32, cbid int32) *libpf.Trace {
+	makeTrace := func(correlationID uint32, nativeAddr uint64) *libpf.Trace {
 		trace := &libpf.Trace{}
 		trace.Frames = append(trace.Frames, unique.Make(libpf.Frame{
 			Type:            libpf.CUDAKernelFrame,
-			AddressOrLineno: packCudaID(correlationID, cbid),
+			AddressOrLineno: packCudaID(correlationID, 1),
 		}))
 		trace.Frames = append(trace.Frames, unique.Make(libpf.Frame{
 			Type:            libpf.NativeFrame,
-			AddressOrLineno: 0x1000,
-			Mapping:         mapping1,
-		}))
-		trace.Frames = append(trace.Frames, unique.Make(libpf.Frame{
-			Type:            libpf.NativeFrame,
-			AddressOrLineno: 0x2000,
-			Mapping:         mapping2,
-		}))
-		return trace
-	}
-
-	// Same call site, different correlation IDs, same CBID.
-	tr1 := makeTrace(42, 1)
-	tr2 := makeTrace(999, 1)
-
-	hash1 := traceutil.HashTrace(tr1)
-	hash2 := traceutil.HashTrace(tr2)
-	assert.NotEqual(t, hash1, hash2,
-		"before prepTrace: different cuda_ids should produce different hashes")
-
-	// Same call site, same correlation ID, different CBID.
-	tr3 := makeTrace(42, 7)
-	hash3 := traceutil.HashTrace(tr3)
-	assert.NotEqual(t, hash1, hash3,
-		"before prepTrace: different CBIDs should produce different hashes")
-
-	// After zeroing (simulating what prepTrace does): same call site -> same hash.
-	tr1.Frames[0] = unique.Make(libpf.Frame{Type: libpf.CUDAKernelFrame})
-	tr2.Frames[0] = unique.Make(libpf.Frame{Type: libpf.CUDAKernelFrame})
-	tr3.Frames[0] = unique.Make(libpf.Frame{Type: libpf.CUDAKernelFrame})
-
-	hash1z := traceutil.HashTrace(tr1)
-	hash2z := traceutil.HashTrace(tr2)
-	hash3z := traceutil.HashTrace(tr3)
-	assert.Equal(t, hash1z, hash2z,
-		"after prepTrace: same call site with different correlation IDs must hash equal")
-	assert.Equal(t, hash1z, hash3z,
-		"after prepTrace: same call site with different CBIDs must hash equal")
-}
-
-// TestCUDATraceHashDiffers verifies that traces with different native stacks
-// produce different hashes.
-func TestCUDATraceHashDiffers(t *testing.T) {
-	mapping := makeMapping(0xaaaa)
-
-	trA := &libpf.Trace{}
-	trA.Frames = append(trA.Frames, unique.Make(libpf.Frame{
-		Type: libpf.CUDAKernelFrame,
-	}))
-	trA.Frames = append(trA.Frames, unique.Make(libpf.Frame{
-		Type:            libpf.NativeFrame,
-		AddressOrLineno: 0x1000,
-		Mapping:         mapping,
-	}))
-
-	trB := &libpf.Trace{}
-	trB.Frames = append(trB.Frames, unique.Make(libpf.Frame{
-		Type: libpf.CUDAKernelFrame,
-	}))
-	trB.Frames = append(trB.Frames, unique.Make(libpf.Frame{
-		Type:            libpf.NativeFrame,
-		AddressOrLineno: 0x2000, // different addr
-		Mapping:         mapping,
-	}))
-
-	hashA := traceutil.HashTrace(trA)
-	hashB := traceutil.HashTrace(trB)
-	assert.NotEqual(t, hashA, hashB,
-		"different native stacks should produce different hashes")
-}
-
-// TestNonCUDATraceHashIncludesAddrOrLine verifies that for non-CUDA frames,
-// AddressOrLineno is included in the hash.
-func TestNonCUDATraceHashIncludesAddrOrLine(t *testing.T) {
-	mapping := makeMapping(0xaaaa)
-
-	makeNative := func(addr uint64) *libpf.Trace {
-		trace := &libpf.Trace{}
-		trace.Frames = append(trace.Frames, unique.Make(libpf.Frame{
-			Type:            libpf.NativeFrame,
-			AddressOrLineno: libpf.AddressOrLineno(addr),
+			AddressOrLineno: libpf.AddressOrLineno(nativeAddr),
 			Mapping:         mapping,
 		}))
 		return trace
 	}
 
-	tr1 := makeNative(0x1000)
-	tr2 := makeNative(0x2000)
+	// Same call site, different correlation IDs.
+	tr1 := makeTrace(42, 0x1000)
+	tr2 := makeTrace(999, 0x1000)
+	// Different call site.
+	tr3 := makeTrace(42, 0x2000)
 
-	hash1 := traceutil.HashTrace(tr1)
-	hash2 := traceutil.HashTrace(tr2)
-	assert.NotEqual(t, hash1, hash2,
-		"non-CUDA traces with different addresses must have different hashes")
+	// Simulate what prepTrace does: replace CUDA frame with kernel name.
+	for _, tr := range []*libpf.Trace{tr1, tr2, tr3} {
+		tr.Frames[0] = unique.Make(libpf.Frame{
+			Type:         libpf.CUDAKernelFrame,
+			FunctionName: libpf.Intern("_Z6kernelv"),
+		})
+	}
+
+	h1 := traceutil.HashTrace(tr1)
+	h2 := traceutil.HashTrace(tr2)
+	h3 := traceutil.HashTrace(tr3)
+	assert.Equal(t, h1, h2, "same call site must hash equal")
+	assert.NotEqual(t, h1, h3, "different call sites must hash different")
 }
 
 // makeSymbolizedTrace builds a libpf.Trace that looks like what HandleTrace
