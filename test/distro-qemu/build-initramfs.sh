@@ -7,7 +7,7 @@ set -ex
 # Usage: QEMU_ARCH=x86_64 ./build-initramfs.sh [output-path]
 
 QEMU_ARCH="${QEMU_ARCH:-x86_64}"
-OUTPUT="${1:-initramfs.gz}"
+OUTPUT="$(pwd)/${1:-initramfs.gz}"
 PARCAGPU_DIR="${PARCAGPU_DIR:-parcagpu-lib}"
 
 ROOTFS_DIR=$(mktemp -d /tmp/distro-qemu-rootfs.XXXXXX)
