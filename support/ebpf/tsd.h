@@ -22,14 +22,14 @@ tsd_read(const TSDInfo *tsi, const void *tsd_base, int key, void **out)
 
   tsd_addr += key * tsi->multiplier;
 
-  DEBUG_PRINT("readTSD key %d from address 0x%lx", key, (unsigned long)tsd_addr);
+  DEBUG_PRINT("tsd %d %lx", key, (unsigned long)tsd_addr);
   if (bpf_probe_read_user(out, sizeof(*out), tsd_addr)) {
     goto err;
   }
   return 0;
 
 err:
-  DEBUG_PRINT("Failed to read TSD from 0x%lx", (unsigned long)tsd_addr);
+  DEBUG_PRINT("E%d %lx", metricID_UnwindErrBadTSDAddr, (unsigned long)tsd_addr);
   increment_metric(metricID_UnwindErrBadTSDAddr);
   return -1;
 }
@@ -50,7 +50,7 @@ static inline EBPF_INLINE int tsd_get_base(void **tsd_base)
   // relative to a `task_struct`, so we use that instead.
   void *tpbase_ptr = ((char *)task) + tpbase_offset;
   if (bpf_probe_read_kernel(tsd_base, sizeof(void *), tpbase_ptr)) {
-    DEBUG_PRINT("Failed to read tpbase value");
+    DEBUG_PRINT("E%d", metricID_UnwindErrBadTPBaseAddr);
     increment_metric(metricID_UnwindErrBadTPBaseAddr);
     return -1;
   }

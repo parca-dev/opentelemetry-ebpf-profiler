@@ -151,7 +151,7 @@ static inline EBPF_INLINE bool pid_event_ratelimit(u32 pid, int ratelimit_action
   int err = bpf_map_update_elem(&reported_pids, &pid, &token, BPF_ANY);
   if (err != 0) {
     // Should never happen
-    DEBUG_PRINT("Failed to report PID %d: %d", pid, err);
+    DEBUG_PRINT("E%d %d %d", metricID_ReportedPIDsErr, pid, err);
     increment_metric(metricID_ReportedPIDsErr);
     return true;
   }
@@ -174,8 +174,7 @@ static inline EBPF_INLINE bool report_pid(void *ctx, u64 pid_tgid, int ratelimit
   bool value = true;
   int errNo  = bpf_map_update_elem(&pid_events, &pid_tgid, &value, BPF_ANY);
   if (errNo != 0) {
-    __attribute__((unused)) u32 tid = pid_tgid & 0xFFFFFFFF;
-    DEBUG_PRINT("Failed to update pid_events with PID %d TID: %d: %d", pid, tid, errNo);
+    DEBUG_PRINT("E%d %d %d", metricID_PIDEventsErr, pid, errNo);
     increment_metric(metricID_PIDEventsErr);
     return false;
   }
@@ -302,19 +301,19 @@ static inline EBPF_INLINE bool unwinder_unwind_go_morestack(PerCPURecord *record
 {
   GoLabelsOffsets *offs = bpf_map_lookup_elem(&go_labels_procs, &record->trace.pid);
   if (!offs) {
-    DEBUG_PRINT("morestack: failed to read go labels offsets");
+    DEBUG_PRINT("ERR ms golbl");
     return false;
   }
   void *mptr = get_go_m_ptr(offs, &record->state);
-  DEBUG_PRINT("morestack: curg offset: %d, mptr: %llx\n", offs->curg, (u64)mptr);
+  DEBUG_PRINT("ms c=%d m=%llx", offs->curg, (u64)mptr);
 
   size_t curg_ptr_addr;
   if (bpf_probe_read_user(&curg_ptr_addr, sizeof(void *), (void *)((u64)mptr + offs->curg))) {
-    DEBUG_PRINT("morestack: failed to read value for m_ptr->curg");
+    DEBUG_PRINT("ERR ms m->curg");
     return false;
   }
 
-  DEBUG_PRINT("morestack: curg is %lx\n", curg_ptr_addr);
+  DEBUG_PRINT("ms curg=%lx", curg_ptr_addr);
 
   // Valid since go 1.25:
   // https://github.com/golang/go/blob/7b60d06739/src/runtime/runtime2.go#L303-L322
@@ -322,17 +321,13 @@ static inline EBPF_INLINE bool unwinder_unwind_go_morestack(PerCPURecord *record
   // TODO - make this work on earlier versions.
   unsigned long regs[6];
   if (bpf_probe_read_user(regs, sizeof(regs), (void *)(curg_ptr_addr + 56 /* XXX */))) {
-    DEBUG_PRINT("morestack: failed to read regs");
+    DEBUG_PRINT("ERR ms regs");
     return false;
   }
   record->state.sp = regs[0];
   record->state.pc = regs[1];
   record->state.fp = regs[5];
-  DEBUG_PRINT(
-    "morestack: success, sp is %llx, pc is %llx, fp is %llx",
-    record->state.sp,
-    record->state.pc,
-    record->state.fp);
+  DEBUG_PRINT("ms sp=%llx pc=%llx fp=%llx", record->state.sp, record->state.pc, record->state.fp);
   return true;
 }
 
@@ -435,7 +430,7 @@ static inline EBPF_INLINE ErrorCode resolve_unwind_mapping(PerCPURecord *record,
   if (is_kernel_address(pc)) {
     // This should not happen as we should only be unwinding usermode stacks.
     // Seeing PC point to a kernel address indicates a bad unwind.
-    DEBUG_PRINT("PC value %lx is a kernel address", (unsigned long)pc);
+    DEBUG_PRINT("kern %lx", (unsigned long)pc);
     state->error_metric = metricID_UnwindNativeErrKernelAddress;
     return ERR_NATIVE_UNEXPECTED_KERNEL_ADDRESS;
   }
@@ -445,7 +440,7 @@ static inline EBPF_INLINE ErrorCode resolve_unwind_mapping(PerCPURecord *record,
     // above the value defined in /proc/sys/vm/mmap_min_addr.
     // As such small PC values happens regularly (e.g. by handling or extracting the
     // PC value incorrectly) we track them but don't proceed with unwinding.
-    DEBUG_PRINT("small pc value %lx, ignoring", (unsigned long)pc);
+    DEBUG_PRINT("lo pc %lx", (unsigned long)pc);
     state->error_metric = metricID_UnwindNativeSmallPC;
     return ERR_NATIVE_SMALL_PC;
   }
@@ -458,7 +453,7 @@ static inline EBPF_INLINE ErrorCode resolve_unwind_mapping(PerCPURecord *record,
   // Check if we have the data for this virtual address
   PIDPageMappingInfo *val = bpf_map_lookup_elem(&pid_page_to_mapping_info, &key);
   if (!val) {
-    DEBUG_PRINT("Failure to look up interval memory mapping for PC 0x%lx", (unsigned long)pc);
+    DEBUG_PRINT("ERR mmap %lx", (unsigned long)pc);
     state->error_metric = metricID_UnwindNativeErrWrongTextSection;
     return ERR_NATIVE_NO_PID_PAGE_MAPPING;
   }
@@ -467,15 +462,8 @@ static inline EBPF_INLINE ErrorCode resolve_unwind_mapping(PerCPURecord *record,
   state->text_section_id     = val->file_id;
   state->text_section_offset = pc - state->text_section_bias;
 
-  DEBUG_PRINT(
-    "Text section id for PC %lx is %llx (unwinder %d)",
-    (unsigned long)pc,
-    state->text_section_id,
-    *unwinder);
-  DEBUG_PRINT(
-    "Text section bias is %llx, and offset is %llx",
-    state->text_section_bias,
-    state->text_section_offset);
+  DEBUG_PRINT("ts %lx=%llx u=%d", (unsigned long)pc, state->text_section_id, *unwinder);
+  DEBUG_PRINT("bias=%llx off=%llx", state->text_section_bias, state->text_section_offset);
 
   return ERR_OK;
 }
@@ -503,12 +491,12 @@ static inline EBPF_INLINE int get_next_interpreter(PerCPURecord *record)
   OffsetRange *range = bpf_map_lookup_elem(&interpreter_offsets, &section_id);
   if (range != 0) {
     if (matches_interpreter_range(section_offset, range)) {
-      DEBUG_PRINT("interpreter_offsets match %d", range->program_index);
+      DEBUG_PRINT("ioff m=%d", range->program_index);
       if (!unwinder_is_done(record, range->program_index)) {
         increment_metric(metricID_UnwindCallInterpreter);
         return range->program_index;
       }
-      DEBUG_PRINT("interpreter unwinder done");
+      DEBUG_PRINT("interp done");
     }
   }
   return PROG_UNWIND_NATIVE;
@@ -523,12 +511,12 @@ get_next_unwinder_after_native_frame(PerCPURecord *record, int *unwinder)
   *unwinder          = PROG_UNWIND_STOP;
 
   if (state->pc == 0) {
-    DEBUG_PRINT("Stopping unwind due to unwind failure (PC == 0)");
+    DEBUG_PRINT("pc=0 stop");
     state->error_metric = metricID_UnwindErrZeroPC;
     return ERR_NATIVE_ZERO_PC;
   }
 
-  DEBUG_PRINT("==== Resolve next frame unwinder: frame %d ====", record->trace.num_frames);
+  DEBUG_PRINT("nxt f=%d", record->trace.num_frames);
   ErrorCode error = resolve_unwind_mapping(record, unwinder);
   if (error) {
     return error;
