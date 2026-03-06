@@ -5,18 +5,18 @@ package pdata // import "go.opentelemetry.io/ebpf-profiler/reporter/internal/pda
 
 import (
 	"fmt"
-	"math"
 	"path/filepath"
 	"time"
 
-	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pprofile"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"go.opentelemetry.io/otel/attribute"
 
-	semconv "go.opentelemetry.io/otel/semconv/v1.34.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/reporter/internal/orderedset"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/support"
 )
@@ -25,26 +25,57 @@ const (
 	ExecutableCacheLifetime = 1 * time.Hour
 )
 
-// DummyFileID is used as the FileID for a dummy mapping
-var dummyFileID = libpf.NewFileID(0, 0)
-
 // Generate generates a pdata request out of internal profiles data, to be
-// exported.
+// exported. The collectionStartTime and collectionEndTime define the time window
+// during which the profiler was actively collecting samples.
 func (p *Pdata) Generate(tree samples.TraceEventsTree,
-	agentName, agentVersion string) (pprofile.Profiles, error) {
+	agentName, agentVersion string,
+	collectionStartTime, collectionEndTime time.Time,
+) (pprofile.Profiles, error) {
 	profiles := pprofile.NewProfiles()
-	dic := profiles.ProfilesDictionary()
+	dic := profiles.Dictionary()
+
+	// Find oldest sample timestamp across all containers to handle buffered samples.
+	adjustedStartTime := collectionStartTime
+	for _, containerEvents := range tree {
+		for _, originEvents := range containerEvents {
+			for _, traceEvents := range originEvents {
+				for _, ts := range traceEvents.Timestamps {
+					sampleTime := time.Unix(0, int64(ts))
+					if sampleTime.Before(adjustedStartTime) {
+						adjustedStartTime = sampleTime
+					}
+				}
+			}
+		}
+	}
+	if adjustedStartTime.Before(collectionStartTime) {
+		log.Debugf("Adjusted profile start time backward by %v to include oldest sample",
+			collectionStartTime.Sub(adjustedStartTime))
+	}
+	collectionStartTime = adjustedStartTime
 
 	// Temporary helpers that will build the various tables in ProfilesDictionary.
-	stringSet := make(OrderedSet[string], 64)
-	funcSet := make(OrderedSet[funcInfo], 64)
-	mappingSet := make(OrderedSet[libpf.FileID], 64)
-	locationSet := make(OrderedSet[locationInfo], 64)
+	stringSet := make(orderedset.OrderedSet[string], 64)
+	funcSet := make(orderedset.OrderedSet[funcInfo], 64)
+	mappingSet := make(orderedset.OrderedSet[libpf.FrameMapping], 64)
+	stackSet := make(orderedset.OrderedSet[stackInfo], 64)
+	locationSet := make(orderedset.OrderedSet[locationInfo], 64)
 
 	// By specification, the first element should be empty.
 	stringSet.Add("")
-	mappingSet.Add(dummyFileID)
+	funcSet.Add(funcInfo{})
+	mappingSet.Add(libpf.FrameMapping{})
+	stackSet.Add(stackInfo{})
+	locationSet.Add(locationInfo{})
+
+	dic.LinkTable().AppendEmpty()
 	dic.MappingTable().AppendEmpty()
+	dic.StackTable().AppendEmpty()
+	dic.AttributeTable().AppendEmpty()
+	dic.LocationTable().AppendEmpty()
+
+	attrMgr := samples.NewAttrTableManager(stringSet, dic.AttributeTable())
 
 	for containerID, originToEvents := range tree {
 		if len(originToEvents) == 0 {
@@ -53,7 +84,7 @@ func (p *Pdata) Generate(tree samples.TraceEventsTree,
 
 		rp := profiles.ResourceProfiles().AppendEmpty()
 		rp.Resource().Attributes().PutStr(string(semconv.ContainerIDKey),
-			string(containerID))
+			containerID.String())
 		rp.SetSchemaUrl(semconv.SchemaURL)
 
 		sp := rp.ScopeProfiles().AppendEmpty()
@@ -64,7 +95,7 @@ func (p *Pdata) Generate(tree samples.TraceEventsTree,
 		for _, origin := range []libpf.Origin{
 			support.TraceOriginSampling,
 			support.TraceOriginOffCPU,
-			support.TraceOriginUProbe,
+			support.TraceOriginProbe,
 		} {
 			if len(originToEvents[origin]) == 0 {
 				// Do not append empty profiles.
@@ -73,8 +104,9 @@ func (p *Pdata) Generate(tree samples.TraceEventsTree,
 
 			prof := sp.Profiles().AppendEmpty()
 			if err := p.setProfile(dic,
-				stringSet, funcSet, mappingSet, locationSet,
-				origin, originToEvents[origin], prof); err != nil {
+				attrMgr, stringSet, funcSet, mappingSet, stackSet, locationSet,
+				origin, originToEvents[origin], prof,
+				collectionStartTime, collectionEndTime); err != nil {
 				return profiles, err
 			}
 		}
@@ -105,15 +137,18 @@ func (p *Pdata) Generate(tree samples.TraceEventsTree,
 // this moment.
 func (p *Pdata) setProfile(
 	dic pprofile.ProfilesDictionary,
-	stringSet OrderedSet[string],
-	funcSet OrderedSet[funcInfo],
-	mappingSet OrderedSet[libpf.FileID],
-	locationSet OrderedSet[locationInfo],
+	attrMgr *samples.AttrTableManager,
+	stringSet orderedset.OrderedSet[string],
+	funcSet orderedset.OrderedSet[funcInfo],
+	mappingSet orderedset.OrderedSet[libpf.FrameMapping],
+	stackSet orderedset.OrderedSet[stackInfo],
+	locationSet orderedset.OrderedSet[locationInfo],
 	origin libpf.Origin,
 	events map[samples.TraceAndMetaKey]*samples.TraceEvents,
 	profile pprofile.Profile,
+	collectionStartTime, collectionEndTime time.Time,
 ) error {
-	st := profile.SampleType().AppendEmpty()
+	st := profile.SampleType()
 	switch origin {
 	case support.TraceOriginSampling:
 		profile.SetPeriod(1e9 / int64(p.samplesPerSecond))
@@ -124,9 +159,9 @@ func (p *Pdata) setProfile(
 		st.SetTypeStrindex(stringSet.Add("samples"))
 		st.SetUnitStrindex(stringSet.Add("count"))
 	case support.TraceOriginOffCPU:
-		st.SetTypeStrindex(stringSet.Add("events"))
+		st.SetTypeStrindex(stringSet.Add("off_cpu"))
 		st.SetUnitStrindex(stringSet.Add("nanoseconds"))
-	case support.TraceOriginUProbe:
+	case support.TraceOriginProbe:
 		st.SetTypeStrindex(stringSet.Add("events"))
 		st.SetUnitStrindex(stringSet.Add("count"))
 	default:
@@ -134,29 +169,15 @@ func (p *Pdata) setProfile(
 		return fmt.Errorf("generating profile for unsupported origin %d", origin)
 	}
 
-	attrMgr := samples.NewAttrTableManager(dic.AttributeTable())
-
-	locationIndex := int32(profile.LocationIndices().Len())
-	startTS, endTS := uint64(math.MaxUint64), uint64(0)
 	for traceKey, traceInfo := range events {
-		sample := profile.Sample().AppendEmpty()
-		sample.SetLocationsStartIndex(locationIndex)
+		sample := profile.Samples().AppendEmpty()
 
-		for _, ts := range traceInfo.Timestamps {
-			startTS = min(startTS, ts)
-			endTS = max(endTS, ts)
-		}
 		sample.TimestampsUnixNano().FromRaw(traceInfo.Timestamps)
-
-		switch origin {
-		case support.TraceOriginSampling:
-			sample.Value().Append(1)
-		case support.TraceOriginOffCPU:
-			sample.Value().Append(traceInfo.OffTimes...)
-		case support.TraceOriginUProbe:
-			sample.Value().Append(1)
+		if origin == support.TraceOriginOffCPU {
+			sample.Values().Append(traceInfo.OffTimes...)
 		}
 
+		locationIndices := make([]int32, 0, len(traceInfo.Frames))
 		// Walk every frame of the trace.
 		for _, uniqueFrame := range traceInfo.Frames {
 			frame := uniqueFrame.Value()
@@ -164,55 +185,41 @@ func (p *Pdata) setProfile(
 				address:   uint64(frame.AddressOrLineno),
 				frameType: frame.Type.String(),
 			}
-			switch frameKind := frame.Type; frameKind {
-			case libpf.NativeFrame:
-				// As native frames are resolved in the backend, we use Mapping to
-				// report these frames.
-				locationMappingIndex, exists := mappingSet.AddWithCheck(frame.FileID)
-				if !exists {
-					ei, exists := p.Executables.GetAndRefresh(frame.FileID,
-						ExecutableCacheLifetime)
-					// Next step: Select a proper default value,
-					// if the name of the executable is not known yet.
-					fileName := "UNKNOWN"
-					if exists {
-						fileName = ei.FileName
-					}
 
-					mapping := dic.MappingTable().AppendEmpty()
-					mapping.SetMemoryStart(uint64(frame.MappingStart))
-					mapping.SetMemoryLimit(uint64(frame.MappingEnd))
-					mapping.SetFileOffset(frame.MappingFileOffset)
-					mapping.SetFilenameStrindex(stringSet.Add(fileName))
+			index, ok := mappingSet.AddWithCheck(frame.Mapping)
+			if !ok {
+				m := frame.Mapping.Value()
+				mf := m.File.Value()
 
-					// Once SemConv and its Go package is released with the new
-					// semantic convention for build_id, replace these hard coded
-					// strings.
-					attrMgr.AppendOptionalString(mapping.AttributeIndices(),
-						semconv.ProcessExecutableBuildIDGNUKey,
-						ei.GnuBuildID)
-					attrMgr.AppendOptionalString(mapping.AttributeIndices(),
-						semconv.ProcessExecutableBuildIDHtlhashKey,
-						frame.FileID.StringNoQuotes())
-				}
-				locInfo.mappingIndex = locationMappingIndex
-			case libpf.AbortFrame:
-				// Next step: Figure out how the OTLP protocol
-				// could handle artificial frames, like AbortFrame,
-				// that are not originated from a native or interpreted
-				// program.
-			default:
+				mapping := dic.MappingTable().AppendEmpty()
+				mapping.SetMemoryStart(uint64(m.Start))
+				mapping.SetMemoryLimit(uint64(m.End))
+				mapping.SetFileOffset(m.FileOffset)
+				mapping.SetFilenameStrindex(stringSet.Add(mf.FileName.String()))
+
+				attrMgr.AppendOptionalString(mapping.AttributeIndices(),
+					semconv.ProcessExecutableBuildIDGNUKey,
+					mf.GnuBuildID)
+				attrMgr.AppendOptionalString(mapping.AttributeIndices(),
+					semconv.ProcessExecutableBuildIDGoKey,
+					mf.GoBuildID)
+				attrMgr.AppendOptionalString(mapping.AttributeIndices(),
+					semconv.ProcessExecutableBuildIDHtlhashKey,
+					mf.FileID.StringNoQuotes())
+			}
+			locInfo.mappingIndex = index
+
+			if frame.FunctionName != libpf.NullString || frame.SourceFile != libpf.NullString {
 				// Store interpreted frame information as a Line message
 				locInfo.hasLine = true
 				locInfo.lineNumber = int64(frame.SourceLine)
+				locInfo.columnNumber = int64(frame.SourceColumn)
 				fi := funcInfo{
 					nameIdx:     stringSet.Add(frame.FunctionName.String()),
 					fileNameIdx: stringSet.Add(frame.SourceFile.String()),
 				}
 				locInfo.functionIndex = funcSet.Add(fi)
-				// mapping_table[0] is always the dummy mapping
-				locInfo.mappingIndex = 0
-			} // End frame type switch
+			}
 
 			idx, exists := locationSet.AddWithCheck(locInfo)
 			if !exists {
@@ -221,28 +228,41 @@ func (p *Pdata) setProfile(
 				loc.SetAddress(locInfo.address)
 				loc.SetMappingIndex(locInfo.mappingIndex)
 				if locInfo.hasLine {
-					line := loc.Line().AppendEmpty()
+					line := loc.Lines().AppendEmpty()
 					line.SetLine(locInfo.lineNumber)
+					line.SetColumn(locInfo.columnNumber)
 					line.SetFunctionIndex(locInfo.functionIndex)
 				}
 				attrMgr.AppendOptionalString(loc.AttributeIndices(),
 					semconv.ProfileFrameTypeKey, locInfo.frameType)
 			}
-			profile.LocationIndices().Append(idx)
+			locationIndices = append(locationIndices, idx)
 		} // End per-frame processing
 
-		exeName := traceKey.ExecutablePath
-		if exeName != "" {
-			_, exeName = filepath.Split(exeName)
+		stackIdx, exists := stackSet.AddWithCheck(stackInfo{
+			locationIndicesHash: hashLocationIndices(locationIndices),
+		})
+		if !exists {
+			// Add a new Stack to the dictionary
+			stack := dic.StackTable().AppendEmpty()
+			for _, locIdx := range locationIndices {
+				stack.LocationIndices().Append(locIdx)
+			}
+		}
+		sample.SetStackIndex(stackIdx)
+
+		exeName := ""
+		if traceKey.ExecutablePath != libpf.NullString {
+			_, exeName = filepath.Split(traceKey.ExecutablePath.String())
 		}
 
 		attrMgr.AppendOptionalString(sample.AttributeIndices(),
-			semconv.ThreadNameKey, traceKey.Comm)
+			semconv.ThreadNameKey, traceKey.Comm.String())
 
 		attrMgr.AppendOptionalString(sample.AttributeIndices(),
 			semconv.ProcessExecutableNameKey, exeName)
 		attrMgr.AppendOptionalString(sample.AttributeIndices(),
-			semconv.ProcessExecutablePathKey, traceKey.ExecutablePath)
+			semconv.ProcessExecutablePathKey, traceKey.ExecutablePath.String())
 
 		attrMgr.AppendOptionalString(sample.AttributeIndices(),
 			semconv.ServiceNameKey, traceKey.ApmServiceName)
@@ -250,35 +270,34 @@ func (p *Pdata) setProfile(
 			semconv.ProcessPIDKey, traceKey.Pid)
 		attrMgr.AppendInt(sample.AttributeIndices(),
 			semconv.ThreadIDKey, traceKey.Tid)
+		attrMgr.AppendInt(sample.AttributeIndices(),
+			semconv.CPULogicalNumberKey, int64(traceKey.CPU))
 
 		for key, value := range traceInfo.EnvVars {
+			env := semconv.ProcessEnvironmentVariable(key.String(), value.String())
 			attrMgr.AppendOptionalString(
 				sample.AttributeIndices(),
-				attribute.Key("process.environment_variable."+key),
-				value)
+				env.Key, env.Value.AsString())
 		}
 		for key, value := range traceInfo.Labels {
 			// Once https://github.com/open-telemetry/semantic-conventions/issues/2561
 			// reached an agreement, use the actual OTel SemConv attribute.
 			attrMgr.AppendOptionalString(
 				sample.AttributeIndices(),
-				attribute.Key("process.context.label."+key),
-				value)
+				attribute.Key("process.context.label."+key.String()),
+				value.String())
 		}
 
 		if p.ExtraSampleAttrProd != nil {
 			extra := p.ExtraSampleAttrProd.ExtraSampleAttrs(attrMgr, traceKey.ExtraMeta)
 			sample.AttributeIndices().Append(extra...)
 		}
-
-		sample.SetLocationsLength(int32(len(traceInfo.Frames)))
-		locationIndex += sample.LocationsLength()
 	} // End sample processing
 
-	log.Debugf("Reporting OTLP profile with %d samples", profile.Sample().Len())
+	log.Debugf("Reporting OTLP profile with %d samples", profile.Samples().Len())
 
-	profile.SetDuration(pcommon.Timestamp(endTS - startTS))
-	profile.SetTime(pcommon.Timestamp(startTS))
+	profile.SetDurationNano(uint64(collectionEndTime.Sub(collectionStartTime).Nanoseconds()))
+	profile.SetTime(pcommon.Timestamp(collectionStartTime.UnixNano()))
 
 	return nil
 }

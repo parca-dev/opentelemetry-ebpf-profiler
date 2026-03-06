@@ -5,20 +5,18 @@ import (
 	"fmt"
 	"math"
 	"strings"
+	"sync"
 	"time"
 
-	log "github.com/sirupsen/logrus"
-	"github.com/tklauser/numcpus"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
+	"go.opentelemetry.io/ebpf-profiler/util"
 
-	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/times"
-	"go.opentelemetry.io/ebpf-profiler/tracehandler"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
 	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
-	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
 const MiB = 1 << 20
@@ -28,6 +26,9 @@ type Controller struct {
 	config   *Config
 	reporter reporter.Reporter
 	tracer   *tracer.Tracer
+
+	shutdownOnceFn sync.Once
+	cancelFunc     context.CancelFunc
 }
 
 // New creates a new controller
@@ -44,21 +45,28 @@ func New(cfg *Config) *Controller {
 
 // Start starts the controller
 // The controller should only be started once.
+//
+// Lifecycle note:
+// This controller is expected to be started by the OpenTelemetry Collector
+// service. If Start returns an error (for example, if StartMapMonitors fails),
+// collector startup is aborted and the collector will immediately invoke
+// Shutdown on all started services.
+//
+// In other words, partial initialization performed by Start does not require
+// explicit cleanup on error here: the collector guarantees that Shutdown(ctx)
+// will be called as part of its startup error handling path.
+//
+// See:
+// https://github.com/open-telemetry/opentelemetry-collector/blob/v0.144.0/otelcol/collector.go#L258-L260
 func (c *Controller) Start(ctx context.Context) error {
-	if err := tracer.ProbeBPFSyscall(); err != nil {
+	if err := util.ProbeBPFSyscall(); err != nil {
 		return fmt.Errorf("failed to probe eBPF syscall: %w", err)
 	}
 
-	presentCores, err := numcpus.GetPresent()
-	if err != nil {
-		return fmt.Errorf("failed to read CPU file: %w", err)
-	}
-
-	traceHandlerCacheSize :=
-		traceCacheSize(c.config.MonitorInterval, c.config.SamplesPerSecond, uint16(presentCores))
-
 	intervals := times.New(c.config.ReporterInterval, c.config.MonitorInterval,
 		c.config.ProbabilisticInterval)
+
+	ctx, c.cancelFunc = context.WithCancel(ctx)
 
 	// Start periodic synchronization with the realtime clock
 	times.StartRealtimeSync(ctx, c.config.ClockSyncInterval)
@@ -75,8 +83,7 @@ func (c *Controller) Start(ctx context.Context) error {
 	}
 
 	envVars := libpf.Set[string]{}
-	splittedEnvVars := strings.Split(c.config.IncludeEnvVars, ",")
-	for _, envVar := range splittedEnvVars {
+	for envVar := range strings.SplitSeq(c.config.IncludeEnvVars, ",") {
 		envVar = strings.TrimSpace(envVar)
 		if envVar != "" {
 			envVars[envVar] = libpf.Void{}
@@ -85,27 +92,29 @@ func (c *Controller) Start(ctx context.Context) error {
 
 	// Load the eBPF code and map definitions
 	trc, err := tracer.NewTracer(ctx, &tracer.Config{
-		Reporter:               c.reporter,
+		TraceReporter:          c.reporter,
 		Intervals:              intervals,
 		IncludeTracers:         includeTracers,
 		FilterErrorFrames:      !c.config.SendErrorFrames,
+		FilterIdleFrames:       !c.config.SendIdleFrames,
 		SamplesPerSecond:       c.config.SamplesPerSecond,
 		MapScaleFactor:         int(c.config.MapScaleFactor),
 		KernelVersionCheck:     !c.config.NoKernelVersionCheck,
 		VerboseMode:            c.config.VerboseMode,
-		BPFVerifierLogLevel:    uint32(c.config.BpfVerifierLogLevel),
+		BPFVerifierLogLevel:    uint32(c.config.BPFVerifierLogLevel),
 		ProbabilisticInterval:  c.config.ProbabilisticInterval,
 		ProbabilisticThreshold: c.config.ProbabilisticThreshold,
 		OffCPUThreshold:        uint32(c.config.OffCPUThreshold * float64(math.MaxUint32)),
 		IncludeEnvVars:         envVars,
-		UProbeLinks:            c.config.UProbeLinks,
+		ProbeLinks:             c.config.ProbeLinks,
 		LoadProbe:              c.config.LoadProbe,
+		ExecutableReporter:     c.config.ExecutableReporter,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to load eBPF tracer: %w", err)
 	}
 	c.tracer = trc
-	log.Printf("eBPF tracer loaded")
+	log.Info("eBPF tracer loaded")
 
 	now := time.Now()
 
@@ -124,19 +133,19 @@ func (c *Controller) Start(ctx context.Context) error {
 		if err := trc.StartOffCPUProfiling(); err != nil {
 			return fmt.Errorf("failed to start off-cpu profiling: %v", err)
 		}
-		log.Printf("Enabled off-cpu profiling with p=%f", c.config.OffCPUThreshold)
+		log.Infof("Enabled off-cpu profiling with p=%f", c.config.OffCPUThreshold)
 	}
 
-	if len(c.config.UProbeLinks) > 0 {
-		if err := trc.AttachUProbes(c.config.UProbeLinks); err != nil {
-			return fmt.Errorf("failed to attach uprobes: %v", err)
+	if len(c.config.ProbeLinks) > 0 {
+		if err := trc.AttachProbes(c.config.ProbeLinks); err != nil {
+			return fmt.Errorf("failed to attach probes: %v", err)
 		}
-		log.Printf("Attached uprobes")
+		log.Info("Attached probes")
 	}
 
 	if c.config.ProbabilisticThreshold < tracer.ProbabilisticThresholdMax {
 		trc.StartProbabilisticProfiling(ctx)
-		log.Printf("Enabled probabilistic profiling")
+		log.Info("Enabled probabilistic profiling")
 	} else {
 		if err := trc.EnableProfiling(); err != nil {
 			return fmt.Errorf("failed to enable perf events: %w", err)
@@ -149,10 +158,9 @@ func (c *Controller) Start(ctx context.Context) error {
 
 	// This log line is used in our system tests to verify if that the agent has started.
 	// So if you change this log line update also the system test.
-	log.Printf("Attached sched monitor")
+	log.Info("Attached sched monitor")
 
-	if err := startTraceHandling(ctx, c.reporter, intervals, trc,
-		traceHandlerCacheSize); err != nil {
+	if err := c.startTraceHandling(ctx, trc); err != nil {
 		return fmt.Errorf("failed to start trace handling: %w", err)
 	}
 
@@ -161,54 +169,47 @@ func (c *Controller) Start(ctx context.Context) error {
 
 // Shutdown stops the controller
 func (c *Controller) Shutdown() {
-	log.Info("Stop processing ...")
-	if c.reporter != nil {
-		c.reporter.Stop()
-	}
+	c.shutdownOnceFn.Do(func() {
+		log.Info("Stop processing ...")
+		if c.cancelFunc != nil {
+			c.cancelFunc()
+		}
 
-	if c.tracer != nil {
-		c.tracer.Close()
-	}
+		if c.reporter != nil {
+			c.reporter.Stop()
+		}
+
+		if c.tracer != nil {
+			c.tracer.Close()
+		}
+	})
 }
 
-func startTraceHandling(ctx context.Context, rep reporter.TraceReporter,
-	intervals *times.Times, trc *tracer.Tracer, cacheSize uint32) error {
+func (c *Controller) startTraceHandling(ctx context.Context, trc *tracer.Tracer) error {
 	// Spawn monitors for the various result maps
-	traceCh := make(chan *host.Trace)
+	traceCh := make(chan *libpf.EbpfTrace)
 
 	if err := trc.StartMapMonitors(ctx, traceCh); err != nil {
 		return fmt.Errorf("failed to start map monitors: %v", err)
 	}
 
-	_, err := tracehandler.Start(ctx, rep, trc.TraceProcessor(),
-		traceCh, intervals, cacheSize, nil)
-	return err
-}
+	go func() {
+		// Poll the output channels
+		for {
+			select {
+			case trace := <-traceCh:
+				if trace != nil {
+					trc.HandleTrace(trace)
+				}
+			case <-trc.Done():
+				log.Errorf("Shutting down controller due to unrecoverable tracer error")
+				c.Shutdown()
+				return
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 
-// traceCacheSize defines the maximum number of elements for the caches in tracehandler.
-//
-// The caches in tracehandler have a size-"processing overhead" trade-off: Every cache miss will
-// trigger additional processing for that trace in userspace (Go). For most maps, we use
-// maxElementsPerInterval as a base sizing factor. For the tracehandler caches, we also multiply
-// with traceCacheIntervals. For typical/small values of maxElementsPerInterval, this can lead to
-// non-optimal map sizing (reduced cache_hit:cache_miss ratio and increased processing overhead).
-// Simply increasing traceCacheIntervals is problematic when maxElementsPerInterval is large
-// (e.g. too many CPU cores present) as we end up using too much memory. A minimum size is
-// therefore used here.
-func traceCacheSize(monitorInterval time.Duration, samplesPerSecond int,
-	presentCPUCores uint16) uint32 {
-	const (
-		traceCacheIntervals = 6
-		traceCacheMinSize   = 65536
-	)
-
-	maxElements := maxElementsPerInterval(monitorInterval, samplesPerSecond, presentCPUCores)
-
-	size := max(maxElements*uint32(traceCacheIntervals), traceCacheMinSize)
-	return util.NextPowerOfTwo(size)
-}
-
-func maxElementsPerInterval(monitorInterval time.Duration, samplesPerSecond int,
-	presentCPUCores uint16) uint32 {
-	return uint32(uint16(samplesPerSecond) * uint16(monitorInterval.Seconds()) * presentCPUCores)
+	return nil
 }

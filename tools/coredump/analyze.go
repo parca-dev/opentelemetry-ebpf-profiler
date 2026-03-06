@@ -9,12 +9,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/process"
@@ -70,7 +71,7 @@ func (cmd *analyzeCmd) exec(context.Context, []string) (err error) {
 
 	lwpFilter := libpf.Set[libpf.PID]{}
 	if cmd.lwpFilter != "" {
-		for _, lwp := range strings.Split(cmd.lwpFilter, ",") {
+		for lwp := range strings.SplitSeq(cmd.lwpFilter, ",") {
 			var parsed int64
 			parsed, err = strconv.ParseInt(lwp, 10, 32)
 			if err != nil {
@@ -81,7 +82,7 @@ func (cmd *analyzeCmd) exec(context.Context, []string) (err error) {
 	}
 
 	if cmd.debugLog {
-		log.SetLevel(log.DebugLevel)
+		log.SetLevel(slog.LevelDebug)
 	}
 
 	var proc process.Process

@@ -11,6 +11,7 @@ import (
 
 	"github.com/peterbourgon/ff/v3"
 
+	"go.opentelemetry.io/ebpf-profiler/collector/config"
 	"go.opentelemetry.io/ebpf-profiler/internal/controller"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
 )
@@ -19,6 +20,7 @@ const (
 	// Default values for CLI flags
 	defaultArgSamplesPerSecond    = 20
 	defaultArgReporterInterval    = 5.0 * time.Second
+	defaultArgReporterJitter      = 0.2
 	defaultArgMonitorInterval     = 5.0 * time.Second
 	defaultClockSyncInterval      = 3 * time.Minute
 	defaultProbabilisticThreshold = tracer.ProbabilisticThresholdMax
@@ -42,7 +44,7 @@ var (
 	mapScaleFactorHelp = fmt.Sprintf("Scaling factor for eBPF map sizes. "+
 		"Every increase by 1 doubles the map size. Increase if you see eBPF map size errors. "+
 		"Default is %d corresponding to 4GB of executable address space, max is %d.",
-		defaultArgMapScaleFactor, controller.MaxArgMapScaleFactor)
+		defaultArgMapScaleFactor, config.MaxArgMapScaleFactor)
 	disableTLSHelp             = "Disable encryption for data in transit."
 	bpfVerifierLogLevelHelp    = "Log level of the eBPF verifier output (0,1,2). Default is 0."
 	versionHelp                = "Show version."
@@ -55,14 +57,19 @@ var (
 		tracer.ProbabilisticThresholdMax-1, tracer.ProbabilisticThresholdMax-1)
 	probabilisticIntervalHelp = "Time interval for which probabilistic profiling will be " +
 		"enabled or disabled."
-	pprofHelp             = "Listening address (e.g. localhost:6060) to serve pprof information."
-	samplesPerSecondHelp  = "Set the frequency (in Hz) of stack trace sampling."
-	reporterIntervalHelp  = "Set the reporter's interval in seconds."
+	pprofHelp            = "Listening address (e.g. localhost:6060) to serve pprof information."
+	samplesPerSecondHelp = "Set the frequency (in Hz) of stack trace sampling."
+	reporterIntervalHelp = "Set the reporter's interval in seconds."
+	reporterJitterHelp   = fmt.Sprintf("Set the jitter applied to the reporter's interval as a fraction. "+
+		"Valid values are in the range [0..1]. "+
+		"Default is %.1f.",
+		defaultArgReporterJitter)
 	monitorIntervalHelp   = "Set the monitor interval in seconds."
 	clockSyncIntervalHelp = "Set the sync interval with the realtime clock. " +
 		"If zero, monotonic-realtime clock sync will be performed once, " +
 		"on agent startup, but not periodically."
 	sendErrorFramesHelp = "Send error frames (devfiler only, breaks Kibana)"
+	sendIdleFramesHelp  = "Unwind and report idle states of the Linux kernel."
 	offCPUThresholdHelp = fmt.Sprintf("The probability for an off-cpu event being recorded. "+
 		"Valid values are in the range [0..1]. 0 disables off-cpu profiling. "+
 		"Default is %d.",
@@ -70,7 +77,7 @@ var (
 	envVarsHelp = "Comma separated list of environment variables that will be reported with the" +
 		"captured profiling samples."
 	probeLinkHelper = "Attach a probe to a symbol of an executable. " +
-		"Expected format: /path/to/executable:symbol"
+		"Expected format: probe_type:target[:symbol]. probe_type can be kprobe, kretprobe, uprobe, or uretprobe."
 	loadProbeHelper = "Load generic eBPF program that can be attached externally to " +
 		"various user or kernel space hooks."
 )
@@ -84,7 +91,7 @@ func parseArgs() (*controller.Config, error) {
 	fs := flag.NewFlagSet("ebpf-profiler", flag.ExitOnError)
 
 	// Please keep the parameters ordered alphabetically in the source-code.
-	fs.UintVar(&args.BpfVerifierLogLevel, "bpf-log-level", 0, bpfVerifierLogLevelHelp)
+	fs.UintVar(&args.BPFVerifierLogLevel, "bpf-log-level", 0, bpfVerifierLogLevelHelp)
 
 	fs.StringVar(&args.CollAgentAddr, "collection-agent", "", collAgentAddrHelp)
 	fs.BoolVar(&args.Copyright, "copyright", false, copyrightHelp)
@@ -112,12 +119,15 @@ func parseArgs() (*controller.Config, error) {
 
 	fs.DurationVar(&args.ReporterInterval, "reporter-interval", defaultArgReporterInterval,
 		reporterIntervalHelp)
+	fs.Float64Var(&args.ReporterJitter, "reporter-jitter", defaultArgReporterJitter,
+		reporterJitterHelp)
 
 	fs.IntVar(&args.SamplesPerSecond, "samples-per-second", defaultArgSamplesPerSecond,
 		samplesPerSecondHelp)
 
 	fs.BoolVar(&args.SendErrorFrames, "send-error-frames", defaultArgSendErrorFrames,
 		sendErrorFramesHelp)
+	fs.BoolVar(&args.SendIdleFrames, "send-idle-frames", false, sendIdleFramesHelp)
 
 	fs.StringVar(&args.Tracers, "t", "all", "Shorthand for -tracers.")
 	fs.StringVar(&args.Tracers, "tracers", "all", tracersHelp)
@@ -131,8 +141,8 @@ func parseArgs() (*controller.Config, error) {
 
 	fs.StringVar(&args.IncludeEnvVars, "env-vars", defaultEnvVarsValue, envVarsHelp)
 
-	fs.Func("uprobe-link", probeLinkHelper, func(link string) error {
-		args.UProbeLinks = append(args.UProbeLinks, link)
+	fs.Func("probe-link", probeLinkHelper, func(link string) error {
+		args.ProbeLinks = append(args.ProbeLinks, link)
 		return nil
 	})
 

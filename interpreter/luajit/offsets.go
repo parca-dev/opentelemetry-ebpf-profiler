@@ -19,8 +19,39 @@ import (
 	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
+
+func scanSymbols(ef *pfelf.File) map[libpf.SymbolName]libpf.Symbol {
+	interestingSymbols := map[libpf.SymbolName]struct{}{
+		"lj_vm_asm_begin":          {},
+		"jit_checktrace":           {},
+		"lj_cf_jit_util_traceinfo": {},
+		"lua_pushcclosure":         {},
+		"luaopen_jit":              {},
+		"lua_close":                {},
+	}
+
+	foundSymbols := map[libpf.SymbolName]libpf.Symbol{}
+
+	visitor := func(sym libpf.Symbol) bool {
+		if _, ok := interestingSymbols[sym.Name]; ok {
+			foundSymbols[sym.Name] = sym
+			delete(interestingSymbols, sym.Name)
+		}
+		return len(interestingSymbols) > 0
+	}
+	if err := ef.VisitSymbols(visitor); err != nil {
+		log.Warningf("failed to read symbols: %v", err)
+	}
+
+	if err := ef.VisitDynamicSymbols(visitor); err != nil {
+		log.Warningf("failed to read dynamic symbols: %v", err)
+	}
+
+	return foundSymbols
+}
 
 // This is the main "global" struct in luajit.
 //
@@ -140,24 +171,18 @@ func newExtractor(ef *pfelf.File) extractor {
 
 type offsetData struct {
 	f              *pfelf.File
-	syms, dsyms    *libpf.SymbolMap
 	luajitOpen     []byte
 	luajitOpenAddr uint64
 	e              extractor
+	foundSymbols   map[libpf.SymbolName]libpf.Symbol
 }
 
 func (o *offsetData) init(ef *pfelf.File) error {
 	o.f = ef
 	o.e = newExtractor(ef)
+
 	var err error
-	o.syms, err = ef.ReadSymbols()
-	if err != nil {
-		log.Warningf("failed to read symbols: %v", err)
-	}
-	o.dsyms, err = ef.ReadDynamicSymbols()
-	if err != nil {
-		log.Warningf("failed to read dynamic symbols: %v", err)
-	}
+	o.foundSymbols = scanSymbols(ef)
 	// Two extractors use luaopen_jit so cache it.
 	b, addr, err := o.readSymByName("luaopen_jit")
 	if err != nil {
@@ -319,7 +344,7 @@ func (o *offsetData) findTraceInfoFromLuaOpen() (*libpf.Symbol, error) {
 	//   };
 	const traceInfoIndex = 4
 	funcAddrs := make([]uint64, 12)
-	_, err = o.f.ReadAt(libpf.SliceFrom(funcAddrs), libJitFunctionAddresses)
+	_, err = o.f.ReadAt(pfunsafe.FromSlice(funcAddrs), libJitFunctionAddresses)
 	if err != nil {
 		return nil, err
 	}
@@ -358,11 +383,11 @@ func (o *offsetData) readSym(sym *libpf.Symbol) ([]byte, error) {
 
 func (o *offsetData) lookupSymbol(name libpf.SymbolName) (s *libpf.Symbol, err error) {
 	s, err = o.f.LookupSymbol(name)
-	if err == libpf.ErrSymbolNotFound && o.syms != nil {
-		s, err = o.syms.LookupSymbol(name)
-	}
-	if s == nil && o.dsyms != nil {
-		s, err = o.dsyms.LookupSymbol(name)
+	if err == libpf.ErrSymbolNotFound && o.foundSymbols != nil {
+		if sym, ok := o.foundSymbols[name]; ok {
+			s = &sym
+			err = nil
+		}
 	}
 	return s, err
 }

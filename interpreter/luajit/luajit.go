@@ -22,6 +22,7 @@ import (
 	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
+	"go.opentelemetry.io/ebpf-profiler/libc"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/lpm"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
@@ -30,7 +31,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/support"
-	"go.opentelemetry.io/ebpf-profiler/tpbase"
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
@@ -174,8 +174,8 @@ func extractInterpreterBounds(deltas sdtypes.StackDeltaArray, param int32) (util
 		if next.Address-d.Address > 10_000 {
 			// The first case covers x86 w/ dwarf and old versions of luajit ARM that used dwarf and
 			// the second covers more recent arm versions that use frame pointers.
-			if d.Info.Opcode == support.UnwindOpcodeBaseSP && d.Info.Param == param ||
-				d.Info.Opcode == support.UnwindOpcodeBaseFP && d.Info.Param == 16 {
+			if d.Info.BaseReg == support.UnwindRegSp && d.Info.Param == param ||
+				d.Info.BaseReg == support.UnwindRegFp && d.Info.Param == 16 {
 				return util.Range{Start: d.Address, End: next.Address}, nil
 			}
 		}
@@ -235,7 +235,7 @@ func (l *luajitInstance) addTrace(ebpf interpreter.EbpfHandler, pid libpf.PID, t
 }
 
 func (l *luajitInstance) SynchronizeMappings(ebpf interpreter.EbpfHandler,
-	_ reporter.SymbolReporter, pr process.Process, mappings []process.Mapping) error {
+	_ reporter.ExecutableReporter, pr process.Process, mappings []process.Mapping) error {
 	return l.synchronizeMappings(ebpf, pr.PID(), mappings)
 }
 
@@ -374,16 +374,12 @@ func (l *luajitInstance) getGCproto(pt libpf.Address) (*proto, error) {
 // symbolizeFrame symbolizes the previous (up the stack)
 func (l *luajitInstance) symbolizeFrame(funcName string, ptAddr libpf.Address,
 	pc uint32, frames *libpf.Frames) error {
-	var line uint32
-	var fileName string
-	if ptAddr != support.LJFFIFunc {
-		pt, err := l.getGCproto(ptAddr)
-		if err != nil {
-			return err
-		}
-		line = pt.getLine(pc)
-		fileName = pt.getName()
+	pt, err := l.getGCproto(ptAddr)
+	if err != nil {
+		return err
 	}
+	line := pt.getLine(pc)
+	fileName := pt.getName()
 	logf("lj: [%x] %v+%v at %v:%v", ptAddr, funcName, pc, fileName, line)
 	frames.Append(&libpf.Frame{
 		Type:           libpf.LuaJITFrame,
@@ -405,31 +401,42 @@ func (l *luajitInstance) addVM(g libpf.Address) bool {
 	return !ok
 }
 
-func (l *luajitInstance) Symbolize(frame *host.Frame, frames *libpf.Frames) error {
-	if !frame.Type.IsInterpType(libpf.LuaJIT) {
+func (l *luajitInstance) Symbolize(frame libpf.EbpfFrame, frames *libpf.Frames, fm libpf.FrameMapping) error {
+	if !frame.Type().IsInterpType(libpf.LuaJIT) {
 		return interpreter.ErrMismatchInterpreterType
 	}
 
-	if frame.File == 0 && frame.Lineno != 0 {
-		// The BPF program will stash pointer to "G" when it sees a JIT frame w/o trace information
-		// which may fail to unwind, we use it to see if the traces for this VM have changed. When
-		// we reach a steady state where there's no new JIT activity this will always be 0.
-		g := libpf.Address(frame.Lineno)
-		if g != 0 {
-			unseen := l.addVM(g)
-			if unseen {
-				log.Infof("New LuaJIT instance detected: %v", g)
-				if l.ebpf.CoredumpTest() {
-					return interpreter.ErrLJRestart
-				}
-			}
-		}
-		return nil
-	}
-
 	var funcName string
-	if frame.File == support.LJFFIFunc {
-		switch frame.Lineno & 7 {
+	ljkind := frame.Data()
+	switch ljkind {
+	case support.LJNormalFrame:
+		if frame.NumVariables() < 3 {
+			return errors.New("LuaJIT normal frame not large enough")
+		}
+		callerPT := libpf.Address(frame.Variable(1))
+
+		pt, err := l.getGCproto(callerPT)
+		if err != nil {
+			return err
+		}
+
+		var2 := frame.Variable(2)
+		callerPC := uint32(var2 & 0xFFFFFFFF)
+		calleePC := uint32(var2 >> 32)
+		funcName = pt.getFunctionName(callerPC)
+		calleePT := libpf.Address(frame.Variable(0))
+		if err := l.symbolizeFrame(funcName, calleePT,
+			calleePC, frames); err != nil {
+			return err
+		}
+
+		return nil
+	case support.LJFFIFunc:
+		if frame.NumVariables() < 1 {
+			return errors.New("LuaJIT FFI frame not large enough")
+		}
+		funcId := libpf.Address(frame.Variable(0)) & 7
+		switch funcId {
 		case 0:
 			funcName = "lua-frame"
 		case 1:
@@ -447,19 +454,28 @@ func (l *luajitInstance) Symbolize(frame *host.Frame, frames *libpf.Frames) erro
 		case 7:
 			funcName = "ff-pcall-hook"
 		}
-	} else {
-		callerPT := libpf.Address(frame.Lineno)
-		pt, err := l.getGCproto(callerPT)
-		if err != nil {
-			return err
+		frames.Append(&libpf.Frame{
+			Type:         libpf.LuaJITFrame,
+			FunctionName: libpf.Intern(funcName),
+		})
+		return nil
+	case support.LJGReport:
+		if frame.NumVariables() < 1 {
+			return errors.New("LuaJIT G report frame not large enough")
 		}
-		funcName = pt.getFunctionName(frame.LJCallerPC)
-	}
-
-	calleePT := libpf.Address(frame.File)
-	if err := l.symbolizeFrame(funcName, calleePT,
-		frame.LJCalleePC, frames); err != nil {
-		return err
+		g := libpf.Address(frame.Variable(0))
+		if g != 0 {
+			unseen := l.addVM(g)
+			if unseen {
+				log.Infof("New LuaJIT instance detected: %v", g)
+				if l.ebpf.CoredumpTest() {
+					return interpreter.ErrLJRestart
+				}
+			}
+		}
+		return nil
+	default:
+		return fmt.Errorf("Unrecognized LuaJIT frame kind: %d", ljkind)
 	}
 
 	return nil
@@ -469,6 +485,10 @@ func (l *luajitInstance) GetAndResetMetrics() ([]metrics.Metric, error) {
 	return nil, nil
 }
 
-func (l *luajitInstance) UpdateTSDInfo(interpreter.EbpfHandler, libpf.PID, tpbase.TSDInfo) error {
+func (l *luajitInstance) ReleaseResources() error {
+	return nil
+}
+
+func (l *luajitInstance) UpdateLibcInfo(ebpf interpreter.EbpfHandler, pid libpf.PID, info libc.LibcInfo) error {
 	return nil
 }

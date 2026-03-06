@@ -18,7 +18,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
-	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
 	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
 	"go.opentelemetry.io/ebpf-profiler/util"
@@ -26,14 +25,14 @@ import (
 
 type mockIntervals struct{}
 
-func (mockIntervals) MonitorInterval() time.Duration    { return 1 * time.Second }
-func (mockIntervals) TracePollInterval() time.Duration  { return 250 * time.Millisecond }
-func (mockIntervals) PIDCleanupInterval() time.Duration { return 1 * time.Second }
+func (mockIntervals) MonitorInterval() time.Duration       { return 1 * time.Second }
+func (mockIntervals) TracePollInterval() time.Duration     { return 250 * time.Millisecond }
+func (mockIntervals) PIDCleanupInterval() time.Duration    { return 1 * time.Second }
+func (mockIntervals) ExecutableUnloadDelay() time.Duration { return 1 * time.Second }
 
 type mockReporter struct{}
 
-func (mockReporter) ExecutableKnown(_ libpf.FileID) bool                   { return true }
-func (mockReporter) ExecutableMetadata(_ *reporter.ExecutableMetadataArgs) {}
+func (mockReporter) ExecutableKnown(_ libpf.FileID) bool { return true }
 
 // testSetup encapsulates all the common test setup
 type testSetup struct {
@@ -116,7 +115,6 @@ func setupTest(t *testing.T) *testSetup {
 	// Initialize the full tracer with debug output enabled
 	enabledTracers, _ := tracertypes.Parse("")
 	tr, err := tracer.NewTracer(ctx, &tracer.Config{
-		Reporter:               &mockReporter{},
 		Intervals:              &mockIntervals{},
 		IncludeTracers:         enabledTracers,
 		FilterErrorFrames:      false,

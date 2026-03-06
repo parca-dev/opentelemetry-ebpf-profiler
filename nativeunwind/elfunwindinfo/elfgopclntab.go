@@ -10,6 +10,8 @@ package elfunwindinfo // import "go.opentelemetry.io/ebpf-profiler/nativeunwind/
 import (
 	"bytes"
 	"debug/elf"
+	"encoding/binary"
+	"errors"
 	"fmt"
 	"go/version"
 	"io"
@@ -19,6 +21,7 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	sdtypes "go.opentelemetry.io/ebpf-profiler/nativeunwind/stackdeltatypes"
 	"go.opentelemetry.io/ebpf-profiler/support"
 )
@@ -51,6 +54,12 @@ const (
 	go1_16    = 16
 	go1_18    = 18
 	go1_20    = 20
+
+	// Offset of the text field in moduledata struct for Go 1.16+
+	// https://github.com/golang/go/blob/release-branch.go1.16/src/runtime/symtab.go#L370
+	textOffset = 22 * 8
+	// section name for the module data for Go 1.26+
+	moduleDataSectionName = ".go.module"
 )
 
 func goMagicToVersion(magic uint32) uint8 {
@@ -232,7 +241,7 @@ func getString(data []byte, offset int) string {
 	if zeroIdx < 0 {
 		return ""
 	}
-	return unsafe.String(unsafe.SliceData(data[offset:]), zeroIdx)
+	return pfunsafe.ToString(data[offset : offset+zeroIdx])
 }
 
 // searchGoPclntab uses heuristic to find the gopclntab from RO data.
@@ -258,6 +267,11 @@ func searchGoPclntab(ef *pfelf.File) ([]byte, error) {
 		// Search for the .rodata (read-only) and .data.rel.ro (read-write which gets
 		// turned into read-only after relocations handling via GNU_RELRO header).
 		if p.Type != elf.PT_LOAD || p.Flags&elf.PF_X == elf.PF_X || p.Flags&elf.PF_R != elf.PF_R {
+			continue
+		}
+
+		// Skip segments that are too small anyway.
+		if p.Filesz < uint64(PclntabHeaderSize()) {
 			continue
 		}
 
@@ -305,22 +319,22 @@ func extractGoPclntab(ef *pfelf.File) (data []byte, err error) {
 		// as the .gopclntab section is not available on PIE binaries.
 		// A full symbol table read is needed as these are not dynamic symbols.
 		// Consequently these symbols might be unavailable on a stripped binary.
-		symtab, err := ef.ReadSymbols()
-		if err != nil {
+		var start, end libpf.SymbolValue
+		ef.VisitSymbols(func(sym libpf.Symbol) bool {
+			if sym.Name == "runtime.pclntab" {
+				start = sym.Address
+			} else if sym.Name == "runtime.epclntab" {
+				end = sym.Address
+			}
+			return start == 0 || end == 0
+		})
+		if start == 0 || end == 0 {
 			// It seems the Go binary was stripped. So we use the heuristic approach
 			// to get the stack deltas.
 			if data, err = searchGoPclntab(ef); err != nil {
 				return nil, fmt.Errorf("failed to search .gopclntab: %v", err)
 			}
 		} else {
-			start, err := symtab.LookupSymbolAddress("runtime.pclntab")
-			if err != nil {
-				return nil, fmt.Errorf("failed to load .gopclntab via symbols: %v", err)
-			}
-			end, err := symtab.LookupSymbolAddress("runtime.epclntab")
-			if err != nil {
-				return nil, fmt.Errorf("failed to load .gopclntab via symbols: %v", err)
-			}
 			if start >= end {
 				return nil, fmt.Errorf("invalid .gopclntab symbols: %v-%v", start, end)
 			}
@@ -335,7 +349,9 @@ func extractGoPclntab(ef *pfelf.File) (data []byte, err error) {
 
 // Gopclntab is the API for extracting data from .gopclntab
 type Gopclntab struct {
-	dataRef   io.Closer
+	dataRef     io.Closer
+	setDontNeed func()
+
 	data      []byte
 	textStart uintptr
 	numFuncs  int
@@ -384,6 +400,7 @@ func NewGopclntab(ef *pfelf.File) (*Gopclntab, error) {
 	if data == nil {
 		return nil, err
 	}
+	defer ef.SetDontNeed()
 
 	hdrSize := uintptr(PclntabHeaderSize())
 	dataLen := uintptr(len(data))
@@ -461,6 +478,16 @@ func NewGopclntab(ef *pfelf.File) (*Gopclntab, error) {
 		g.functab = data[hdr118.pclnOffset:]
 		g.funcdata = g.functab
 		g.textStart = hdr118.textStart
+		if g.textStart == 0 {
+			// Starting from Go 1.26, textStart address in pclntab is always set to 0.
+			// Therefore we need to get it from either `runtime.text` symbol or moduledata.
+			// Note that it does not always match the address of `.text` section
+			// (for example with cgo binaries or when built with -linkmode=external).
+			g.textStart, err = findTextStart(ef)
+			if err != nil {
+				return nil, fmt.Errorf("failed to find text start: %w", err)
+			}
+		}
 		// With the change of the type of the first field of _func in Go 1.18, this
 		// value is now hard coded.
 		//
@@ -470,8 +497,15 @@ func NewGopclntab(ef *pfelf.File) (*Gopclntab, error) {
 		g.funSize = 4 + uint8(unsafe.Sizeof(pclntabFunc{}))
 	}
 	g.dataRef = ef.Take()
+	g.setDontNeed = ef.SetDontNeed
 
 	return g, nil
+}
+
+// SetDontNeed gives advice about further use of memory.
+func (g *Gopclntab) SetDontNeed() error {
+	g.setDontNeed()
+	return nil
 }
 
 // Close releases the pfelf Data reference taken.
@@ -527,11 +561,17 @@ func (g *Gopclntab) mapPcval(offs int32, startPc, pc uint) (int32, bool) {
 
 // Symbolize returns the file, line and function information for given PC
 func (g *Gopclntab) Symbolize(pc uintptr) (sourceFile string, line uint, funcName string) {
-	index := sort.Search(g.numFuncs, func(i int) bool {
+	// Binary search for the matching go function maps entry. The search
+	// lambda makes 'sort.Search' return the first entry that is larger
+	// than the pc. Thus -1 is needed to get index for the first entry
+	// which is equal or less than pc. The gopclntab has an extra entry in
+	// the end to indicate the end of Go code, use that to determine
+	// if the pc is higher than any Go function address.
+	index := sort.Search(g.numFuncs+1, func(i int) bool {
 		funcPc, _ := g.getFuncMapEntry(i)
 		return funcPc > pc
 	}) - 1
-	if index < 0 {
+	if index >= g.numFuncs || index < 0 {
 		return "", 0, ""
 	}
 
@@ -557,6 +597,25 @@ func (g *Gopclntab) Symbolize(pc uintptr) (sourceFile string, line uint, funcNam
 	return sourceFile, line, funcName
 }
 
+func findTextStart(ef *pfelf.File) (uintptr, error) {
+	// Get textstart from moduledata
+	// Starting from Go 1.26, moduledata has its own `.go.module` section.
+	// Since this function is expected to be called only for Go 1.26+ binaries,
+	// we can expect that the section exists and error out if it does not.
+	moduleDataSection := ef.Section(moduleDataSectionName)
+	if moduleDataSection == nil || moduleDataSection.Type == elf.SHT_NOBITS {
+		return 0, errors.New("could not find .go.module section or it is empty")
+	}
+
+	var textBytes [8]byte
+	_, err := moduleDataSection.ReadAt(textBytes[:], textOffset)
+	if err != nil {
+		return 0, fmt.Errorf("could not read .go.module section at offset %v: %w", textOffset, err)
+	}
+
+	return uintptr(binary.LittleEndian.Uint64(textBytes[:])), nil
+}
+
 type strategy int
 
 const (
@@ -576,6 +635,8 @@ var noFPSourceSuffixes = []string{
 	"/src/crypto/sha256/sha256.go",
 	"/src/crypto/sha512/sha512.go",
 	"/src/crypto/elliptic/p256_asm.go",
+	"/src/internal/cpu/cpu_arm64.go",
+	"/src/internal/cpu/cpu_x86.go",
 	"golang.org/x/crypto/curve25519/curve25519_amd64.go",
 	"golang.org/x/crypto/chacha20poly1305/chacha20poly1305_amd64.go",
 }
@@ -606,12 +667,12 @@ func parseX86pclntabFunc(deltas *sdtypes.StackDeltaArray, p pcval, s strategy) e
 	hints := sdtypes.UnwindHintKeep
 	for ok := true; ok; ok = p.step() {
 		info := sdtypes.UnwindInfo{
-			Opcode: support.UnwindOpcodeBaseSP,
-			Param:  p.val + 8,
+			BaseReg: support.UnwindRegSp,
+			Param:   p.val + 8,
 		}
 		if s == strategyDeltasWithFrame && info.Param >= 16 {
-			info.FPOpcode = support.UnwindOpcodeBaseCFA
-			info.FPParam = -16
+			info.AuxBaseReg = support.UnwindRegCfa
+			info.AuxParam = -16
 		}
 		deltas.Add(sdtypes.StackDelta{
 			Address: uint64(p.pcStart),
@@ -635,13 +696,13 @@ func parseArm64pclntabFunc(deltas *sdtypes.StackDeltaArray, p pcval, s strategy)
 			// Regular basic block in the function body: unwind via SP.
 			info = sdtypes.UnwindInfo{
 				// Unwind via SP offset.
-				Opcode: support.UnwindOpcodeBaseSP,
-				Param:  p.val,
+				BaseReg: support.UnwindRegSp,
+				Param:   p.val,
 			}
 			if s == strategyDeltasWithFrame {
 				// On ARM64, the previous LR value is stored to top-of-stack.
-				info.FPOpcode = support.UnwindOpcodeBaseSP
-				info.FPParam = 0
+				info.AuxBaseReg = support.UnwindRegSp
+				info.AuxParam = 0
 			}
 		}
 

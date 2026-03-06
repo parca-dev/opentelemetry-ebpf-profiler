@@ -6,22 +6,25 @@
 package integrationtests
 
 import (
-	_ "embed"
-
 	"context"
+	_ "embed"
+	"log/slog"
 	"math"
 	"os"
 	"os/exec"
+	"runtime/debug"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/ebpf-profiler/host"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
-	"go.opentelemetry.io/ebpf-profiler/reporter"
+	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
 	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
+	"go.opentelemetry.io/otel/metric/noop"
 )
 
 var (
@@ -33,18 +36,26 @@ var (
 
 	//go:embed pprof_1_24_cgo
 	pprof_1_24_cgo []byte
+
+	//go:embed pprof_1_24_cgo_pie
+	pprof_1_24_cgo_pie []byte
+
+	//go:embed pprof_stable
+	pprof_stable []byte
+
+	//go:embed pprof_stable_cgo
+	pprof_stable_cgo []byte
+
+	//go:embed pprof_stable_cgo_pie
+	pprof_stable_cgo_pie []byte
 )
 
 type mockIntervals struct{}
 
-func (mockIntervals) MonitorInterval() time.Duration    { return 1 * time.Second }
-func (mockIntervals) TracePollInterval() time.Duration  { return 250 * time.Millisecond }
-func (mockIntervals) PIDCleanupInterval() time.Duration { return 1 * time.Second }
-
-type mockReporter struct{}
-
-func (mockReporter) ExecutableKnown(_ libpf.FileID) bool                   { return true }
-func (mockReporter) ExecutableMetadata(_ *reporter.ExecutableMetadataArgs) {}
+func (mockIntervals) MonitorInterval() time.Duration       { return 1 * time.Second }
+func (mockIntervals) TracePollInterval() time.Duration     { return 250 * time.Millisecond }
+func (mockIntervals) PIDCleanupInterval() time.Duration    { return 1 * time.Second }
+func (mockIntervals) ExecutableUnloadDelay() time.Duration { return 1 * time.Second }
 
 func isRoot() bool {
 	return os.Geteuid() == 0
@@ -58,39 +69,38 @@ func Test_Golabels(t *testing.T) {
 	tests := map[string]struct {
 		bin []byte
 	}{
-		"pprof_1_23":     {bin: pprof_1_23},
-		"pprof_1_24":     {bin: pprof_1_24},
-		"pprof_1_24_cgo": {bin: pprof_1_24_cgo},
+		"pprof_1_23":           {bin: pprof_1_23},
+		"pprof_1_24":           {bin: pprof_1_24},
+		"pprof_1_24_cgo":       {bin: pprof_1_24_cgo},
+		"pprof_1_24_cgo_pie":   {bin: pprof_1_24_cgo_pie},
+		"pprof_stable":         {bin: pprof_stable},
+		"pprof_stable_cgo":     {bin: pprof_stable_cgo},
+		"pprof_stable_cgo_pie": {bin: pprof_stable_cgo_pie},
 	}
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			exe, err := os.CreateTemp(t.TempDir(), name)
-			if err != nil {
-				t.Fatal(err)
-			}
+			require.NoError(t, err)
 			defer os.Remove(exe.Name())
 
-			if _, err = exe.Write(tc.bin); err != nil {
-				t.Fatal(err)
-			}
-			if err = exe.Close(); err != nil {
-				t.Fatal(err)
-			}
-
-			if err = os.Chmod(exe.Name(), 0o755); err != nil {
-				t.Fatal(err)
-			}
+			_, err = exe.Write(tc.bin)
+			require.NoError(t, err)
+			require.NoError(t, exe.Close())
+			require.NoError(t, os.Chmod(exe.Name(), 0o755))
 
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
+
+			debug.SetTraceback("all")
+			metrics.Start(noop.Meter{})
 
 			enabledTracers, _ := tracertypes.Parse("")
 			enabledTracers.Enable(tracertypes.Labels)
 			enabledTracers.Enable(tracertypes.GoTracer)
 
+			log.SetLevel(slog.LevelDebug)
 			trc, err := tracer.NewTracer(ctx, &tracer.Config{
-				Reporter:               &mockReporter{},
 				Intervals:              &mockIntervals{},
 				IncludeTracers:         enabledTracers,
 				SamplesPerSecond:       20,
@@ -100,43 +110,51 @@ func Test_Golabels(t *testing.T) {
 				VerboseMode:            true,
 			})
 			require.NoError(t, err)
+			defer trc.Close()
 
 			trc.StartPIDEventProcessor(ctx)
-
-			err = trc.AttachTracer()
-			require.NoError(t, err)
+			require.NoError(t, trc.AttachTracer())
 
 			t.Log("Attached tracer program")
+			require.NoError(t, trc.EnableProfiling())
+			require.NoError(t, trc.AttachSchedMonitor())
 
-			err = trc.EnableProfiling()
-			require.NoError(t, err)
+			traceCh := make(chan *libpf.EbpfTrace)
+			require.NoError(t, trc.StartMapMonitors(ctx, traceCh))
 
-			err = trc.AttachSchedMonitor()
-			require.NoError(t, err)
-
-			traceCh := make(chan *host.Trace)
-
-			err = trc.StartMapMonitors(ctx, traceCh)
-			require.NoError(t, err)
-
+			wg := sync.WaitGroup{}
+			wg.Add(1)
 			go func() {
-				if err := exec.CommandContext(ctx, exe.Name()).Run(); err != nil {
+				defer wg.Done()
+				err := exec.CommandContext(ctx, exe.Name()).Run()
+				select {
+				case <-ctx.Done():
+					t.Log("Test program cancelled (run complete)")
 					select {
-					case <-ctx.Done():
-						// Context is canceled, meaning the test is done.
+					case <-trc.Done():
+						t.Error("map monitoring ended with unrecoverable errors")
 					default:
-						t.Log(err)
 					}
+				default:
+					// Normal exit. We failed to capture frames.
+					require.NoError(t, err)
+					cancel()
+					// For now, let's also panic. This allows to see
+					// the backtrace what the tracer is doing.
+					panic("failed to capture golabel frames")
 				}
 			}()
 
+			ok := false
 			for trace := range traceCh {
 				if trace == nil {
 					continue
 				}
 				if len(trace.CustomLabels) > 0 {
 					hits := 0
-					for k, v := range trace.CustomLabels {
+					for ks, vs := range trace.CustomLabels {
+						k := ks.String()
+						v := vs.String()
 						if strings.HasPrefix(k, "l1") {
 							require.Len(t, v, 22)
 							require.True(t, strings.HasPrefix(v, "label1"))
@@ -155,11 +173,16 @@ func Test_Golabels(t *testing.T) {
 						}
 					}
 					if hits == (1<<0 | 1<<1 | 1<<2) {
+						t.Log("All labels received")
+						ok = true
 						cancel()
 						break
 					}
 				}
 			}
+			t.Log("Exiting test case")
+			require.True(t, ok, "golabels not received")
+			wg.Wait()
 		})
 	}
 }

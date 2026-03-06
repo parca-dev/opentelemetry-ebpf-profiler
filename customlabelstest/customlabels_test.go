@@ -17,12 +17,11 @@ func TestNativeCustomLabels(t *testing.T) {
 		t.Skip("root privileges required")
 	}
 
-	r := &testutils.MockReporter{}
 	enabledTracers, _ := tracertypes.Parse("all")
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	traceCh, _ := testutils.StartTracer(ctx, t, enabledTracers, r, false)
+	traceCh, _ := testutils.StartTracer(ctx, t, enabledTracers, false)
 	// TODO - change this to `cargo build --release --bin custom-labels-example`
 	// once we have the Rust workspace from upstream.
 	cmd := exec.Command("cargo", "build", "--release",
@@ -49,22 +48,23 @@ func TestNativeCustomLabels(t *testing.T) {
 Loop:
 	for {
 		select {
-		case trace, ok := <-traceCh:
+		case traceEvent, ok := <-traceCh:
 			if !ok {
 				break Loop
 			}
-			t.Logf("got a trace %s", trace.Comm)
+			trace := traceEvent.Trace
+			t.Logf("got a trace %s", traceEvent.Meta.Comm)
 			if len(trace.CustomLabels) > 0 {
 				var gotL1, gotL2 bool
 				for k, v := range trace.CustomLabels {
-					switch k {
+					switch k.String() {
 					case "l1":
 						gotL1 = true
-						require.True(t, re.MatchString(v))
+						require.True(t, re.MatchString(v.String()))
 						t.Logf("got l1, value is %s", v)
 					case "l2":
 						gotL2 = true
-						require.True(t, re.MatchString(v))
+						require.True(t, re.MatchString(v.String()))
 						t.Logf("got l2, value is %s", v)
 					default:
 						require.Failf(t, "fail", "got unexpected label: %s=%s", k, v)

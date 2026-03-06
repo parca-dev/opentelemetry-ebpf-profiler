@@ -9,19 +9,19 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"github.com/cespare/xxhash/v2"
 	"github.com/elastic/go-freelru"
-	log "github.com/sirupsen/logrus"
+	"github.com/zeebo/xxh3"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
-	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
+	"go.opentelemetry.io/ebpf-profiler/libc"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	npsr "go.opentelemetry.io/ebpf-profiler/nopanicslicereader"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
 	"go.opentelemetry.io/ebpf-profiler/successfailurecounter"
 	"go.opentelemetry.io/ebpf-profiler/support"
-	"go.opentelemetry.io/ebpf-profiler/tpbase"
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
@@ -69,12 +69,26 @@ type copKey struct {
 // It's main purpose is to hash keys for caching perlCOP values.
 func hashCOPKey(k copKey) uint32 {
 	h := k.copAddr.Hash()
-	return uint32(h ^ xxhash.Sum64String(k.funcName.String()))
+	return uint32(h ^ xxh3.HashString128(k.funcName.String()).Lo)
 }
 
-func (i *perlInstance) UpdateTSDInfo(ebpf interpreter.EbpfHandler, pid libpf.PID,
-	tsdInfo tpbase.TSDInfo) error {
+func (i *perlInstance) UpdateLibcInfo(ebpf interpreter.EbpfHandler, pid libpf.PID,
+	libcInfo libc.LibcInfo) error {
+	// Perl requires TSDInfo to access thread state. If stateInTSD is true,
+	// we need valid TSDInfo to proceed. If it's false, we can proceed without it.
+	// Since UpdateLibcInfo may be called multiple times as LibcInfo is collected
+	// from multiple DSOs, we should only insert proc data when we have what we need.
 	d := i.d
+	if d.stateInTSD && !libcInfo.HasTSDInfo() {
+		// We need TSDInfo but don't have it yet, wait for another call
+		return nil
+	}
+
+	// If we've already inserted proc info, don't do it again
+	if i.procInfoInserted {
+		return nil
+	}
+
 	stateInTSD := uint8(0)
 	if d.stateInTSD {
 		stateInTSD = 1
@@ -84,12 +98,7 @@ func (i *perlInstance) UpdateTSDInfo(ebpf interpreter.EbpfHandler, pid libpf.PID
 		Version:    d.version,
 		StateAddr:  uint64(d.stateAddr) + uint64(i.bias),
 		StateInTSD: stateInTSD,
-
-		TsdInfo: support.TSDInfo{
-			Offset:     tsdInfo.Offset,
-			Multiplier: tsdInfo.Multiplier,
-			Indirect:   tsdInfo.Indirect,
-		},
+		TsdInfo:    libcInfo.TSDInfo,
 
 		Interpreter_curcop:       uint16(vms.interpreter.curcop),
 		Interpreter_curstackinfo: uint16(vms.interpreter.curstackinfo),
@@ -232,7 +241,7 @@ func (i *perlInstance) getHEK(addr libpf.Address) (libpf.String, error) {
 		}
 	}
 
-	s := unsafe.String(unsafe.SliceData(buf[vms.hek.hek_key:]), hekLen)
+	s := pfunsafe.ToString(buf[vms.hek.hek_key : vms.hek.hek_key+uint(hekLen)])
 	if !util.IsValidString(s) {
 		log.Debugf("Extracted invalid hek string at 0x%x '%v'", addr, []byte(s))
 		return libpf.NullString, fmt.Errorf("extracted invalid hek string at 0x%x", addr)
@@ -341,7 +350,8 @@ func (i *perlInstance) getGV(gvAddr libpf.Address, nameOnly bool) (libpf.String,
 // getCOP reads and caches a Control OP from remote interpreter.
 // On success, the COP is returned. On error, the error.
 func (i *perlInstance) getCOP(copAddr libpf.Address, funcName libpf.String) (
-	*perlCOP, error) {
+	*perlCOP, error,
+) {
 	key := copKey{
 		copAddr:  copAddr,
 		funcName: funcName,
@@ -388,8 +398,8 @@ func (i *perlInstance) getCOP(copAddr libpf.Address, funcName libpf.String) (
 	return c, nil
 }
 
-func (i *perlInstance) Symbolize(frame *host.Frame, frames *libpf.Frames) error {
-	if !frame.Type.IsInterpType(libpf.Perl) {
+func (i *perlInstance) Symbolize(ef libpf.EbpfFrame, frames *libpf.Frames, _ libpf.FrameMapping) error {
+	if !ef.Type().IsInterpType(libpf.Perl) {
 		return interpreter.ErrMismatchInterpreterType
 	}
 
@@ -397,13 +407,13 @@ func (i *perlInstance) Symbolize(frame *host.Frame, frames *libpf.Frames) error 
 	defer sfCounter.DefaultToFailure()
 
 	functionName := interpreter.TopLevelFunctionName
-	if gvAddr := libpf.Address(frame.File); gvAddr != 0 {
+	if gvAddr := libpf.Address(ef.Variable(0)); gvAddr != 0 {
 		var err error
 		if functionName, err = i.getGV(gvAddr, false); err != nil {
 			return fmt.Errorf("failed to get Perl GV %x: %v", gvAddr, err)
 		}
 	}
-	copAddr := libpf.Address(frame.Lineno)
+	copAddr := libpf.Address(ef.Variable(1))
 	cop, err := i.getCOP(copAddr, functionName)
 	if err != nil {
 		return fmt.Errorf("failed to get Perl COP %x: %v", copAddr, err)

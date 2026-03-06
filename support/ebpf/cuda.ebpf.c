@@ -50,19 +50,19 @@ struct cuda_scratch {
   u32 ab_num_activities;
 };
 
-bpf_map_def SEC("maps") cuda_scratch_heap = {
-  .type        = BPF_MAP_TYPE_PERCPU_ARRAY,
-  .key_size    = sizeof(u32),
-  .value_size  = sizeof(struct cuda_scratch),
-  .max_entries = 1,
-};
+struct cuda_scratch_heap_t {
+  __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+  __type(key, u32);
+  __type(value, struct cuda_scratch);
+  __uint(max_entries, 1);
+} cuda_scratch_heap SEC(".maps");
 
-bpf_map_def SEC("maps") cuda_timing_events = {
-  .type        = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
-  .key_size    = sizeof(u32),
-  .value_size  = sizeof(u32),
-  .max_entries = 0,
-};
+struct cuda_timing_events_t {
+  __uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
+  __type(key, u32);
+  __type(value, u32);
+  __uint(max_entries, 0);
+} cuda_timing_events SEC(".maps");
 
 SEC("usdt/parcagpu/cuda_kernel")
 int BPF_USDT(
@@ -222,12 +222,12 @@ int cuda_activity_batch_tail(struct pt_regs *ctx)
 // for cuda_activity_batch_tail, whose batch loop pushes past the BPF verifier's
 // BPF_COMPLEXITY_LIMIT_JMP_SEQ (8192) limit.  cuda_correlation and
 // cuda_kernel_exec are inlined directly in cuda_probe.
-bpf_map_def SEC("maps") cuda_progs = {
-  .type        = BPF_MAP_TYPE_PROG_ARRAY,
-  .key_size    = sizeof(u32),
-  .value_size  = sizeof(u32),
-  .max_entries = 1,
-};
+struct cuda_progs_t {
+  __uint(type, BPF_MAP_TYPE_PROG_ARRAY);
+  __type(key, u32);
+  __type(value, u32);
+  __uint(max_entries, 1);
+} cuda_progs SEC(".maps");
 
 SEC("usdt/cuda_probe")
 int cuda_probe(struct pt_regs *ctx)

@@ -9,18 +9,18 @@ import (
 
 type TraceEventMeta struct {
 	Timestamp             libpf.UnixTime64
-	Comm                  string
-	ProcessName           string
-	ExecutablePath        string
+	Comm                  libpf.String
+	ProcessName           libpf.String
+	ExecutablePath        libpf.String
 	APMServiceName        string
-	ContainerID           string
+	ContainerID           libpf.String
 	PID, TID              libpf.PID
 	CPU                   int
 	Origin                libpf.Origin
 	OffTime               int64
 	Allocs, Frees         uint64
 	AllocBytes, FreeBytes uint64
-	EnvVars               map[string]string
+	EnvVars               map[libpf.String]libpf.String
 }
 
 // TraceEvents holds known information about a trace.
@@ -28,8 +28,8 @@ type TraceEvents struct {
 	Frames     libpf.Frames
 	Timestamps []uint64 // in nanoseconds
 	OffTimes   []int64  // in nanoseconds
-	EnvVars    map[string]string
-	Labels     map[string]string
+	EnvVars    map[libpf.String]libpf.String
+	Labels     map[libpf.String]libpf.String
 }
 
 // TraceAndMetaKey is the deduplication key for samples. This **must always**
@@ -38,16 +38,15 @@ type TraceEvents struct {
 type TraceAndMetaKey struct {
 	Hash libpf.TraceHash
 	// comm and apmServiceName are provided by the eBPF programs
-	Comm           string
+	Comm           libpf.String
 	ApmServiceName string
-	// ContainerID is annotated based on PID information
-	ContainerID string
-	Pid         int64
-	Tid         int64
+	Pid            int64
+	Tid            int64
+	CPU            int64
 	// Process name is retrieved from /proc/PID/comm
-	ProcessName string
+	ProcessName libpf.String
 	// Executable path is retrieved from /proc/PID/exe
-	ExecutablePath string
+	ExecutablePath libpf.String
 
 	// ExtraMeta stores extra meta info that may have been produced by a
 	// `SampleAttrProducer` instance. May be nil.
@@ -59,29 +58,7 @@ type TraceAndMetaKey struct {
 type TraceEventsTree map[ContainerID]map[libpf.Origin]KeyToEventMapping
 
 // ContainerID represents an extracted key from /proc/<PID>/cgroup.
-type ContainerID string
+type ContainerID = libpf.String
 
 // KeyToEventMapping supports temporary mapping traces to additional information.
 type KeyToEventMapping map[TraceAndMetaKey]*TraceEvents
-
-// AttrKeyValue is a helper to populate Profile.attribute_table.
-type AttrKeyValue[T string | int64] struct {
-	Key string
-	// Set to true for OTel SemConv attributes with requirement level: Required
-	Required bool
-	Value    T
-}
-
-// ExecInfo enriches an executable with additional metadata.
-type ExecInfo struct {
-	FileName   string
-	GnuBuildID string
-}
-
-// SourceInfo allows mapping a frame to its source origin.
-type SourceInfo struct {
-	LineNumber     libpf.SourceLineno
-	FunctionOffset uint32
-	FunctionName   libpf.String
-	FilePath       libpf.String
-}

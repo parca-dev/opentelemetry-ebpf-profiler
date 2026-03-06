@@ -1,0 +1,777 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package libc // import "go.opentelemetry.io/ebpf-profiler/libc"
+
+import (
+	"debug/elf"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+)
+
+func TestExtractTSDInfo(t *testing.T) {
+	testCases := map[string]struct {
+		machine elf.Machine
+		code    []byte
+		info    TSDInfo
+	}{
+		"musl 1.2.3 / Alpine 3.16 / arm64": {
+			machine: elf.EM_AARCH64,
+			code: []byte{
+				0x41, 0xd0, 0x3b, 0xd5, // mrs   x1, tpidr_el0
+				0x21, 0x80, 0x5a, 0xf8, // ldur  x1, [x1, #-88]
+				0x20, 0x58, 0x60, 0xf8, // ldr   x0, [x1, w0, uxtw #3]
+				0xc0, 0x03, 0x5f, 0xd6, // ret
+			},
+			info: TSDInfo{
+				Offset:     -88,
+				Multiplier: 8,
+				Indirect:   1,
+			},
+		},
+		"glibc 2.35 / Fedora 36 / arm64": {
+			machine: elf.EM_AARCH64,
+			code: []byte{
+				0x5f, 0x24, 0x03, 0xd5, // bti     c
+				0xe1, 0x03, 0x00, 0x2a, // mov     w1, w0
+				0x1f, 0x7c, 0x00, 0x71, // cmp     w0, #0x1f
+				0x48, 0x02, 0x00, 0x54, // b.hi    85bb4 <__pthread_getspecific+0x54>
+				0x20, 0x7c, 0x7c, 0xd3, // ubfiz   x0, x1, #4, #32
+				0x42, 0xd0, 0x3b, 0xd5, // mrs     x2, tpidr_el0
+				0x00, 0xc0, 0x1a, 0xd1, // sub     x0, x0, #0x6b0
+				0x42, 0x00, 0x00, 0x8b, // add     x2, x2, x0
+				0x40, 0x04, 0x40, 0xf9, // ldr     x0, [x2, #8]
+				0x40, 0x01, 0x00, 0xb4, // cbz     x0, 85bac <__pthread_getspecific+0x4c>
+				0x21, 0x7c, 0x7c, 0xd3, // ubfiz   x1, x1, #4, #32
+				0xe3, 0x08, 0x00, 0xd0, // adrp    x3, 1a3000 <intr+0x60>
+				0x63, 0x40, 0x0a, 0x91, // add     x3, x3, #0x290
+				0x44, 0x00, 0x40, 0xf9, // ldr     x4, [x2]
+				0x61, 0x68, 0x61, 0xf8, // ldr     x1, [x3, x1]
+				0x3f, 0x00, 0x04, 0xeb, // cmp     x1, x4
+				0x41, 0x00, 0x00, 0x54, // b.ne    85ba8 <__pthread_getspecific+0x48>
+				0xc0, 0x03, 0x5f, 0xd6, // ret
+				// code skipped handling keys >0x1f
+			},
+			info: TSDInfo{
+				Offset:     -0x6b0 + 8,
+				Multiplier: 0x10,
+			},
+		},
+		"glibc 2.33 / Fedora 34 / arm64": {
+			machine: elf.EM_AARCH64,
+			code: []byte{
+				0x5f, 0x24, 0x03, 0xd5, // bti     c
+				0xe1, 0x03, 0x00, 0x2a, // mov     w1, w0
+				0x1f, 0x7c, 0x00, 0x71, // cmp     w0, #0x1f
+				0x48, 0x02, 0x00, 0x54, // b.hi    fb94 <__pthread_getspecific+0x54>  // b.pmore
+				0x40, 0xd0, 0x3b, 0xd5, // mrs     x0, tpidr_el0
+				0x22, 0x44, 0x00, 0x11, // add     w2, w1, #0x11
+				0x00, 0x40, 0x1e, 0xd1, // sub     x0, x0, #0x790
+				0x02, 0x10, 0x02, 0x8b, // add     x2, x0, x2, lsl #4
+				0x40, 0x04, 0x40, 0xf9, // ldr     x0, [x2, #8]
+				0x00, 0x01, 0x00, 0xb4, // cbz     x0, fb84 <__pthread_getspecific+0x44>
+				0x21, 0x7c, 0x7c, 0xd3, // ubfiz   x1, x1, #4, #32
+				0x03, 0x01, 0x00, 0xb0, // adrp    x3, 30000 <__nptl_nthreads>
+				0x63, 0x80, 0x01, 0x91, // add     x3, x3, #0x60
+				0x44, 0x00, 0x40, 0xf9, // ldr     x4, [x2]
+				0x61, 0x68, 0x61, 0xf8, // ldr     x1, [x3, x1]
+				0x3f, 0x00, 0x04, 0xeb, // cmp     x1, x4
+				0x41, 0x00, 0x00, 0x54, // b.ne    fb88 <__pthread_getspecific+0x48>  // b.any
+				0xc0, 0x03, 0x5f, 0xd6, // ret
+				// code skipped handling keys >0x1f
+			},
+			info: TSDInfo{
+				Offset:     -0x790 + (0x11 << 4) + 8,
+				Multiplier: 0x10,
+			},
+		},
+		"musl 1.2.3 / Alpine 3.16 / x86_64": {
+			machine: elf.EM_X86_64,
+			code: []byte{
+				// mov    %fs:0x0,%rax
+				// mov    0x80(%rax),%rax
+				// mov    %edi,%edi
+				// mov    (%rax,%rdi,8),%rax
+				// ret
+				0x64, 0x48, 0x8b, 0x04, 0x25, 0x00, 0x00, 0x00,
+				0x00, 0x48, 0x8b, 0x80, 0x80, 0x00, 0x00, 0x00,
+				0x89, 0xff, 0x48, 0x8b, 0x04, 0xf8, 0xc3,
+			},
+			info: TSDInfo{
+				Offset:     0x80,
+				Multiplier: 0x8,
+				Indirect:   1,
+			},
+		},
+		"musl 1.1.24 / Alpine 3.12 / x86_64": {
+			machine: elf.EM_X86_64,
+			code: []byte{
+				// mov    %fs:0x0,%rax
+				// mov    0x88(%rax),%rax
+				// mov    %edi,%edi
+				// mov    (%rax,%rdi,8),%rax
+				// ret
+				0x64, 0x48, 0x8b, 0x04, 0x25, 0x00, 0x00, 0x00,
+				0x00, 0x48, 0x8b, 0x80, 0x88, 0x00, 0x00, 0x00,
+				0x89, 0xff, 0x48, 0x8b, 0x04, 0xf8, 0xc3,
+			},
+			info: TSDInfo{
+				Offset:     0x88,
+				Multiplier: 0x8,
+				Indirect:   1,
+			},
+		},
+		"glibc 2.32 / Fedora 33 / x86_64": {
+			machine: elf.EM_X86_64,
+			code: []byte{
+				// endbr64
+				// cmp    $0x1f,%edi
+				// ja     10bf0 <__pthread_getspecific+0x40>
+				// lea    0x31(%rdi),%eax
+				// shl    $0x4,%rax      # <- 0x31<<4 = 0x310, <<4 = *0x10
+				// mov    %fs:0x10,%rdx
+				// add    %rdx,%rax
+				// mov    0x8(%rax),%r8  # <- +8
+				// test   %r8,%r8
+				// je     10beb <__pthread_getspecific+0x3b>
+				// mov    %edi,%edi
+				// lea    0xc4c2(%rip),%rdx # 1d0a0 <__GI___pthread_keys>
+				// mov    (%rax),%rsi
+				// shl    $0x4,%rdi
+				// cmp    %rsi,(%rdx,%rdi,1)
+				// jne    10c20 <__pthread_getspecific+0x70>
+				// mov    %r8,%rax
+				// retq
+				// code skipped for handling keys >0x1f
+				0xf3, 0x0f, 0x1e, 0xfa, 0x83, 0xff, 0x1f, 0x77,
+				0x37, 0x8d, 0x47, 0x31, 0x48, 0xc1, 0xe0, 0x04,
+				0x64, 0x48, 0x8b, 0x14, 0x25, 0x10, 0x00, 0x00,
+				0x00, 0x48, 0x01, 0xd0, 0x4c, 0x8b, 0x40, 0x08,
+				0x4d, 0x85, 0xc0, 0x74, 0x16, 0x89, 0xff, 0x48,
+				0x8d, 0x15, 0xc2, 0xc4, 0x00, 0x00, 0x48, 0x8b,
+				0x30, 0x48, 0xc1, 0xe7, 0x04, 0x48, 0x39, 0x34,
+				0x3a, 0x75, 0x35, 0x4c, 0x89, 0xc0, 0xc3,
+			},
+			info: TSDInfo{
+				Offset:     0x310 + 8,
+				Multiplier: 0x10,
+			},
+		},
+		"glibc 2.35  / Fedora 36 / x86_64": {
+			machine: elf.EM_X86_64,
+			code: []byte{
+				// endbr64
+				// cmp    $0x1f,%edi
+				// ja     92a40 <__pthread_getspecific@GLIBC_2.2.5+0x40>
+				// mov    %edi,%eax
+				// add    $0x31,%rax
+				// shl    $0x4,%rax
+				// add    %fs:0x10,%rax
+				// mov    0x8(%rax),%rdx
+				// test   %rdx,%rdx
+				// je     92a78 <__pthread_getspecific@GLIBC_2.2.5+0x78>
+				// mov    %edi,%edi
+				// lea    0x167b92(%rip),%rcx
+				// mov    (%rax),%rsi
+				// shl    $0x4,%rdi
+				// cmp    %rsi,(%rcx,%rdi,1)
+				// jne    92a70 <__pthread_getspecific@GLIBC_2.2.5+0x70>
+				// mov    %rdx,%rax
+				// ret
+				// code skipped for handling keys >0x1f
+				0xf3, 0x0f, 0x1e, 0xfa, 0x83, 0xff, 0x1f, 0x77,
+				0x37, 0x89, 0xf8, 0x48, 0x83, 0xc0, 0x31, 0x48,
+				0xc1, 0xe0, 0x04, 0x64, 0x48, 0x03, 0x04, 0x25,
+				0x10, 0x00, 0x00, 0x00, 0x48, 0x8b, 0x50, 0x08,
+				0x48, 0x85, 0xd2, 0x74, 0x53, 0x89, 0xff, 0x48,
+				0x8d, 0x0d, 0x92, 0x7b, 0x16, 0x00, 0x48, 0x8b,
+				0x30, 0x48, 0xc1, 0xe7, 0x04, 0x48, 0x39, 0x34,
+				0x39, 0x75, 0x35, 0x48, 0x89, 0xd0, 0xc3,
+			},
+			info: TSDInfo{
+				Offset:     0x310 + 8,
+				Multiplier: 0x10,
+			},
+		},
+		"glibc 2.38 / Fedora 39 / arm64": {
+			machine: elf.EM_AARCH64,
+			code: []byte{
+				0x3f, 0x23, 0x03, 0xd5, // paciasp
+				0xfd, 0x7b, 0xbf, 0xa9, // stp     x29, x30, [sp, #-16]!
+				0xe1, 0x03, 0x00, 0x2a, // mov     w1, w0
+				0xfd, 0x03, 0x00, 0x91, // mov     x29, sp
+				0x1f, 0x7c, 0x00, 0x71, // cmp     w0, #0x1f
+				// b.hi    91d98 <__pthread_getspecific@GLIBC_2.17+0x58>  // b.pmore
+				0x28, 0x02, 0x00, 0x54,
+				// mov     x0, #0xfffffffffffff9d0         // #-1584
+				0xe0, 0xc5, 0x80, 0x92,
+				0x42, 0xd0, 0x3b, 0xd5, // mrs     x2, tpidr_el0
+				0x00, 0x50, 0x21, 0x8b, // add     x0, x0, w1, uxtw #4
+				0x42, 0x00, 0x00, 0x8b, // add     x2, x2, x0
+				0x40, 0x04, 0x40, 0xf9, // ldr     x0, [x2, #8]
+				// cbz     x0, 91dcc <__pthread_getspecific@GLIBC_2.17+0x8c>
+				0x00, 0x03, 0x00, 0xb4,
+				0x21, 0x7c, 0x7c, 0xd3, // ubfiz   x1, x1, #4, #32
+				0x83, 0x09, 0x00, 0xb0, // adrp    x3, 1c2000 <initial+0x198>
+				0x63, 0x40, 0x17, 0x91, // add     x3, x3, #0x5d0
+				0x44, 0x00, 0x40, 0xf9, // ldr     x4, [x2]
+				0x61, 0x68, 0x61, 0xf8, // ldr     x1, [x3, x1]
+				0x3f, 0x00, 0x04, 0xeb, // cmp     x1, x4
+				// b.ne    91dc8 <__pthread_getspecific@GLIBC_2.17+0x88>  // b.any
+				0x01, 0x02, 0x00, 0x54,
+				0xfd, 0x7b, 0xc1, 0xa8, // ldp     x29, x30, [sp], #16
+				0xbf, 0x23, 0x03, 0xd5, // autiasp
+				0xc0, 0x03, 0x5f, 0xd6, // ret
+				// code skipped handling keys >0x1f
+			},
+			info: TSDInfo{
+				Offset:     -1584 + 8,
+				Multiplier: 16,
+			},
+		},
+		"booking coredump glibc": {
+			machine: elf.EM_X86_64,
+			code: []byte{
+				0x83, 0xff, 0x1f, 0x77, 0x49, 0x89, 0xf8, 0x48, 0x83, 0xc0, 0x30, 0x48,
+				0xc1, 0xe0, 0x04, 0x64, 0x48, 0x8b, 0x14, 0x25, 0x10, 0x00, 0x00, 0x00,
+				0x48, 0x8d, 0x54, 0x02, 0x10, 0x48, 0x8b, 0x42, 0x08, 0x48, 0x85, 0xc0,
+				0x74, 0x1a, 0x89, 0xff, 0x48, 0x8d, 0x0d, 0x61, 0xaa, 0x20, 0x00, 0x48,
+				0xc1, 0xe7, 0x04, 0x48, 0x8b, 0x34, 0x39, 0x48, 0x39, 0x32, 0x75, 0x07,
+				0xf3, 0xc3,
+			},
+			info: TSDInfo{
+				Offset:     0x310 + 8,
+				Multiplier: 0x10,
+			},
+		},
+	}
+
+	for name, test := range testCases {
+		t.Run(name, func(t *testing.T) {
+			var info TSDInfo
+			var err error
+			switch test.machine {
+			case elf.EM_X86_64:
+				info, err = extractTSDInfoX86(test.code)
+			case elf.EM_AARCH64:
+				info, err = extractTSDInfoARM(test.code)
+			}
+			if assert.NoError(t, err) {
+				assert.Equal(t, test.info, info, "Wrong TSD info extraction")
+			}
+		})
+	}
+}
+
+func TestExtractDTVOffset(t *testing.T) {
+	testCases := map[string]struct {
+		machine elf.Machine
+		code    []byte
+		info    DTVInfo
+	}{
+		"glibc 2.36 / debian 12 / x86_64": {
+			machine: elf.EM_X86_64,
+			code: []byte{
+				// mov    %fs:0x8,%rdx
+				// mov    0x1fc48(%rip),%rax        # 0x7ffff7ffe0b8 <_rtld_global+4248>
+				// cmp    %rax,(%rdx)
+				// jne    0x7ffff7fde48b <__tls_get_addr+43>
+				// mov    (%rdi),%rax
+				// shl    $0x4,%rax
+				// mov    (%rdx,%rax,1),%rax
+				// cmp    $0xffffffffffffffff,%rax
+				// je     0x7ffff7fde48b <__tls_get_addr+43>
+				// add    0x8(%rdi),%rax
+				// ret
+				// push   %rbp
+				// mov    %rsp,%rbp
+				// and    $0xfffffffffffffff0,%rsp
+				// call   0x7ffff7fdbd40 <__tls_get_addr_slow>
+				// mov    %rbp,%rsp
+				// pop    %rbp
+				// ret
+				0x64, 0x48, 0x8b, 0x14, 0x25, 0x08, 0x00, 0x00, 0x00,
+				0x48, 0x8b, 0x05, 0x48, 0xfc, 0x01, 0x00,
+				0x48, 0x39, 0x02,
+				0x75, 0x16,
+				0x48, 0x8b, 0x07,
+				0x48, 0xc1, 0xe0, 0x04,
+				0x48, 0x8b, 0x04, 0x02,
+				0x48, 0x83, 0xf8, 0xff,
+				0x74, 0x05,
+				0x48, 0x03, 0x47, 0x08,
+				0xc3,
+				0x55,
+				0x48, 0x89, 0xe5,
+				0x48, 0x83, 0xe4, 0xf0,
+				0xe8, 0xa8, 0xd8, 0xff, 0xff,
+				0x48, 0x89, 0xec,
+				0x5d,
+				0xc3,
+			},
+			info: DTVInfo{
+				Offset:     8,
+				Multiplier: 16,
+				Indirect:   0,
+			},
+		},
+		"glibc 2.32 / Fedora 33 / x86_64": {
+			machine: elf.EM_X86_64,
+			code: []byte{
+				// endbr64
+				// mov    %fs:0x8,%rdx
+				// mov    0x1394c(%rip),%rax        # 0x7f48d90c2ff0 <_rtld_local+4080>
+				// cmp    %rax,(%rdx)
+				// jne    0x7f48d90af6bf <__tls_get_addr+47>
+				// mov    (%rdi),%rax
+				// shl    $0x4,%rax
+				// mov    (%rdx,%rax,1),%rax
+				// cmp    $0xffffffffffffffff,%rax
+				// je     0x7f48d90af6bf <__tls_get_addr+47>
+				// add    0x8(%rdi),%rax
+				// ret
+				// push   %rbp
+				// mov    %rsp,%rbp
+				// and    $0xfffffffffffffff0,%rsp
+				// call   0x7f48d90a9ed0 <__tls_get_addr_slow>
+				// mov    %rbp,%rsp
+				// pop    %rbp
+				// ret
+				0xf3, 0x0f, 0x1e, 0xfa,
+				0x64, 0x48, 0x8b, 0x14, 0x25, 0x08, 0x00, 0x00, 0x00,
+				0x48, 0x8b, 0x05, 0x4c, 0x39, 0x01, 0x00,
+				0x48, 0x39, 0x02,
+				0x75, 0x16,
+				0x48, 0x8b, 0x07,
+				0x48, 0xc1, 0xe0, 0x04,
+				0x48, 0x8b, 0x04, 0x02,
+				0x48, 0x83, 0xf8, 0xff,
+				0x74, 0x05,
+				0x48, 0x03, 0x47, 0x08,
+				0xc3,
+				0x55,
+				0x48, 0x89, 0xe5,
+				0x48, 0x83, 0xe4, 0xf0,
+				0xe8, 0x04, 0xa8, 0xff, 0xff,
+				0x48, 0x89, 0xec,
+				0x5d,
+				0xc3,
+			},
+			info: DTVInfo{
+				Offset:     8,
+				Multiplier: 16,
+				Indirect:   0,
+			},
+		},
+		"musl 1.2.5 / alpine 3.22.2 / x86_64": {
+			machine: elf.EM_X86_64,
+			code: []byte{
+				// mov    %fs:0x0,%rax
+				// mov    (%rdi),%rcx
+				// mov    0x8(%rax),%rdx
+				// mov    0x8(%rdi),%rax
+				// add    (%rdx,%rcx,8),%rax
+				// ret
+				0x64, 0x48, 0x8b, 0x04, 0x25, 0x00, 0x00, 0x00, 0x00,
+				0x48, 0x8b, 0x0f,
+				0x48, 0x8b, 0x50, 0x08,
+				0x48, 0x8b, 0x47, 0x08,
+				0x48, 0x03, 0x04, 0xca,
+				0xc3,
+			},
+			info: DTVInfo{
+				Offset:     8,
+				Multiplier: 8,
+				Indirect:   1,
+			},
+		},
+		"musl 1.1.5 / alpine 3.1 / x86_64": {
+			machine: elf.EM_X86_64,
+			code: []byte{
+				// mov    %fs:0x0,%rax
+				// mov    0x8(%rax),%rax
+				// mov    (%rdi),%rdx
+				// cmp    %rdx,(%rax)
+				// jae    0x7f824da49ef3 <__tls_get_addr+26>
+				// jmpq   0x7f824da191d5
+				// mov    (%rax,%rdx,8),%rax
+				// add    0x8(%rdi),%rax
+				// retq
+				0x64, 0x48, 0x8b, 0x04, 0x25, 0x00, 0x00, 0x00, 0x00,
+				0x48, 0x8b, 0x40, 0x08,
+				0x48, 0x8b, 0x17,
+				0x48, 0x39, 0x10,
+				0x73, 0x05,
+				0xe9, 0xe2, 0xf2, 0xfc, 0xff,
+				0x48, 0x8b, 0x04, 0xd0,
+				0x48, 0x03, 0x47, 0x08,
+				0xc3,
+			},
+			info: DTVInfo{
+				Offset:     8,
+				Multiplier: 8,
+				Indirect:   1,
+			},
+		},
+		"glibc 2.39 / ubuntu 24.04 / aarch64": {
+			machine: elf.EM_AARCH64,
+			code: []byte{
+				0x41, 0xd0, 0x3b, 0xd5, // mrs     x1, tpidr_el0
+				0xfd, 0x7b, 0xbf, 0xa9, // stp     x29, x30, [sp, #-16]!
+				0x83, 0x01, 0x00, 0xb0, // adrp    x3, 0xfffff7fff000 <_rtld_global+4096>
+				0xfd, 0x03, 0x00, 0x91, // mov     x29, sp
+				0x63, 0x00, 0x05, 0x91, // add     x3, x3, #0x140
+				0x21, 0x00, 0x40, 0xf9, // ldr     x1, [x1]
+				0x64, 0x00, 0x40, 0xf9, // ldr     x4, [x3]
+				0x25, 0x00, 0x40, 0xf9, // ldr     x5, [x1]
+				0xbf, 0x00, 0x04, 0xeb, // cmp     x5, x4
+				0x41, 0x01, 0x00, 0x54, // b.ne    0xfffff7fce2bc <__GI___tls_get_addr+76>  // b.any
+				0x03, 0x00, 0x40, 0xf9, // ldr     x3, [x0]
+				0x63, 0xec, 0x7c, 0xd3, // lsl     x3, x3, #4
+				0x23, 0x68, 0x63, 0xf8, // ldr     x3, [x1, x3]
+				0x7f, 0x04, 0x00, 0xb1, // cmn     x3, #0x1
+				0x00, 0x01, 0x00, 0x54, // b.eq    0xfffff7fce2c8 <__GI___tls_get_addr+88>  // b.none
+				0x00, 0x04, 0x40, 0xf9, // ldr     x0, [x0, #8]
+				0xfd, 0x7b, 0xc1, 0xa8, // ldp     x29, x30, [sp], #16
+				0x60, 0x00, 0x00, 0x8b, // add     x0, x3, x0
+				0xc0, 0x03, 0x5f, 0xd6, // ret
+				0x61, 0xfc, 0xdf, 0xc8, // ldar    x1, [x3]
+				0xfd, 0x7b, 0xc1, 0xa8, // ldp     x29, x30, [sp], #16
+				0xd3, 0xff, 0xff, 0x17, // b       0xfffff7fce210 <update_get_addr>
+				0xfd, 0x7b, 0xc1, 0xa8, // ldp     x29, x30, [sp], #16
+				0x02, 0x00, 0x80, 0xd2, // mov     x2, #0x0                        // #0
+				0xa9, 0xfc, 0xff, 0x17, // b       0xfffff7fcd574 <tls_get_addr_tail>
+
+			},
+			info: DTVInfo{
+				Offset:     0,
+				Multiplier: 16,
+				Indirect:   1,
+			},
+		},
+		"glibc / Fedora 39 / aarch64": {
+			machine: elf.EM_AARCH64,
+			code: []byte{
+				0x5f, 0x24, 0x03, 0xd5, // bti     c
+				0x41, 0xd0, 0x3b, 0xd5, // mrs     x1, tpidr_el0
+				0x3f, 0x23, 0x03, 0xd5, // paciasp
+				0xfd, 0x7b, 0xbf, 0xa9, // stp     x29, x30, [sp, #-16]!
+				0x83, 0x01, 0x00, 0xb0, // adrp    x3, 0xeebc52855000 <_rtld_local+4096>
+				0x63, 0x40, 0x05, 0x91, // add     x3, x3, #0x150
+				0xfd, 0x03, 0x00, 0x91, // mov     x29, sp
+				0x21, 0x00, 0x40, 0xf9, // ldr     x1, [x1]
+				0x63, 0x00, 0x40, 0xf9, // ldr     x3, [x3]
+				0x24, 0x00, 0x40, 0xf9, // ldr     x4, [x1]
+				0x9f, 0x00, 0x03, 0xeb, // cmp     x4, x3
+				0x61, 0x01, 0x00, 0x54, // b.ne    0xeebc52824278 <__GI___tls_get_addr+88>  // b.any
+				0x03, 0x00, 0x40, 0xf9, // ldr     x3, [x0]
+				0x63, 0xec, 0x7c, 0xd3, // lsl     x3, x3, #4
+				0x23, 0x68, 0x63, 0xf8, // ldr     x3, [x1, x3]
+				0x7f, 0x04, 0x00, 0xb1, // cmn     x3, #0x1
+				0x20, 0x01, 0x00, 0x54, // b.eq    0xeebc52824284 <__GI___tls_get_addr+100>  // b.none
+				0x00, 0x04, 0x40, 0xf9, // ldr     x0, [x0, #8]
+				0xfd, 0x7b, 0xc1, 0xa8, // ldp     x29, x30, [sp], #16
+				0xbf, 0x23, 0x03, 0xd5, // autiasp
+				0x60, 0x00, 0x00, 0x8b, // add     x0, x3, x0
+				0xc0, 0x03, 0x5f, 0xd6, // ret
+				0xfd, 0x7b, 0xc1, 0xa8, // ldp     x29, x30, [sp], #16
+				0xbf, 0x23, 0x03, 0xd5, // autiasp
+				0xcc, 0xff, 0xff, 0x17, // b       0xeebc528241b0 <update_get_addr>
+				0xfd, 0x7b, 0xc1, 0xa8, // ldp     x29, x30, [sp], #16
+				0xbf, 0x23, 0x03, 0xd5, // autiasp
+				0x02, 0x00, 0x80, 0xd2, // mov     x2, #0x0                        // #0
+				0x70, 0xfc, 0xff, 0x17, // b       0xeebc52823450 <tls_get_addr_tail>
+			},
+			info: DTVInfo{
+				Offset:     0,
+				Multiplier: 16,
+				Indirect:   1,
+			},
+		},
+		"glibc / Fedora 33 / aarch64": {
+			machine: elf.EM_AARCH64,
+			code: []byte{
+				0x5f, 0x24, 0x03, 0xd5, //bti     c
+				0x41, 0xd0, 0x3b, 0xd5, //mrs     x1, tpidr_el0
+				0x62, 0x01, 0x00, 0xf0, //adrp    x2, 0xf58e5fcc1000 <_rtld_local+4072>
+				0x43, 0x60, 0x40, 0xf9, //ldr     x3, [x2, #192]
+				0x21, 0x00, 0x40, 0xf9, //ldr     x1, [x1]
+				0x24, 0x00, 0x40, 0xf9, //ldr     x4, [x1]
+				0x9f, 0x00, 0x03, 0xeb, //cmp     x4, x3
+				0x21, 0x01, 0x00, 0x54, //b.ne    0xf58e5fc921e0 <__GI___tls_get_addr+64>  // b.any
+				0x03, 0x00, 0x40, 0xf9, //ldr     x3, [x0]
+				0x63, 0xec, 0x7c, 0xd3, //lsl     x3, x3, #4
+				0x23, 0x68, 0x63, 0xf8, //ldr     x3, [x1, x3]
+				0x7f, 0x04, 0x00, 0xb1, //cmn     x3, #0x1
+				0xa0, 0x00, 0x00, 0x54, //b.eq    0xf58e5fc921e4 <__GI___tls_get_addr+68>  // b.none
+				0x00, 0x04, 0x40, 0xf9, //ldr     x0, [x0, #8]
+				0x60, 0x00, 0x00, 0x8b, //add     x0, x3, x0
+				0xc0, 0x03, 0x5f, 0xd6, //ret
+				0xd4, 0xff, 0xff, 0x17, //b       0xf58e5fc92130 <update_get_addr>
+				0x02, 0x00, 0x80, 0xd2, //mov     x2, #0x0                        // #0
+				0x7e, 0xfc, 0xff, 0x17, //b       0xf58e5fc913e0 <tls_get_addr_tail>
+			},
+			info: DTVInfo{
+				Offset:     0,
+				Multiplier: 16,
+				Indirect:   1,
+			},
+		},
+
+		"musl 1.2.5 / alpine 3.22 / aarch64": { // same as alpine 3.13, oldest on dockerhub
+			machine: elf.EM_AARCH64,
+			code: []byte{
+				0x02, 0x00, 0x40, 0xa9, // ldp     x2, x0, [x0]
+				0x41, 0xd0, 0x3b, 0xd5, // mrs     x1, tpidr_el0
+				0x21, 0x80, 0x5f, 0xf8, // ldur    x1, [x1, #-8]
+				0x21, 0x78, 0x62, 0xf8, // ldr     x1, [x1, x2, lsl #3]
+				0x20, 0x00, 0x00, 0x8b, // add     x0, x1, x0
+				0xc0, 0x03, 0x5f, 0xd6, // ret
+			},
+			info: DTVInfo{
+				Offset:     -8,
+				Multiplier: 8,
+				Indirect:   1,
+			},
+		},
+	}
+
+	for name, test := range testCases {
+		t.Run(name, func(t *testing.T) {
+			var info DTVInfo
+			var err error
+			switch test.machine {
+			case elf.EM_X86_64:
+				info, err = extractDTVInfoX86(test.code)
+			case elf.EM_AARCH64:
+				info, err = extractDTVInfoARM(test.code)
+			}
+			if assert.NoError(t, err) {
+				assert.Equal(t, test.info, info)
+			}
+		})
+	}
+}
+
+func TestLibcInfoIsEqual(t *testing.T) {
+	testCases := map[string]struct {
+		left        LibcInfo
+		right       LibcInfo
+		expectEqual bool
+	}{
+		"empty libcinfos are equal": {
+			left:        LibcInfo{},
+			right:       LibcInfo{},
+			expectEqual: true,
+		},
+		"nested values are equal": {
+			left: LibcInfo{
+				TSDInfo{
+					Offset:     8,
+					Multiplier: 8,
+					Indirect:   1,
+				},
+				DTVInfo{
+					Offset:     -8,
+					Multiplier: 16,
+					Indirect:   0,
+				},
+			},
+			right: LibcInfo{
+				TSDInfo{
+					Offset:     8,
+					Multiplier: 8,
+					Indirect:   1,
+				},
+				DTVInfo{
+					Offset:     -8,
+					Multiplier: 16,
+					Indirect:   0,
+				},
+			},
+			expectEqual: true,
+		},
+		"nested values are not equal": {
+			left: LibcInfo{
+				TSDInfo{},
+				DTVInfo{
+					Offset:     -8,
+					Multiplier: 16,
+					Indirect:   0,
+				},
+			},
+			right: LibcInfo{
+				TSDInfo{
+					Offset:     8,
+					Multiplier: 8,
+					Indirect:   1,
+				},
+				DTVInfo{},
+			},
+			expectEqual: false,
+		},
+	}
+
+	for name, test := range testCases {
+		t.Run(name, func(t *testing.T) {
+			assert.Equal(t, test.expectEqual, test.left.IsEqual(test.right))
+		})
+	}
+}
+
+func TestLibcInfoMerge(t *testing.T) {
+	testCases := map[string]struct {
+		left     LibcInfo
+		right    LibcInfo
+		expected LibcInfo
+	}{
+		"non-empty TSD values are accumulated from other": {
+			left: LibcInfo{},
+			right: LibcInfo{
+				TSDInfo{
+					Offset:     8,
+					Multiplier: 8,
+					Indirect:   1,
+				},
+				DTVInfo{},
+			},
+			expected: LibcInfo{
+				TSDInfo{
+					Offset:     8,
+					Multiplier: 8,
+					Indirect:   1,
+				},
+				DTVInfo{},
+			},
+		},
+		"non-empty DTV values are accumulated from other": {
+			left: LibcInfo{},
+			right: LibcInfo{
+				TSDInfo{},
+				DTVInfo{
+					Offset:     -8,
+					Multiplier: 16,
+					Indirect:   0,
+				},
+			},
+			expected: LibcInfo{
+				TSDInfo{},
+				DTVInfo{
+					Offset:     -8,
+					Multiplier: 16,
+					Indirect:   0,
+				},
+			},
+		},
+		"non-empty TSD values are accumulated from other, with DTV already set": {
+			left: LibcInfo{
+				TSDInfo{},
+				DTVInfo{
+					Offset:     -8,
+					Multiplier: 16,
+					Indirect:   0,
+				},
+			},
+			right: LibcInfo{
+				TSDInfo{
+					Offset:     8,
+					Multiplier: 8,
+					Indirect:   1,
+				},
+				DTVInfo{},
+			},
+			expected: LibcInfo{
+				TSDInfo{
+					Offset:     8,
+					Multiplier: 8,
+					Indirect:   1,
+				},
+				DTVInfo{
+					Offset:     -8,
+					Multiplier: 16,
+					Indirect:   0,
+				},
+			},
+		},
+		"non-empty DTV values are accumulated from other, with TSD already set": {
+			left: LibcInfo{
+				TSDInfo{
+					Offset:     8,
+					Multiplier: 8,
+					Indirect:   1,
+				},
+				DTVInfo{},
+			},
+			right: LibcInfo{
+				TSDInfo{},
+				DTVInfo{
+					Offset:     -8,
+					Multiplier: 16,
+					Indirect:   0,
+				},
+			},
+			expected: LibcInfo{
+				TSDInfo{
+					Offset:     8,
+					Multiplier: 8,
+					Indirect:   1,
+				},
+				DTVInfo{
+					Offset:     -8,
+					Multiplier: 16,
+					Indirect:   0,
+				},
+			},
+		},
+
+		// This is not expected to actually happen, but we want to be clear
+		// that values already present, if not empty, are kept and not reset
+		"non-empty values are ignored if already set": {
+			left: LibcInfo{
+				TSDInfo{
+					Offset:     8,
+					Multiplier: 8,
+					Indirect:   1,
+				},
+				DTVInfo{
+					Offset:     -8,
+					Multiplier: 16,
+					Indirect:   0,
+				},
+			},
+			right: LibcInfo{
+				TSDInfo{
+					Offset:     16,
+					Multiplier: 16,
+					Indirect:   0,
+				},
+				DTVInfo{
+					Offset:     8,
+					Multiplier: 16,
+					Indirect:   1,
+				},
+			},
+			expected: LibcInfo{
+				TSDInfo{
+					Offset:     8,
+					Multiplier: 8,
+					Indirect:   1,
+				},
+				DTVInfo{
+					Offset:     -8,
+					Multiplier: 16,
+					Indirect:   0,
+				},
+			},
+		},
+	}
+
+	for name, test := range testCases {
+		t.Run(name, func(t *testing.T) {
+			merged := test.left
+			merged.Merge(test.right)
+			assert.True(t, test.expected.IsEqual(merged))
+		})
+	}
+}

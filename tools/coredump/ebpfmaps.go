@@ -12,6 +12,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	"go.opentelemetry.io/ebpf-profiler/lpm"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	sdtypes "go.opentelemetry.io/ebpf-profiler/nativeunwind/stackdeltatypes"
@@ -53,7 +54,7 @@ func (emc *ebpfMapsCoredump) UpdateInterpreterOffsets(ebpfProgIndex uint16,
 	if err != nil {
 		return err
 	}
-	emc.ctx.addMap(&C.interpreter_offsets, C.u64(key), libpf.SliceFrom(&value))
+	emc.ctx.addMap(unsafe.Pointer(&C.interpreter_offsets), C.u64(key), pfunsafe.FromPointer(&value))
 	return nil
 }
 
@@ -61,21 +62,23 @@ func (emc *ebpfMapsCoredump) UpdateProcData(t libpf.InterpreterType, pid libpf.P
 	ptr unsafe.Pointer) error {
 	switch t {
 	case libpf.Dotnet:
-		emc.ctx.addMap(&C.dotnet_procs, C.u32(pid), sliceBuffer(ptr, C.sizeof_DotnetProcInfo))
+		emc.ctx.addMap(unsafe.Pointer(&C.dotnet_procs), C.u32(pid), sliceBuffer(ptr, C.sizeof_DotnetProcInfo))
 	case libpf.Perl:
-		emc.ctx.addMap(&C.perl_procs, C.u32(pid), sliceBuffer(ptr, C.sizeof_PerlProcInfo))
+		emc.ctx.addMap(unsafe.Pointer(&C.perl_procs), C.u32(pid), sliceBuffer(ptr, C.sizeof_PerlProcInfo))
 	case libpf.PHP:
-		emc.ctx.addMap(&C.php_procs, C.u32(pid), sliceBuffer(ptr, C.sizeof_PHPProcInfo))
+		emc.ctx.addMap(unsafe.Pointer(&C.php_procs), C.u32(pid), sliceBuffer(ptr, C.sizeof_PHPProcInfo))
 	case libpf.Python:
-		emc.ctx.addMap(&C.py_procs, C.u32(pid), sliceBuffer(ptr, C.sizeof_PyProcInfo))
+		emc.ctx.addMap(unsafe.Pointer(&C.py_procs), C.u32(pid), sliceBuffer(ptr, C.sizeof_PyProcInfo))
 	case libpf.HotSpot:
-		emc.ctx.addMap(&C.hotspot_procs, C.u32(pid), sliceBuffer(ptr, C.sizeof_HotspotProcInfo))
+		emc.ctx.addMap(unsafe.Pointer(&C.hotspot_procs), C.u32(pid), sliceBuffer(ptr, C.sizeof_HotspotProcInfo))
 	case libpf.Ruby:
-		emc.ctx.addMap(&C.ruby_procs, C.u32(pid), sliceBuffer(ptr, C.sizeof_RubyProcInfo))
+		emc.ctx.addMap(unsafe.Pointer(&C.ruby_procs), C.u32(pid), sliceBuffer(ptr, C.sizeof_RubyProcInfo))
 	case libpf.V8:
-		emc.ctx.addMap(&C.v8_procs, C.u32(pid), sliceBuffer(ptr, C.sizeof_V8ProcInfo))
+		emc.ctx.addMap(unsafe.Pointer(&C.v8_procs), C.u32(pid), sliceBuffer(ptr, C.sizeof_V8ProcInfo))
+	case libpf.BEAM:
+		emc.ctx.addMap(unsafe.Pointer(&C.beam_procs), C.u32(pid), sliceBuffer(ptr, C.sizeof_BEAMProcInfo))
 	case libpf.LuaJIT:
-		emc.ctx.addMap(&C.luajit_procs, C.u32(pid), sliceBuffer(ptr, C.sizeof_LuaJITProcInfo))
+		emc.ctx.addMap(unsafe.Pointer(&C.luajit_procs), C.u32(pid), sliceBuffer(ptr, C.sizeof_LuaJITProcInfo))
 	}
 	return nil
 }
@@ -83,21 +86,23 @@ func (emc *ebpfMapsCoredump) UpdateProcData(t libpf.InterpreterType, pid libpf.P
 func (emc *ebpfMapsCoredump) DeleteProcData(t libpf.InterpreterType, pid libpf.PID) error {
 	switch t {
 	case libpf.Dotnet:
-		emc.ctx.delMap(&C.dotnet_procs, C.u32(pid))
+		emc.ctx.delMap(unsafe.Pointer(&C.dotnet_procs), C.u32(pid))
 	case libpf.Perl:
-		emc.ctx.delMap(&C.perl_procs, C.u32(pid))
+		emc.ctx.delMap(unsafe.Pointer(&C.perl_procs), C.u32(pid))
 	case libpf.PHP:
-		emc.ctx.delMap(&C.php_procs, C.u32(pid))
+		emc.ctx.delMap(unsafe.Pointer(&C.php_procs), C.u32(pid))
 	case libpf.Python:
-		emc.ctx.delMap(&C.py_procs, C.u32(pid))
+		emc.ctx.delMap(unsafe.Pointer(&C.py_procs), C.u32(pid))
 	case libpf.HotSpot:
-		emc.ctx.delMap(&C.hotspot_procs, C.u32(pid))
+		emc.ctx.delMap(unsafe.Pointer(&C.hotspot_procs), C.u32(pid))
 	case libpf.Ruby:
-		emc.ctx.delMap(&C.ruby_procs, C.u32(pid))
+		emc.ctx.delMap(unsafe.Pointer(&C.ruby_procs), C.u32(pid))
 	case libpf.V8:
-		emc.ctx.delMap(&C.v8_procs, C.u32(pid))
+		emc.ctx.delMap(unsafe.Pointer(&C.v8_procs), C.u32(pid))
+	case libpf.BEAM:
+		emc.ctx.delMap(unsafe.Pointer(&C.beam_procs), C.u32(pid))
 	case libpf.LuaJIT:
-		emc.ctx.delMap(&C.luajit_procs, C.u32(pid))
+		emc.ctx.delMap(unsafe.Pointer(&C.luajit_procs), C.u32(pid))
 	}
 	return nil
 }
@@ -155,21 +160,14 @@ func (emc *ebpfMapsCoredump) DeletePidInterpreterMapping(pid libpf.PID,
 
 // Stack delta management
 func (emc *ebpfMapsCoredump) UpdateUnwindInfo(index uint16, info sdtypes.UnwindInfo) error {
-	unwindInfoArray := C.unwind_info_array
-	if C.uint(index) >= unwindInfoArray.max_entries {
+	if index >= support.UnwindInfoMaxEntries {
 		return fmt.Errorf("unwind info array full (%d/%d items)",
-			index, unwindInfoArray.max_entries)
+			index, support.UnwindInfoMaxEntries)
 	}
 
-	cmd := (*C.UnwindInfo)(unsafe.Pointer(uintptr(emc.ctx.unwindInfoArray) +
+	cmd := (*support.UnwindInfo)(unsafe.Pointer(uintptr(emc.ctx.unwindInfoArray) +
 		uintptr(index)*C.sizeof_UnwindInfo))
-	*cmd = C.UnwindInfo{
-		opcode:      C.u8(info.Opcode),
-		fpOpcode:    C.u8(info.FPOpcode),
-		mergeOpcode: C.u8(info.MergeOpcode),
-		param:       C.s32(info.Param),
-		fpParam:     C.s32(info.FPParam),
-	}
+	*cmd = info
 	return nil
 }
 
@@ -258,6 +256,10 @@ func (emc *ebpfMapsCoredump) DeletePidPageMappingInfo(pid libpf.PID, prefixes []
 }
 
 func (emc *ebpfMapsCoredump) SupportsGenericBatchOperations() bool {
+	return false
+}
+
+func (emc *ebpfMapsCoredump) SupportsGenericBatchLookupAndDelete() bool {
 	return false
 }
 

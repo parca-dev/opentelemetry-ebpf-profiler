@@ -12,7 +12,7 @@ import (
 	"reflect"
 	"strings"
 
-	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
 	"github.com/elastic/go-freelru"
 
@@ -104,7 +104,12 @@ type hotspotVMData struct {
 			// JDK -8: offset, JDK 9+: pointers, JDK 23+: offset
 			CodeBegin uint `name:"_code_begin,_code_offset"`
 			CodeEnd   uint `name:"_code_end,_data_offset"`
-			Size      uint `name:"_size"` // Only needed for JDK23+
+			// Needed for JDK23+ for layout calculation
+			Size uint `name:"_size"`
+			// JDK25+: the metadata is inside mutable data
+			RelocationSize  uint `name:"_relocation_size"`
+			MutableDataSize uint `name:"_mutable_data_size"`
+			MutableData     uint `name:"_mutable_data"`
 		}
 		CodeCache struct {
 			Heap      libpf.Address `name:"_heap"`
@@ -206,7 +211,7 @@ func fieldByJavaName(obj reflect.Value, fieldName string) reflect.Value {
 	for i := 0; i < obj.NumField(); i++ {
 		objField := objType.Field(i)
 		if nameTag, ok := objField.Tag.Lookup("name"); ok {
-			for _, javaName := range strings.Split(nameTag, ",") {
+			for javaName := range strings.SplitSeq(nameTag, ",") {
 				if fieldName == javaName {
 					return obj.Field(i)
 				}
@@ -227,7 +232,8 @@ func fieldByJavaName(obj reflect.Value, fieldName string) reflect.Value {
 // hotspotData.vmStructs using reflection to gather the offsets and sizes
 // we are interested about.
 func (vmd *hotspotVMData) parseIntrospection(it *hotspotIntrospectionTable,
-	rm remotememory.RemoteMemory, loadBias libpf.Address) error {
+	rm remotememory.RemoteMemory, loadBias libpf.Address,
+) error {
 	stride := libpf.Address(rm.Uint64(it.stride + loadBias))
 	typeOffs := uint(rm.Uint64(it.typeOffset + loadBias))
 	addrOffs := uint(rm.Uint64(it.addressOffset + loadBias))
@@ -337,25 +343,23 @@ func (d *hotspotData) String() string {
 // As the hotspot unwinder depends on the native unwinder, a part of the cleanup is done by the
 // process manager and not the corresponding Detach() function of hotspot objects.
 func (d *hotspotData) Attach(_ interpreter.EbpfHandler, _ libpf.PID, bias libpf.Address,
-	rm remotememory.RemoteMemory) (ii interpreter.Instance, err error) {
+	rm remotememory.RemoteMemory,
+) (ii interpreter.Instance, err error) {
 	// Each function has four symbols: source filename, class name,
 	// method name and signature. However, most of them are shared across
 	// different methods, so assume about 2 unique symbols per function.
-	addrToSymbol, err :=
-		freelru.New[libpf.Address, libpf.String](2*interpreter.LruFunctionCacheSize,
-			libpf.Address.Hash32)
+	addrToSymbol, err := freelru.New[libpf.Address, libpf.String](2*interpreter.LruFunctionCacheSize,
+		libpf.Address.Hash32)
 	if err != nil {
 		return nil, err
 	}
-	addrToMethod, err :=
-		freelru.New[libpf.Address, *hotspotMethod](interpreter.LruFunctionCacheSize,
-			libpf.Address.Hash32)
+	addrToMethod, err := freelru.New[libpf.Address, *hotspotMethod](interpreter.LruFunctionCacheSize,
+		libpf.Address.Hash32)
 	if err != nil {
 		return nil, err
 	}
-	addrToJITInfo, err :=
-		freelru.New[libpf.Address, *hotspotJITInfo](interpreter.LruFunctionCacheSize,
-			libpf.Address.Hash32)
+	addrToJITInfo, err := freelru.New[libpf.Address, *hotspotJITInfo](interpreter.LruFunctionCacheSize,
+		libpf.Address.Hash32)
 	if err != nil {
 		return nil, err
 	}
@@ -375,7 +379,7 @@ func (d *hotspotData) Attach(_ interpreter.EbpfHandler, _ libpf.PID, bias libpf.
 		addrToJITInfo:  addrToJITInfo,
 		addrToStubName: addrToStubName,
 		prefixes:       libpf.Set[lpm.Prefix]{},
-		stubs:          map[libpf.Address]StubRoutine{},
+		stubs:          xsync.NewRWMutex(map[libpf.Address]StubRoutine{}),
 	}, nil
 }
 
@@ -466,7 +470,8 @@ func forEachItem(prefix string, t reflect.Value, visitor func(reflect.Value, str
 
 // newVMData will read introspection data from remote process and return hotspotVMData
 func (d *hotspotData) newVMData(rm remotememory.RemoteMemory, bias libpf.Address) (
-	hotspotVMData, error) {
+	hotspotVMData, error,
+) {
 	// Initialize the data with non-zero values so it's easy to check that
 	// everything got loaded (some fields will get zero values)
 	vmd := hotspotVMData{}
@@ -585,6 +590,15 @@ func (d *hotspotData) newVMData(rm remotememory.RemoteMemory, bias libpf.Address
 	} else if vms.Nmethod.DependenciesOffset != ^uint(0) {
 		vms.Nmethod.ImmutableData = 0
 		vms.Nmethod.ImmutableDataSize = 0
+	}
+
+	// JDK25+: metadata is inside mutable data
+	if vms.CodeBlob.MutableData != ^uint(0) {
+		vms.Nmethod.MetadataOffset = 0
+	} else if vms.Nmethod.MetadataOffset != ^uint(0) {
+		vms.CodeBlob.MutableData = 0
+		vms.CodeBlob.MutableDataSize = 0
+		vms.CodeBlob.RelocationSize = 0
 	}
 
 	// Check that all symbols got loaded from JVM introspection data

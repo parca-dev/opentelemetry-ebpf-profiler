@@ -6,6 +6,7 @@ package tracer // import "go.opentelemetry.io/ebpf-profiler/tracer"
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"sync/atomic"
 	"time"
@@ -13,9 +14,9 @@ import (
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/perf"
-	log "github.com/sirupsen/logrus"
 
-	"go.opentelemetry.io/ebpf-profiler/host"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
+	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/process"
 	"go.opentelemetry.io/ebpf-profiler/support"
@@ -68,14 +69,18 @@ func (t *Tracer) handleGenericPID() {
 	}
 }
 
-// triggerPidEvent is a trigger function for the eBPF map report_events. It is
+// triggerReportEvent is a trigger function for the eBPF map report_events. It is
 // called for every event that is received in user space from this map. The underlying
 // C structure in the received data is transformed to a Go structure and the event
 // handler is invoked.
-func (t *Tracer) triggerPidEvent(data []byte) {
+func (t *Tracer) triggerReportEvent(data []byte) {
 	event := (*support.Event)(unsafe.Pointer(&data[0]))
-	if event.Type == support.EventTypeGenericPID {
+	switch event.Type {
+	case support.EventTypeGenericPID:
 		t.handleGenericPID()
+	case support.EventTypeReloadKallsyms:
+		t.kernelSymbolizer.Reload()
+		t.enableEvent(support.EventTypeReloadKallsyms)
 	}
 }
 
@@ -84,14 +89,15 @@ func (t *Tracer) triggerPidEvent(data []byte) {
 // will wake up user-land.
 //
 // For each received event, triggerFunc is called. triggerFunc may NOT store
-// references into the buffer that it is given: the buffer is re-used across
+// references into the buffer that it is given: the buffer is reused across
 // calls. Returns a function that can be called to retrieve perf event array
 // error counts.
 func startPerfEventMonitor(ctx context.Context, perfEventMap *ebpf.Map,
-	triggerFunc func([]byte), perCPUBufferSize int) func() (lost, noData, readError uint64) {
+	triggerFunc func([]byte), perCPUBufferSize int,
+) (func() (lost, noData, readError uint64), error) {
 	eventReader, err := perf.NewReader(perfEventMap, perCPUBufferSize)
 	if err != nil {
-		log.Fatalf("Failed to setup perf reporting via %s: %v", perfEventMap, err)
+		return nil, fmt.Errorf("Failed to setup perf reporting via %s: %v", perfEventMap, err)
 	}
 
 	var lostEventsCount, readErrorCount, noDataCount atomic.Uint64
@@ -124,7 +130,7 @@ func startPerfEventMonitor(ctx context.Context, perfEventMap *ebpf.Map,
 		noData = noDataCount.Swap(0)
 		readError = readErrorCount.Swap(0)
 		return
-	}
+	}, nil
 }
 
 // startTraceEventMonitor spawns a goroutine that receives trace events from
@@ -134,7 +140,8 @@ func startPerfEventMonitor(ctx context.Context, perfEventMap *ebpf.Map,
 // Returns a function that can be called to retrieve perf event array
 // error counts.
 func (t *Tracer) startTraceEventMonitor(ctx context.Context,
-	traceOutChan chan<- *host.Trace) func() []metrics.Metric {
+	traceOutChan chan<- *libpf.EbpfTrace,
+) (func() []metrics.Metric, error) {
 	eventsMap := t.ebpfMaps["trace_events"]
 	bufferMultiplier := t.traceBufferSizeMultiplier
 	if bufferMultiplier < 1 {
@@ -143,7 +150,7 @@ func (t *Tracer) startTraceEventMonitor(ctx context.Context,
 	eventReader, err := perf.NewReader(eventsMap,
 		t.samplesPerSecond*bufferMultiplier*support.Sizeof_Trace)
 	if err != nil {
-		log.Fatalf("Failed to setup perf reporting via %s: %v", eventsMap, err)
+		return nil, fmt.Errorf("Failed to setup perf reporting via %s: %v", eventsMap, err)
 	}
 
 	// A deadline of zero is treated as "no deadline". A deadline in the past
@@ -154,7 +161,7 @@ func (t *Tracer) startTraceEventMonitor(ctx context.Context,
 	var lostEventsCount, readErrorCount, noDataCount atomic.Uint64
 	go func() {
 		var data perf.Record
-		var oldKTime, minKTime times.KTime
+		var oldKTime, minKTime int64
 		var eventCount int
 
 		pollTicker := time.NewTicker(t.intervals.TracePollInterval())
@@ -216,7 +223,22 @@ func (t *Tracer) startTraceEventMonitor(ctx context.Context,
 				eventCount++
 
 				// Keep track of min KTime seen in this batch processing loop
-				trace := t.loadBpfTrace(data.RawSample, data.CPU)
+				trace, err := t.loadBpfTrace(data.RawSample, data.CPU)
+				switch {
+				case err == nil:
+					// Fast path for no error.
+				case errors.Is(err, errOriginUnexpected):
+					log.Warnf("skip trace handling: %v", err)
+					continue
+				case errors.Is(err, errRecordTooSmall), errors.Is(err, errRecordUnexpectedSize):
+					log.Errorf("Stop receiving traces: %v", err)
+					t.signalDone()
+					return
+				default:
+					log.Warnf("unexpected error handling trace: %v", err)
+					continue
+				}
+
 				if minKTime == 0 || trace.KTime < minKTime {
 					minKTime = trace.KTime
 				}
@@ -253,10 +275,10 @@ func (t *Tracer) startTraceEventMonitor(ctx context.Context,
 				if minKTime > 0 && minKTime <= oldKTime {
 					// If minKTime is smaller than oldKTime, use it and reset it
 					// to avoid a repeat during next iteration.
-					t.TraceProcessor().ProcessedUntil(minKTime)
+					t.processManager.ProcessedUntil(times.KTime(minKTime))
 					minKTime = 0
 				} else {
-					t.TraceProcessor().ProcessedUntil(oldKTime)
+					t.processManager.ProcessedUntil(times.KTime(oldKTime))
 				}
 			}
 			oldKTime = minKTime
@@ -275,19 +297,22 @@ func (t *Tracer) startTraceEventMonitor(ctx context.Context,
 			{ID: metrics.IDTraceEventNoData, Value: metrics.MetricValue(noData)},
 			{ID: metrics.IDTraceEventReadError, Value: metrics.MetricValue(readError)},
 		}
-	}
+	}, nil
 }
 
 // startEventMonitor spawns a goroutine that receives events from the
 // map report_events. Returns a function that can be called to retrieve
 // perf event array metrics.
-func (t *Tracer) startEventMonitor(ctx context.Context) func() []metrics.Metric {
+func (t *Tracer) startEventMonitor(ctx context.Context) (func() []metrics.Metric, error) {
 	eventMap, ok := t.ebpfMaps["report_events"]
 	if !ok {
-		log.Fatalf("Map report_events is not available")
+		return nil, fmt.Errorf("Map report_events is not available")
 	}
 
-	getPerfErrorCounts := startPerfEventMonitor(ctx, eventMap, t.triggerPidEvent, os.Getpagesize())
+	getPerfErrorCounts, err := startPerfEventMonitor(ctx, eventMap, t.triggerReportEvent, os.Getpagesize())
+	if err != nil {
+		return nil, err
+	}
 	return func() []metrics.Metric {
 		lost, noData, readError := getPerfErrorCounts()
 
@@ -296,5 +321,5 @@ func (t *Tracer) startEventMonitor(ctx context.Context) func() []metrics.Metric 
 			{ID: metrics.IDPerfEventNoData, Value: metrics.MetricValue(noData)},
 			{ID: metrics.IDPerfEventReadError, Value: metrics.MetricValue(readError)},
 		}
-	}
+	}, nil
 }

@@ -14,7 +14,7 @@ import (
 	"strconv"
 
 	"github.com/peterbourgon/ff/v3/ffcli"
-	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
@@ -104,19 +104,11 @@ func (tc *trackedCoredump) OpenELF(fileName string) (*pfelf.File, error) {
 			tc.seen[fileName] = libpf.Void{}
 			return f, err
 		}
-		tc.warnMissing(fileName)
+		if !errors.Is(err, pfelf.ErrNotELF) {
+			tc.warnMissing(fileName)
+		}
 	}
 	return tc.CoredumpProcess.OpenELF(fileName)
-}
-
-func (tc *trackedCoredump) ExtractAsFile(fileName string) (string, error) {
-	prefixedFileName := path.Join(tc.prefix, fileName)
-	if _, err := os.Stat(prefixedFileName); err != nil {
-		tc.warnMissing(fileName)
-		return "", err
-	}
-	tc.seen[fileName] = libpf.Void{}
-	return prefixedFileName, nil
 }
 
 func newNewCmd(store *modulestore.Store) *ffcli.Command {

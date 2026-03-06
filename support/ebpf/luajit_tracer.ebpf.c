@@ -12,16 +12,17 @@
 // This file contains the code and map definitions for the Luajit tracer
 
 #include "bpfdefs.h"
+#include "errors.h"
 #include "luajit.h"
 #include "tracemgmt.h"
 #include "types.h"
 
-bpf_map_def SEC("maps") luajit_procs = {
-  .type        = BPF_MAP_TYPE_HASH,
-  .key_size    = sizeof(pid_t),
-  .value_size  = sizeof(LuaJITProcInfo),
-  .max_entries = 1024,
-};
+struct luajit_procs_t {
+  __uint(type, BPF_MAP_TYPE_HASH);
+  __type(key, pid_t);
+  __type(value, LuaJITProcInfo);
+  __uint(max_entries, 1024);
+} luajit_procs SEC(".maps");
 
 // The number of LuaJIT frames to unwind per frame-unwinding eBPF program.
 #define FRAMES_PER_WALK_LUAJIT_STACK 15
@@ -257,18 +258,17 @@ lj_debug_framepc(PerCPURecord *record, void *fn, u32 *startpc, TValue *prevframe
 // bytecode which we will walk backwards in userland to figure out a name for the
 // callee. The callee_pc is for information purposes only, so the user can see where
 // execution was.
-static inline __attribute__((__always_inline__)) ErrorCode
-lj_push_frame(Trace *trace, u64 callee_pt, u64 caller_pt, u32 callee_pc, u32 caller_pc)
+static inline __attribute__((__always_inline__)) ErrorCode lj_push_frame(
+  UnwindState *state, Trace *trace, u64 callee_pt, u64 caller_pt, u32 callee_pc, u32 caller_pc)
 {
-  return _push_with_max_frames_lj_offsets(
-    trace,
-    callee_pt,
-    caller_pt,
-    FRAME_MARKER_LUAJIT,
-    0,
-    MAX_NON_ERROR_FRAME_UNWINDS,
-    callee_pc,
-    caller_pc);
+  u64 *data =
+    push_frame(state, trace, FRAME_MARKER_LUAJIT, FRAME_FLAG_PID_SPECIFIC, LUAJIT_NORMAL_FRAME, 3);
+  if (!data)
+    return ERR_STACK_LENGTH_EXCEEDED;
+  data[0] = callee_pt;
+  data[1] = caller_pt;
+  data[2] = ((u64)callee_pc << 32) | caller_pc;
+  return ERR_OK;
 }
 
 static inline __attribute__((__always_inline__)) ErrorCode
@@ -293,7 +293,16 @@ lj_record_frame(PerCPURecord *record, TValue *frame, TValue frame_value, TValue 
   if (f->ffid != FF_LUA) {
     DEBUG_PRINT("lj: lj_record_frame: ffi function %lx", (unsigned long)f->ffid);
     // We can't derive a name for this function, so we'll just emit a pseudo frame.
-    return _push(&record->trace, LUAJIT_FFI_FUNC, frame_value, FRAME_MARKER_LUAJIT);
+    u64 *data = push_frame(
+      &record->state,
+      &record->trace,
+      FRAME_MARKER_LUAJIT,
+      FRAME_FLAG_PID_SPECIFIC,
+      LUAJIT_FFI_FUNC,
+      1);
+    if (!data)
+      return ERR_STACK_LENGTH_EXCEEDED;
+    data[0] = frame_value;
   }
 
   u32 *start_ip = (u32 *)f->pc;
@@ -318,7 +327,8 @@ lj_record_frame(PerCPURecord *record, TValue *frame, TValue frame_value, TValue 
 
   DEBUG_PRINT("lj: record frame callee %lx:%u", (unsigned long)scr->prev_proto, scr->prev_pc);
   DEBUG_PRINT("lj: record frame caller %lx:%u", (unsigned long)proto, pc);
-  err = lj_push_frame(&record->trace, (u64)scr->prev_proto, (u64)proto, scr->prev_pc, pc);
+  err = lj_push_frame(
+    &record->state, &record->trace, (u64)scr->prev_proto, (u64)proto, scr->prev_pc, pc);
 exit:
   scr->prev_proto = proto;
   scr->prev_pc    = pc;
@@ -411,7 +421,8 @@ walk_luajit_stack(PerCPURecord *record, const LuaJITProcInfo *info, int *next_un
       // a callee proto/pc and no caller proto/pc.  This is fine, we'll make one
       // up, e.g. "main".
       LJScratchSpace *scr = &record->luajitUnwindScratch;
-      if ((err = lj_push_frame(&record->trace, (u64)scr->prev_proto, (u64)0, scr->prev_pc, 0))) {
+      if ((err = lj_push_frame(
+             &record->state, &record->trace, (u64)scr->prev_proto, (u64)0, scr->prev_pc, 0))) {
         return err;
       }
       if (record->luajitUnwindState.is_jit) {
@@ -560,7 +571,16 @@ find_context(struct pt_regs *ctx, PerCPURecord *record, const LuaJITProcInfo *in
 
   // If we have valid context let's report it if we haven't mapped its traces yet.
   if (reportG) {
-    lj_push_frame(&record->trace, 0, (u64)G_ptr, 0, 0);
+    u64 *data = push_frame(
+      &record->state,
+      &record->trace,
+      FRAME_MARKER_LUAJIT,
+      FRAME_FLAG_PID_SPECIFIC,
+      LUAJIT_G_REPORT,
+      1);
+    if (!data)
+      return ERR_STACK_LENGTH_EXCEEDED;
+    data[0] = (u64)G_ptr;
   }
 
   // The JIT doesn't update base as it goes but it does update G.jit_base.

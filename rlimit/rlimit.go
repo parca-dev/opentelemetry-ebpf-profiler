@@ -8,7 +8,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 )
 
 // MaximizeMemlock updates the memlock resource limit to RLIM_INFINITY.
@@ -26,7 +26,8 @@ func MaximizeMemlock() (func(), error) {
 
 	return func() {
 		if err := unix.Setrlimit(unix.RLIMIT_MEMLOCK, &oldLimit); err != nil {
-			log.Fatalf("Failed to set old rlimit: %v", err)
+			// TODO: Used to be log.Fatalf, revisit with error propagation if needed
+			log.Errorf("Failed to set old rlimit: %v", err)
 		}
 	}, nil
 }

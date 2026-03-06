@@ -8,8 +8,8 @@ import (
 	"crypto/tls"
 	"time"
 
-	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/collector/pdata/pprofile/pprofileotlp"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -45,7 +45,6 @@ type OTLPReporter struct {
 func NewOTLP(cfg *Config) (*OTLPReporter, error) {
 	data, err := pdata.New(
 		cfg.SamplesPerSecond,
-		cfg.ExecutablesCacheElements,
 		cfg.ExtraSampleAttrProd,
 	)
 	if err != nil {
@@ -72,6 +71,8 @@ func NewOTLP(cfg *Config) (*OTLPReporter, error) {
 
 // Start sets up and manages the reporting connection to a OTLP backend.
 func (r *OTLPReporter) Start(ctx context.Context) error {
+	r.collectionStartTime = time.Now()
+
 	// Create a child context for reporting features
 	ctx, cancelReporting := context.WithCancel(ctx)
 
@@ -86,7 +87,7 @@ func (r *OTLPReporter) Start(ctx context.Context) error {
 	}
 	r.client = pprofileotlp.NewGRPCClient(otlpGrpcConn)
 
-	r.runLoop.Start(ctx, r.cfg.ReportInterval, func() {
+	r.runLoop.Start(ctx, r.cfg.ReportInterval, r.cfg.ReportJitter, func() {
 		if err := r.reportOTLPProfile(ctx); err != nil {
 			log.Errorf("Request failed: %v", err)
 		}
@@ -102,7 +103,7 @@ func (r *OTLPReporter) Start(ctx context.Context) error {
 		<-r.runLoop.stopSignal
 		cancelReporting()
 		if err := otlpGrpcConn.Close(); err != nil {
-			log.Fatalf("Stopping connection of OTLP client client failed: %v", err)
+			log.Errorf("Stopping connection of OTLP client client failed: %v", err)
 		}
 	}()
 
@@ -115,9 +116,13 @@ func (r *OTLPReporter) reportOTLPProfile(ctx context.Context) error {
 	reportedEvents := (*traceEventsPtr)
 	newEvents := make(samples.TraceEventsTree)
 	*traceEventsPtr = newEvents
+	collectionEndTime := time.Now()
+	collectionStartTime := r.collectionStartTime
+	r.collectionStartTime = collectionEndTime
 	r.traceEvents.WUnlock(&traceEventsPtr)
 
-	profiles, err := r.pdata.Generate(reportedEvents, r.name, r.version)
+	profiles, err := r.pdata.Generate(reportedEvents, r.name, r.version,
+		collectionStartTime, collectionEndTime)
 	if err != nil {
 		log.Errorf("pdata: %v", err)
 		return nil
@@ -170,7 +175,8 @@ func waitGrpcEndpoint(ctx context.Context, cfg *Config) (*grpc.ClientConn, error
 // setupGrpcConnection sets up a gRPC connection instrumented with our auth interceptor
 func setupGrpcConnection(parent context.Context, cfg *Config) (*grpc.ClientConn, error) {
 	//nolint:staticcheck
-	opts := []grpc.DialOption{grpc.WithBlock(),
+	opts := []grpc.DialOption{
+		grpc.WithBlock(),
 		grpc.WithUnaryInterceptor(cfg.GRPCClientInterceptor),
 		grpc.WithDefaultCallOptions(
 			grpc.MaxCallRecvMsgSize(cfg.MaxRPCMsgSize),

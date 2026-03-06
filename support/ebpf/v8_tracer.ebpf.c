@@ -13,8 +13,6 @@
 #include "tracemgmt.h"
 #include "types.h"
 
-#define v8Ver(x, y, z) (((x) << 24) + ((y) << 16) + (z))
-
 // The number of V8 frames to unwind per frame-unwinding eBPF program.
 #define V8_FRAMES_PER_PROGRAM 8
 
@@ -32,23 +30,31 @@
 
 // Map from V8 process IDs to a structure containing addresses of variables
 // we require in order to build the stack trace
-bpf_map_def SEC("maps") v8_procs = {
-  .type        = BPF_MAP_TYPE_HASH,
-  .key_size    = sizeof(pid_t),
-  .value_size  = sizeof(V8ProcInfo),
-  .max_entries = 1024,
-};
+struct v8_procs_t {
+  __uint(type, BPF_MAP_TYPE_HASH);
+  __type(key, pid_t);
+  __type(value, V8ProcInfo);
+  __uint(max_entries, 1024);
+} v8_procs SEC(".maps");
 
 // Record a V8 frame
 static EBPF_INLINE ErrorCode push_v8(
-  Trace *trace, unsigned long pointer_and_type, unsigned long delta_or_marker, bool return_address)
+  UnwindState *state, Trace *trace, u64 pointer_and_type, u64 delta_or_marker, bool return_address)
 {
   DEBUG_PRINT(
-    "Pushing v8 frame delta_or_marker=%lx, pointer_and_type=%lx",
+    "Pushing v8 frame delta_or_marker=%llx, pointer_and_type=%llx",
     delta_or_marker,
     pointer_and_type);
-  return _push_with_return_address(
-    trace, pointer_and_type, delta_or_marker, FRAME_MARKER_V8, return_address);
+
+  const u8 ra_flag = return_address ? FRAME_FLAG_RETURN_ADDRESS : 0;
+
+  u64 *data = push_frame(state, trace, FRAME_MARKER_V8, FRAME_FLAG_PID_SPECIFIC | ra_flag, 0, 2);
+  if (!data) {
+    return ERR_STACK_LENGTH_EXCEEDED;
+  }
+  data[0] = pointer_and_type;
+  data[1] = delta_or_marker;
+  return ERR_OK;
 }
 
 // Verify a V8 tagged pointer
@@ -206,9 +212,7 @@ static EBPF_INLINE ErrorCode unwind_one_v8_frame(PerCPURecord *record, V8ProcInf
   }
 
   uintptr_t code_start;
-  if (vi->version >= v8Ver(11, 1, 204)) {
-    // Starting V8 11.1.204 the instruction/code start is a pointer field instead
-    // of offset where the code starts.
+  if (vi->code_instructions_is_pointer) {
     code_start = *(uintptr_t *)(scratch->code + vi->off_Code_instruction_start);
   } else {
     code_start = code + vi->off_Code_instruction_start;
@@ -228,7 +232,7 @@ static EBPF_INLINE ErrorCode unwind_one_v8_frame(PerCPURecord *record, V8ProcInf
     // - the JSFunction's Code object was changed due to On-Stack-Replacement or
     //   or other deoptimization reasons. This case is currently not handled.
 
-    if (top && trace->stack_len == 0) {
+    if (top && !state->return_address) {
       unsigned long stk[3];
       if (bpf_probe_read_user(stk, sizeof(stk), (void *)(sp - sizeof(stk)))) {
         DEBUG_PRINT("v8:  --> bad stack pointer");
@@ -237,8 +241,7 @@ static EBPF_INLINE ErrorCode unwind_one_v8_frame(PerCPURecord *record, V8ProcInf
       }
 
       int i;
-      UNROLL for (i = sizeof(stk) / sizeof(stk[0]) - 1; i >= 0; i--)
-      {
+      for (i = sizeof(stk) / sizeof(stk[0]) - 1; i >= 0; i--) {
         if (stk[i] >= code_start && stk[i] < code_end) {
           break;
         }
@@ -272,7 +275,7 @@ static EBPF_INLINE ErrorCode unwind_one_v8_frame(PerCPURecord *record, V8ProcInf
   delta_or_marker = (pc - code_start) | ((uintptr_t)cookie << V8_LINE_COOKIE_SHIFT);
 
 frame_done:;
-  ErrorCode error = push_v8(trace, pointer_and_type, delta_or_marker, state->return_address);
+  ErrorCode error = push_v8(state, trace, pointer_and_type, delta_or_marker, state->return_address);
   if (error) {
     return error;
   }
@@ -313,7 +316,7 @@ static EBPF_INLINE int unwind_v8(struct pt_regs *ctx)
 
   Trace *trace = &record->trace;
   u32 pid      = trace->pid;
-  DEBUG_PRINT("==== unwind_v8 %d ====", trace->stack_len);
+  DEBUG_PRINT("==== unwind_v8 %d ====", trace->num_frames);
 
   int unwinder    = PROG_UNWIND_STOP;
   ErrorCode error = ERR_OK;
@@ -327,8 +330,7 @@ static EBPF_INLINE int unwind_v8(struct pt_regs *ctx)
 
   increment_metric(metricID_UnwindV8Attempts);
 
-  UNROLL for (int i = 0; i < V8_FRAMES_PER_PROGRAM; i++)
-  {
+  for (int i = 0; i < V8_FRAMES_PER_PROGRAM; i++) {
     unwinder = PROG_UNWIND_STOP;
 
     error = unwind_one_v8_frame(record, vi, i == 0);

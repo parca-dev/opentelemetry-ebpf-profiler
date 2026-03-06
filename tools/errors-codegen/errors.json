@@ -56,6 +56,11 @@
     "description": "Hotspot: Unwind instructions requested LR unwinding mid-trace (nonsensical)"
   },
   {
+    "id": 1005,
+    "name": "hotspot_no_proc_info",
+    "description": "Hotspot: No entry for this process exists in the Hotspot process info array"
+  },
+  {
     "id": 2000,
     "name": "python_bad_code_object_addr",
     "description": "Python: Unable to read current PyCodeObject"
@@ -133,12 +138,72 @@
   {
     "id": 3006,
     "name": "ruby_read_iseq_encoded",
-    "description": "Ruby: Unable to read the instruction sequence encoded size"
+    "description": "Ruby: Unable to read the instruction sequence encoded size (deprecated)"
   },
   {
     "id": 3007,
     "name": "ruby_read_iseq_size",
-    "description": "Ruby: Unable to read the instruction sequence size"
+    "description": "Ruby: Unable to read the instruction sequence size (deprecated)"
+  },
+  {
+    "id": 3008,
+    "name": "ruby_read_tsd_base",
+    "description": "Ruby: Unable to determine the base address for thread-specific data"
+  },
+  {
+    "id": 3009,
+    "name": "ruby_invalid_iseq",
+    "description": "Ruby: Invalid instruction sequence"
+  },
+  {
+    "id": 3010,
+    "name": "ruby_read_method_def",
+    "description": "Ruby: Unable to read the method definition"
+  },
+  {
+    "id": 3011,
+    "name": "ruby_read_method_type",
+    "description": "Ruby: Unable to read the method type"
+  },
+  {
+    "id": 3012,
+    "name": "ruby_read_svar",
+    "description": "Ruby: Unable to read svar while locating CME from EP"
+  },
+  {
+    "id": 3013,
+    "name": "ruby_read_rbasic_flags",
+    "description": "Ruby: Unable to read rbasic flags"
+  },
+  {
+    "id": 3020,
+    "name": "ruby_read_cme_max_ep",
+    "description": "Ruby: Exceeded maximum EP checks while locating CME"
+  },
+  {
+    "id": 3021,
+    "name": "ruby_pack_frame",
+    "description": "Ruby: Failed to pack additional into spare bytes of Frame field"
+  },
+  {
+    "id": 3030,
+    "name": "ruby_read_current_thread",
+    "description": "Ruby: Unable to read current thread"
+  },
+  {
+    "id": 3031,
+    "name": "ruby_read_current_vm",
+    "description": "Ruby: Unable to read current vm"
+  },
+  {
+    "id": 3032,
+    "name": "ruby_read_objspace",
+    "description": "Ruby: Unable to read objspace handle"
+  },
+  {
+    "id": 3033,
+    "name": "ruby_read_objspace_flags",
+    "description": "Ruby: Unable to read objspace flags"
   },
   {
     "id": 4000,
@@ -267,27 +332,61 @@
   },
   {
     "id": 7000,
+    "name": "beam_no_proc_info",
+    "description": "BEAM: No entry for this process exists in the BEAM process info array"
+  },
+  {
+    "id": 7001,
+    "name": "beam_pc_invalid",
+    "description": "BEAM: PC was outside the expected address range"
+  },
+  {
+    "id": 7002,
+    "name": "beam_stack_scan_exhausted",
+    "description": "BEAM: Hit the stack frame scan iteration limit looking for the next stack frame"
+  },
+  {
+    "id": 7003,
+    "name": "beam_frame_pointer_invalid",
+    "description": "BEAM: Invalid frame pointer"
+  },
+  {
+    "id": 7004,
+    "name": "beam_active_code_index_read_failure",
+    "description": "BEAM: Unable to read the_active_code_index"
+  },
+  {
+    "id": 7005,
+    "name": "beam_modules_read_failure",
+    "description": "BEAM: Unable to read modules table"
+  },
+  {
+    "id": 7006,
+    "name": "beam_range_search_exhausted",
+    "description": "BEAM: Ran out of iterations searching for the current code header"
+  },
+  {
+    "id": 7007,
     "name": "luajit_no_proc_info",
     "description": "LuaJIT: No entry for this process exists in the LuaJIT process info array"
   },
   {
-    "id": 7001,
+    "id": 7008,
     "name": "luajit_read_lua_context",
     "description": "LuaJIT: Unable to read the Lua context"
   },
-
   {
-    "id": 7002,
+    "id": 7009,
     "name": "luajit_frame_read",
     "description": "LuaJIT: Unable to read the Lua frame"
   },
   {
-    "id": 7003,
+    "id": 7010,
     "name": "luajit_l_mismatch",
     "description": "LuaJIT: context pointer validity check failed"
   },
   {
-    "id": 7004,
+    "id": 7011,
     "name": "luajit_invalid_pc",
     "description": "LuaJIT: PC exceeds 24 bits"
   }

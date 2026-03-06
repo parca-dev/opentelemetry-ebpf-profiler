@@ -9,22 +9,22 @@ import (
 	"github.com/cilium/ebpf/perf"
 	log "github.com/sirupsen/logrus"
 
-	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
+	"go.opentelemetry.io/ebpf-profiler/processmanager"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/support"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
-	"go.opentelemetry.io/ebpf-profiler/tracehandler"
+	"go.opentelemetry.io/ebpf-profiler/traceutil"
 )
 
 // Start starts a goroutine that reads GPU timing events and returns a TraceInterceptor
 // that diverts CUDA traces (post-symbolization) into the GPU fixer.
 // Completed CUDA traces are reported directly via rep.
 func Start(ctx context.Context, tr *tracer.Tracer,
-	rep reporter.TraceReporter) tracehandler.TraceInterceptor {
+	rep reporter.TraceReporter) processmanager.TraceInterceptor {
 	gpuTimingEvents := tr.GetEbpfMaps()["cuda_timing_events"]
 
 	// Per-CPU buffer size for timing events. CuptiTimingEvent is ~300 bytes,
@@ -40,6 +40,7 @@ func Start(ctx context.Context, tr *tracer.Tracer,
 	processBatch := func(batch []gpu.CuptiTimingEvent) {
 		outputs := gpu.AddTimes(batch)
 		for i := range outputs {
+			outputs[i].Trace.Hash = traceutil.HashTrace(outputs[i].Trace)
 			if err := rep.ReportTraceEvent(outputs[i].Trace, outputs[i].Meta); err != nil {
 				log.Errorf("[parcagpu] failed to report CUDA trace: %v", err)
 			}
@@ -101,51 +102,11 @@ func Start(ctx context.Context, tr *tracer.Tracer,
 
 	// Return the interceptor function that diverts CUDA traces post-symbolization.
 	return func(trace *libpf.Trace, meta *samples.TraceEventMeta,
-		rawTrace *host.Trace) bool {
+		finishTrace func(*libpf.Trace, *samples.TraceEventMeta)) bool {
 		if meta.Origin != support.TraceOriginCuda {
 			return false
 		}
-
-		// Extract correlation ID and CBID from the raw BPF trace (not the
-		// symbolized trace, which may be a cached template with stale values).
-		var correlationID uint32
-		var cbid int32
-		for i := range rawTrace.Frames {
-			if rawTrace.Frames[i].Type == libpf.CUDAKernelFrame {
-				correlationID = uint32(rawTrace.Frames[i].Lineno)
-				cbid = int32(rawTrace.Frames[i].Lineno >> 32)
-				break
-			}
-		}
-
-		// Find the CUDA kernel frame index in the symbolized trace.
-		cudaFrameIdx := -1
-		for i, uniqueFrame := range trace.Frames {
-			if uniqueFrame.Value().Type == libpf.CUDAKernelFrame {
-				cudaFrameIdx = i
-				break
-			}
-		}
-		if cudaFrameIdx < 0 {
-			log.Errorf("[parcagpu] CUDA trace has no CUDAKernelFrame")
-			return false
-		}
-
-		st := &gpu.SymbolizedCudaTrace{
-			Trace:         trace,
-			Meta:          meta,
-			CUDAFrameIdx:  cudaFrameIdx,
-			CorrelationID: correlationID,
-			CBID:          cbid,
-		}
-
-		outputs := gpu.AddTrace(st)
-		for i := range outputs {
-			if err := rep.ReportTraceEvent(outputs[i].Trace, outputs[i].Meta); err != nil {
-				log.Errorf("[parcagpu] failed to report CUDA trace: %v", err)
-			}
-		}
-
-		return true // consumed
+		gpu.InterceptTrace(trace, meta, finishTrace)
+		return true
 	}
 }

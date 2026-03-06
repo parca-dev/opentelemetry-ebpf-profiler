@@ -14,30 +14,26 @@ jobs:
   analyze:
     permissions:
       security-events: write # for github/codeql-action/analyze to upload SARIF results
-    name: Analyze Go (${{ matrix.target_arch }})
+    name: Analyze Go
     if: ${{ github.actor != 'dependabot[bot]' && github.repository == 'open-telemetry/opentelemetry-ebpf-profiler' }}
-    runs-on: ubuntu-24.04
-    strategy:
-      matrix:
-        target_arch: [amd64, arm64]
+    runs-on: ubuntu-24.04  # CodeQL CLI only supports x86_64 Linux
     steps:
       - name: Checkout repository
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up environment
         uses: ./.github/workflows/env
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@3c3833e0f8c1c83d449a7478aa59c036a9165498 # v3.29.11
+        uses: github/codeql-action/init@c793b717bc78562f491db7b0e93a3a178b099162 # v4.32.5
         with:
           languages: go
 
       - name: Build Artifact
-        run: |
-          make TARGET_ARCH=${{ matrix.target_arch }}
+        run: make
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@3c3833e0f8c1c83d449a7478aa59c036a9165498 # v3.29.11
+        uses: github/codeql-action/analyze@c793b717bc78562f491db7b0e93a3a178b099162 # v4.32.5
         with:
             category: "/language:Go"
         timeout-minutes: 10

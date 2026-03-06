@@ -9,16 +9,17 @@ import (
 
 	lru "github.com/elastic/go-freelru"
 
-	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
+	"go.opentelemetry.io/ebpf-profiler/libc"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
+	"go.opentelemetry.io/ebpf-profiler/process"
 	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpfapi"
 	eim "go.opentelemetry.io/ebpf-profiler/processmanager/execinfomanager"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
+	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/times"
-	"go.opentelemetry.io/ebpf-profiler/tpbase"
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
@@ -28,9 +29,23 @@ import (
 type elfInfo struct {
 	err           error
 	lastModified  int64
-	fileID        host.FileID
+	mappingFile   libpf.FrameMappingFile
 	addressMapper pfelf.AddressMapper
 }
+
+// frameCacheKey is the LRU cache key for caching frames.
+type frameCacheKey struct {
+	// pid is the PID of the process if the frame had FRAME_FLAG_PID_SPECIFIC set
+	pid libpf.PID
+	// data is the frame data: frame header and the two first variable fields
+	data [3]uint64
+}
+
+// TraceInterceptor is called with the symbolized trace and metadata.
+// Return true to consume the trace (skip reporting), false to proceed
+// normally. The finishTrace callback hashes and reports the trace.
+type TraceInterceptor func(trace *libpf.Trace, meta *samples.TraceEventMeta,
+	finishTrace func(*libpf.Trace, *samples.TraceEventMeta)) bool
 
 // ProcessManager is responsible for managing the events happening throughout the lifespan of a
 // process.
@@ -59,16 +74,13 @@ type ProcessManager struct {
 	// ebpf contains the interface to manipulate ebpf maps
 	ebpf pmebpf.EbpfHandler
 
-	// FileIDMapper provides a cache that implements the FileIDMapper interface. The tracer writes
-	// the 64-bit to 128-bit file ID mapping to the cache, as this is where the two values are
-	// created. The attached interpreters read from the cache when converting traces prior to
-	// sending to the collection agent. The cache resides in this package instead of the ebpf
-	// package to prevent circular imports.
-	FileIDMapper FileIDMapper
-
 	// elfInfoCacheHit
 	elfInfoCacheHit  atomic.Uint64
 	elfInfoCacheMiss atomic.Uint64
+
+	// frame conversion
+	frameCacheHit  atomic.Uint64
+	frameCacheMiss atomic.Uint64
 
 	// mappingStats are statistics for parsing process mappings
 	mappingStats struct {
@@ -85,8 +97,20 @@ type ProcessManager struct {
 	// executable. It caches results based on iNode number and device ID. Locked LRU.
 	elfInfoCache *lru.LRU[util.OnDiskFileIdentifier, elfInfo]
 
-	// reporter is the interface to report symbolization information
-	reporter reporter.SymbolReporter
+	// frameCache stores mappings from BPF frame to the symbolized frames.
+	// This allows avoiding the overhead of re-doing user-mode symbolization
+	// of frames that we have recently seen already.
+	frameCache *lru.LRU[frameCacheKey, libpf.Frames]
+
+	// traceReporter is the interface to report traces
+	traceReporter reporter.TraceReporter
+
+	// interceptor, if set, is called after symbolization.
+	// If it returns true the trace is consumed and not reported.
+	interceptor TraceInterceptor
+
+	// exeReporter is the interface to report executables
+	exeReporter reporter.ExecutableReporter
 
 	// Reporting function which is used to report information to our backend.
 	metricsAddSlice func([]metrics.Metric)
@@ -95,7 +119,7 @@ type ProcessManager struct {
 	// pid_page_to_mapping_info.
 	pidPageToMappingInfoSize uint64
 
-	// filterErrorFrames determines whether error frames are dropped by `ConvertTrace`.
+	// filterErrorFrames determines whether error frames are dropped during symbolization.
 	filterErrorFrames bool
 
 	// includeEnvVars holds a list of env vars that should be captured from processes
@@ -104,21 +128,10 @@ type ProcessManager struct {
 
 // Mapping represents an executable memory mapping of a process.
 type Mapping struct {
-	// FileID represents the host-wide unique identifier of the mapped file.
-	FileID host.FileID
-
 	// Vaddr represents the starting virtual address of the mapping.
 	Vaddr libpf.Address
 
-	// Bias is the offset between the ELF on-disk virtual address space and the
-	// virtual address where it is actually mapped in the process. Thus it is the
-	// virtual address bias or "ASLR offset". It serves as a translation offset
-	// from the process VA space into the VA space of the ELF file. It's calculated as
-	// `bias = vaddr_in_proc - vaddr_in_elf`.
-	// Adding the bias to a VA in ELF space translates it into process space.
-	Bias uint64
-
-	// Length represents the memory size of the mapping.
+	// Length is the length of the mapping
 	Length uint64
 
 	// Device number of the backing file
@@ -127,8 +140,8 @@ type Mapping struct {
 	// Inode number of the backing file
 	Inode uint64
 
-	// File offset of the backing file
-	FileOffset uint64
+	// FrameMapping data for this mapping.
+	FrameMapping libpf.FrameMapping
 }
 
 // GetOnDiskFileIdentifier returns the OnDiskFileIdentifier for the mapping
@@ -139,57 +152,23 @@ func (m *Mapping) GetOnDiskFileIdentifier() util.OnDiskFileIdentifier {
 	}
 }
 
-// ProcessMeta contains metadata about a tracked process.
-type ProcessMeta struct {
-	// process name retrieved from /proc/PID/comm
-	Name string
-	// executable path retrieved from /proc/PID/exe
-	Executable string
-	// process env vars from /proc/PID/environ
-	EnvVariables map[string]string
-	// container ID retrieved from /proc/PID/cgroup
-	ContainerID string
-}
-
 // processInfo contains information about the executable mappings
 // and Thread Specific Data of a process.
 type processInfo struct {
 	// process metadata, fixed for process lifetime (read-only)
-	meta ProcessMeta
-	// executable mappings keyed by start address.
-	mappings map[libpf.Address]*Mapping
-	// executable mappings keyed by host file ID.
-	mappingsByFileID map[host.FileID]map[libpf.Address]*Mapping
+	meta process.ProcessMeta
+	// executable mappings sorted by FileID and mapping start address
+	mappings []Mapping
 	// C-library Thread Specific Data information
-	tsdInfo *tpbase.TSDInfo
-}
-
-// addMapping adds a mapping to the internal indices.
-func (pi *processInfo) addMapping(m Mapping) {
-	p := &m
-	pi.mappings[m.Vaddr] = p
-
-	inner := pi.mappingsByFileID[m.FileID]
-	if inner == nil {
-		inner = make(map[libpf.Address]*Mapping, 1)
-		pi.mappingsByFileID[m.FileID] = inner
-	}
-	inner[m.Vaddr] = p
-}
-
-// removeMapping removes a mapping from the internal indices.
-func (pi *processInfo) removeMapping(m *Mapping) {
-	delete(pi.mappings, m.Vaddr)
-
-	if inner, ok := pi.mappingsByFileID[m.FileID]; ok {
-		delete(inner, m.Vaddr)
-		if len(inner) != 0 {
-			delete(pi.mappingsByFileID, m.FileID)
-		}
-	}
+	libcInfo *libc.LibcInfo
 }
 
 // GetEbpfHandler returns the EbpfHandler interface for direct access to eBPF operations.
 func (pm *ProcessManager) GetEbpfHandler() pmebpf.EbpfHandler {
 	return pm.ebpf
+}
+
+// SetInterceptor sets an interceptor to be used for traces
+func (pm *ProcessManager) SetInterceptor(interceptor TraceInterceptor) {
+	pm.interceptor = interceptor
 }

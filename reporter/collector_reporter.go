@@ -5,9 +5,10 @@ package reporter // import "go.opentelemetry.io/ebpf-profiler/reporter"
 
 import (
 	"context"
+	"time"
 
-	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/collector/consumer/xconsumer"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/xsync"
@@ -29,7 +30,6 @@ type CollectorReporter struct {
 func NewCollector(cfg *Config, nextConsumer xconsumer.Profiles) (*CollectorReporter, error) {
 	data, err := pdata.New(
 		cfg.SamplesPerSecond,
-		cfg.ExecutablesCacheElements,
 		cfg.ExtraSampleAttrProd,
 	)
 	if err != nil {
@@ -54,11 +54,13 @@ func NewCollector(cfg *Config, nextConsumer xconsumer.Profiles) (*CollectorRepor
 }
 
 func (r *CollectorReporter) Start(ctx context.Context) error {
+	r.collectionStartTime = time.Now()
+
 	// Create a child context for reporting features
 	ctx, cancelReporting := context.WithCancel(ctx)
 
-	r.runLoop.Start(ctx, r.cfg.ReportInterval, func() {
-		if err := r.reportProfile(context.Background()); err != nil {
+	r.runLoop.Start(ctx, r.cfg.ReportInterval, r.cfg.ReportJitter, func() {
+		if err := r.reportProfile(ctx); err != nil {
 			log.Errorf("Request failed: %v", err)
 		}
 	}, func() {
@@ -83,9 +85,13 @@ func (r *CollectorReporter) reportProfile(ctx context.Context) error {
 	reportedEvents := (*traceEventsPtr)
 	newEvents := make(samples.TraceEventsTree)
 	*traceEventsPtr = newEvents
+	collectionEndTime := time.Now()
+	collectionStartTime := r.collectionStartTime
+	r.collectionStartTime = collectionEndTime
 	r.traceEvents.WUnlock(&traceEventsPtr)
 
-	profiles, err := r.pdata.Generate(reportedEvents, r.name, r.version)
+	profiles, err := r.pdata.Generate(reportedEvents, r.name, r.version,
+		collectionStartTime, collectionEndTime)
 	if err != nil {
 		log.Errorf("pdata: %v", err)
 		return nil

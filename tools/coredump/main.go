@@ -13,16 +13,14 @@ import (
 	"flag"
 	"os"
 
+	"log"
+
 	"github.com/peterbourgon/ff/v3/ffcli"
-	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/ebpf-profiler/tools/coredump/cloudstore"
 	"go.opentelemetry.io/ebpf-profiler/tools/coredump/modulestore"
 )
 
 func main() {
-	log.SetReportCaller(false)
-	log.SetFormatter(&log.TextFormatter{})
-
 	cloudClient, err := cloudstore.Client()
 	if err != nil {
 		log.Fatalf("%v", err)
@@ -40,6 +38,7 @@ func main() {
 		Subcommands: []*ffcli.Command{
 			newAnalyzeCmd(store),
 			newCleanCmd(store),
+			newExportCmd(store),
 			newExportModuleCmd(store),
 			newNewCmd(store),
 			newRebaseCmd(store),

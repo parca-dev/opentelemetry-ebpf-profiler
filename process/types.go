@@ -89,6 +89,24 @@ type ReadAtCloser interface {
 	io.Closer
 }
 
+// MetaConfig provides options that influences gathering ProcessMeta.
+type MetaConfig struct {
+	// IncludeEnvVars holds a list of env vars that should be captured from the process.
+	IncludeEnvVars libpf.Set[string]
+}
+
+// ProcessMeta contains metadata about a tracked process.
+type ProcessMeta struct {
+	// process name retrieved from /proc/PID/comm
+	Name libpf.String
+	// executable path retrieved from /proc/PID/exe
+	Executable libpf.String
+	// process env vars from /proc/PID/environ
+	EnvVariables map[libpf.String]libpf.String
+	// container ID retrieved from /proc/PID/cgroup
+	ContainerID libpf.String
+}
+
 // Process is the interface to inspect ELF coredump/process.
 // The current implementations do not allow concurrent access to this interface
 // from different goroutines. As an exception the ELFOpener and the returned
@@ -99,6 +117,12 @@ type Process interface {
 
 	// GetMachineData reads machine specific data from the target process.
 	GetMachineData() MachineData
+
+	// GetProcessMeta returns process specific metadata.
+	GetProcessMeta(MetaConfig) ProcessMeta
+
+	// GetExe returns the executable path of the process.
+	GetExe() (libpf.String, error)
 
 	// GetMappings reads and parses process memory mappings.
 	GetMappings() ([]Mapping, uint32, error)
@@ -118,13 +142,6 @@ type Process interface {
 
 	// CalculateMappingFileID calculates FileID of the backing file.
 	CalculateMappingFileID(*Mapping) (libpf.FileID, error)
-
-	// ExtractAsFile returns a filename suitable for opening the given file from
-	// the target process namespace. This is a last resort method to access the file
-	// when the ReaderAt interface from OpenMappingFile is not sufficient. The returned
-	// filename may refer to /proc or be a temporarily file, and it must not be modified
-	// or deleted.
-	ExtractAsFile(string) (string, error)
 
 	io.Closer
 

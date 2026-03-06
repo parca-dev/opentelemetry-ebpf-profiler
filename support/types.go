@@ -12,7 +12,6 @@ import (
 
 const (
 	FrameMarkerUnknown    = 0x0
-	FrameMarkerErrorBit   = 0x80
 	FrameMarkerPython     = 0x1
 	FrameMarkerNative     = 0x3
 	FrameMarkerPHP        = 0x2
@@ -23,24 +22,32 @@ const (
 	FrameMarkerPerl       = 0x7
 	FrameMarkerV8         = 0x8
 	FrameMarkerDotnet     = 0xa
-	FrameMarkerLuaJIT     = 0xb
-	FrameMarkerGo         = 0xc
-	FrameMarkerCUDAKernel = 0xd
-	FrameMarkerAbort      = 0xff
+	FrameMarkerLuaJIT     = 0xd
+	FrameMarkerBEAM       = 0xc
+	FrameMarkerCUDAKernel = 0xe
+	FrameMarkerGo         = 0xb
 )
 
 const (
-	ProgUnwindStop    = 0x0
-	ProgUnwindNative  = 0x1
-	ProgUnwindHotspot = 0x2
-	ProgUnwindPython  = 0x4
-	ProgUnwindPHP     = 0x5
-	ProgUnwindRuby    = 0x6
-	ProgUnwindPerl    = 0x3
-	ProgUnwindV8      = 0x7
-	ProgUnwindDotnet  = 0x8
-	ProgGoLabels      = 0x9
-	ProgUnwindLuaJIT  = 0xa
+	FrameFlagError         = 0x1
+	FrameFlagReturnAddress = 0x2
+	FrameFlagPidSpecific   = 0x4
+)
+
+const (
+	ProgUnwindStop     = 0x0
+	ProgUnwindNative   = 0x1
+	ProgUnwindHotspot  = 0x2
+	ProgUnwindPython   = 0x4
+	ProgUnwindPHP      = 0x5
+	ProgUnwindRuby     = 0x6
+	ProgUnwindPerl     = 0x3
+	ProgUnwindV8       = 0x7
+	ProgUnwindDotnet   = 0x8
+	ProgUnwindDotnet10 = 0x9
+	ProgGoLabels       = 0xa
+	ProgUnwindBEAM     = 0xb
+	ProgUnwindLuaJIT   = 0xc
 )
 
 const (
@@ -50,13 +57,14 @@ const (
 )
 
 const (
-	EventTypeGenericPID = 0x1
+	EventTypeGenericPID     = 0x1
+	EventTypeReloadKallsyms = 0x2
 )
 
-const MaxFrameUnwinds = 0x100
+const UnwindInfoMaxEntries = 0x4000
 
 const (
-	MetricIDBeginCumulative = 0x71
+	MetricIDBeginCumulative = 0x77
 )
 
 const (
@@ -90,7 +98,7 @@ const (
 	TraceOriginUnknown  = 0x0
 	TraceOriginSampling = 0x1
 	TraceOriginOffCPU   = 0x2
-	TraceOriginUProbe   = 0x3
+	TraceOriginProbe    = 0x3
 	TraceOriginMemory   = 0x4
 	TraceOriginCuda     = 0x5
 )
@@ -107,16 +115,6 @@ type CustomLabelsArray struct {
 }
 type Event struct {
 	Type uint32
-}
-type Frame struct {
-	File_id        uint64
-	Addr_or_line   uint64
-	Kind           uint8
-	Return_address uint8
-	Callee_pc_hi   uint8
-	Caller_pc_hi   uint8
-	Callee_pc_lo   uint16
-	Caller_pc_lo   uint16
 }
 type OffsetRange struct {
 	Lower_offset1 uint64
@@ -154,16 +152,12 @@ type SystemAnalysis struct {
 	Code      [128]uint8
 	Pad_cgo_0 [4]byte
 }
-type SystemConfig struct {
-	Inverse_pac_mask       uint64
-	Tpbase_offset          uint64
-	Task_stack_offset      uint32
-	Stack_ptregs_offset    uint32
-	Off_cpu_threshold      uint32
-	Drop_error_only_traces bool
-	Pad_cgo_0              [3]byte
-}
 type TSDInfo struct {
+	Offset     int16
+	Multiplier uint8
+	Indirect   uint8
+}
+type DTVInfo struct {
 	Offset     int16
 	Multiplier uint8
 	Indirect   uint8
@@ -177,21 +171,32 @@ type Trace struct {
 	Apm_trace_id       [16]byte
 	Custom_labels      CustomLabelsArray
 	Kernel_stack_id    int32
-	Stack_len          uint32
+	Frame_data_len     uint16
+	Num_frames         uint16
 	Origin             uint32
 	Offtime            uint64
-	Frames             [256]Frame
+	Frame_data         [3072]uint64
 }
 type UnwindInfo struct {
-	Opcode      uint8
-	FpOpcode    uint8
+	Flags       uint8
+	BaseReg     uint8
+	AuxBaseReg  uint8
 	MergeOpcode uint8
 	Param       int32
-	FpParam     int32
+	AuxParam    int32
 }
 
 type ApmIntProcInfo struct {
 	Offset uint64
+}
+type BEAMProcInfo struct {
+	Bias                   uint64
+	R                      uint64
+	The_active_code_index  uint64
+	Beam_normal_exit       uint64
+	Frame_pointers_enabled bool
+	Ranges_sizeof          uint8
+	Pad_cgo_0              [6]byte
 }
 type DotnetProcInfo struct {
 	Version uint32
@@ -220,9 +225,10 @@ type HotspotProcInfo struct {
 	Method_constmethod     uint8
 	Cmethod_size           uint8
 	Jvm_version            uint8
+	New_bcp_slot           uint8
 	Segment_shift          uint8
 	Nmethod_uses_offsets   uint8
-	Pad_cgo_0              [7]byte
+	Pad_cgo_0              [6]byte
 }
 type PHPProcInfo struct {
 	Current_execute_data                uint64
@@ -261,7 +267,9 @@ type PerlProcInfo struct {
 }
 type PyProcInfo struct {
 	AutoTLSKeyAddr                 uint64
+	NoneStructAddr                 uint64
 	Version                        uint16
+	Tls_offset                     int16
 	TsdInfo                        TSDInfo
 	PyThreadState_frame            uint8
 	PyCFrame_current_frame         uint8
@@ -275,48 +283,56 @@ type PyProcInfo struct {
 	PyCodeObject_co_flags          uint8
 	PyCodeObject_co_firstlineno    uint8
 	PyCodeObject_sizeof            uint8
-	Pad_cgo_0                      [6]byte
+	Lasti_is_codeunit              uint8
+	Frame_is_cframe                uint8
+	Pad_cgo_0                      [2]byte
 }
 type RubyProcInfo struct {
 	Version                      uint32
+	Current_ec_tpbase_tls_offset uint64
 	Current_ctx_ptr              uint64
+	Has_objspace                 bool
 	Vm_stack                     uint8
 	Vm_stack_size                uint8
 	Cfp                          uint8
+	Thread_ptr                   uint8
+	Thread_vm                    uint8
+	Vm_objspace                  uint16
+	Objspace_flags               uint8
+	Objspace_size_of_flags       uint8
 	Pc                           uint8
 	Iseq                         uint8
 	Ep                           uint8
 	Size_of_control_frame_struct uint8
 	Body                         uint8
-	Iseq_type                    uint8
-	Iseq_encoded                 uint8
-	Iseq_size                    uint8
+	Cme_method_def               uint8
 	Size_of_value                uint8
 	Running_ec                   uint16
-	Pad_cgo_0                    [2]byte
+	Pad_cgo_0                    [4]byte
 }
 type V8ProcInfo struct {
-	Version                    uint32
-	Type_JSFunction_first      uint16
-	Type_JSFunction_last       uint16
-	Type_Code                  uint16
-	Type_SharedFunctionInfo    uint16
-	Off_HeapObject_map         uint8
-	Off_Map_instancetype       uint8
-	Off_JSFunction_code        uint8
-	Off_JSFunction_shared      uint8
-	Off_Code_instruction_start uint8
-	Off_Code_instruction_size  uint8
-	Off_Code_flags             uint8
-	Fp_marker                  uint8
-	Fp_function                uint8
-	Fp_bytecode_offset         uint8
-	Codekind_shift             uint8
-	Codekind_mask              uint8
-	Codekind_baseline          uint8
-	Isolate_sym                uint64
-	Cped_offset                uint32
-	Wrapped_object_offset      uint32
+	Version                      uint32
+	Type_JSFunction_first        uint16
+	Type_JSFunction_last         uint16
+	Type_Code                    uint16
+	Type_SharedFunctionInfo      uint16
+	Off_HeapObject_map           uint8
+	Off_Map_instancetype         uint8
+	Off_JSFunction_code          uint8
+	Off_JSFunction_shared        uint8
+	Code_instructions_is_pointer uint8
+	Off_Code_instruction_start   uint8
+	Off_Code_instruction_size    uint8
+	Off_Code_flags               uint8
+	Fp_marker                    uint8
+	Fp_function                  uint8
+	Fp_bytecode_offset           uint8
+	Codekind_shift               uint8
+	Codekind_mask                uint8
+	Codekind_baseline            uint8
+	Isolate_sym                  uint64
+	Cped_offset                  uint32
+	Wrapped_object_offset        uint32
 }
 type NativeCustomLabelsProcInfo struct {
 	Current_set_tls_offset       uint64
@@ -331,29 +347,31 @@ type LuaJITProcInfo struct {
 }
 
 const (
-	Sizeof_Frame      = 0x18
 	Sizeof_StackDelta = 0x4
-	Sizeof_Trace      = 0x1b70
+	Sizeof_Trace      = 0x6370
 
 	sizeof_ApmIntProcInfo = 0x8
 	sizeof_DotnetProcInfo = 0x4
 	sizeof_PHPProcInfo    = 0x18
-	sizeof_RubyProcInfo   = 0x20
+	sizeof_RubyProcInfo   = 0x30
 )
 
 const (
-	CustomLabelMaxKeyLen = 0x19
-	CustomLabelMaxValLen = 0x35
-)
+	UnwindRegInvalid uint8 = 0x0
+	UnwindRegCfa     uint8 = 0x1
+	UnwindRegPc      uint8 = 0x2
+	UnwindRegSp      uint8 = 0x3
+	UnwindRegFp      uint8 = 0x4
+	UnwindRegLr      uint8 = 0x5
+	UnwindRegX86RAX  uint8 = 0x6
+	UnwindRegX86R9   uint8 = 0x7
+	UnwindRegX86R11  uint8 = 0x8
+	UnwindRegX86R15  uint8 = 0xa
 
-const (
-	UnwindOpcodeCommand   uint8 = 0x0
-	UnwindOpcodeBaseCFA   uint8 = 0x1
-	UnwindOpcodeBaseSP    uint8 = 0x2
-	UnwindOpcodeBaseFP    uint8 = 0x3
-	UnwindOpcodeBaseLR    uint8 = 0x4
-	UnwindOpcodeBaseReg   uint8 = 0x5
-	UnwindOpcodeFlagDeref uint8 = 0x80
+	UnwindFlagCommand  uint8 = 0x1
+	UnwindFlagFrame    uint8 = 0x2
+	UnwindFlagLeafOnly uint8 = 0x4
+	UnwindFlagDerefCfa uint8 = 0x8
 
 	UnwindCommandInvalid      int32 = 0x0
 	UnwindCommandStop         int32 = 0x1
@@ -391,11 +409,22 @@ const (
 	V8LineCookieShift = 0x20
 	V8LineCookieMask  = 0xffffffff00000000
 	V8LineDeltaMask   = 0xffffffff
+
+	RubyFrameTypeNone     = 0x0
+	RubyFrameTypeCmeIseq  = 0x1
+	RubyFrameTypeCmeCfunc = 0x2
+	RubyFrameTypeIseq     = 0x3
+	RubyFrameTypeGc       = 0x4
+
+	CustomLabelMaxKeyLen = 0x19
+	CustomLabelMaxValLen = 0x35
 )
 
 const (
-	LJFFIFunc = 0xff1
-	LJFileId  = 0x2a
+	LJFFIFunc     = 0xff1
+	LJFileId      = 0x2a
+	LJNormalFrame = 0x0
+	LJGReport     = 0xff2
 )
 
 var MetricsTranslation = []metrics.MetricID{
@@ -472,8 +501,6 @@ var MetricsTranslation = []metrics.MetricID{
 	0x4c: metrics.IDUnwindRubyErrReadCfp,
 	0x4d: metrics.IDUnwindRubyErrReadEp,
 	0x4e: metrics.IDUnwindRubyErrReadIseqBody,
-	0x4f: metrics.IDUnwindRubyErrReadIseqEncoded,
-	0x50: metrics.IDUnwindRubyErrReadIseqSize,
 	0x51: metrics.IDUnwindNativeErrLrUnwindingMidTrace,
 	0x52: metrics.IDUnwindNativeErrReadKernelModeRegs,
 	0x53: metrics.IDUnwindNativeErrChaseIrqStackLink,
@@ -489,10 +516,16 @@ var MetricsTranslation = []metrics.MetricID{
 	0x5d: metrics.IDUnwindDotnetErrBadFP,
 	0x5e: metrics.IDUnwindDotnetErrCodeHeader,
 	0x5f: metrics.IDUnwindDotnetErrCodeTooLarge,
-	0x67: metrics.IDUnwindLuaJITAttempts,
-	0x68: metrics.IDUnwindLuaJITErrNoProcInfo,
-	0x70: metrics.IDDlopenUprobeHits,
+	0x70: metrics.IDUnwindRubyErrInvalidIseq,
+	0x71: metrics.IDUnwindRubyErrReadMethodDef,
+	0x72: metrics.IDUnwindRubyErrReadMethodType,
+	0x73: metrics.IDUnwindRubyErrReadSvar,
+	0x74: metrics.IDUnwindRubyErrReadRbasicFlags,
+	0x75: metrics.IDUnwindRubyErrCmeMaxEp,
 	0x6b: metrics.IDUnwindNodeCustomLabelsAttempts,
 	0x6c: metrics.IDUnwindNodeCustomLabelsSuccesses,
 	0x6d: metrics.IDUnwindNodeCustomLabelsFailures,
+	0x67: metrics.IDUnwindLuaJITAttempts,
+	0x68: metrics.IDUnwindLuaJITErrNoProcInfo,
+	0x76: metrics.IDDlopenUprobeHits,
 }

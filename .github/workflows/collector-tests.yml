@@ -4,6 +4,10 @@ on:
   schedule:
     # Run every day at 3:15 AM.
     - cron: '15 3 * * *'
+  pull_request:
+    branches: ["**"]
+    paths:
+      - cmd/otelcol-ebpf-profiler/manifest.yaml
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref_name }}
@@ -18,13 +22,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Repo
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Set up environment
         uses: ./.github/workflows/env
+      - name: Set up Go Stable
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
         with:
-          skip_rust: true
+          go-version: stable
       - name: Cache coredump modules
-        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: tools/coredump/modulecache
           key: coredumps-collector-${{ hashFiles('tools/coredump/testdata/*/*.json') }}
@@ -39,6 +45,10 @@ jobs:
         run: |
           COLLECTOR_PATH=/tmp/opentelemetry-collector ./support/local-collector.sh
           go mod tidy
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y debootstrap systemtap-sdt-dev
       - name: Tests
         run: make test-junit
       - name: Generate Issue
@@ -46,5 +56,41 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          go install go.opentelemetry.io/build-tools/issuegenerator@latest
+          go install go.opentelemetry.io/build-tools/issuegenerator@v0.28.1
+          issuegenerator -path /tmp/testresults
+
+  otelcol-ebpf-profiler:
+    strategy:
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, use-upstream: true }
+          - { runner: ubuntu-24.04, use-upstream: false }
+          - { runner: ubuntu-24.04-arm, use-upstream: true }
+          - { runner: ubuntu-24.04-arm, use-upstream: false }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Set up Go Stable
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version: stable
+      - name: Clone Collector
+        if: ${{ matrix.use-upstream }}
+        run: |
+          collector_path=/tmp/opentelemetry-collector
+          git clone --depth=1 https://github.com/open-telemetry/opentelemetry-collector.git $collector_path
+      - name: Setup replace statements
+        if: ${{ matrix.use-upstream }}
+        run: |
+          COLLECTOR_PATH=/tmp/opentelemetry-collector make otel-from-tree
+      - name: Build otelcol-ebpf-profiler
+        run: |
+          make otelcol-ebpf-profiler
+      - name: Generate Issue
+        if: failure()
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          go install go.opentelemetry.io/build-tools/issuegenerator@v0.28.1
           issuegenerator -path /tmp/testresults

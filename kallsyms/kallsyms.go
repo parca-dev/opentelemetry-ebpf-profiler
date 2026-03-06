@@ -11,7 +11,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"hash/fnv"
 	"io"
 	"os"
 	"path"
@@ -24,10 +23,11 @@ import (
 	"unsafe"
 
 	"github.com/mdlayher/kobject"
-	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	"go.opentelemetry.io/ebpf-profiler/stringutil"
 )
 
@@ -58,6 +58,10 @@ type symbol struct {
 	index uint32
 }
 
+func compareSymbol(a, b symbol) int {
+	return int(int64(b.offset) - int64(a.offset))
+}
+
 // Module contains symbols and metadata for one kernel module.
 type Module struct {
 	start libpf.Address
@@ -65,10 +69,20 @@ type Module struct {
 	mtime int64
 	stub  bool
 
-	buildID string
-	fileID  libpf.FileID
+	mapping libpf.FrameMapping
+
 	names   []byte
 	symbols []symbol
+}
+
+func compareModule(a, b Module) int {
+	if a.start > b.start {
+		return -1
+	}
+	if a.start < b.start {
+		return 1
+	}
+	return 0
 }
 
 // Symbolizer provides the main API for reading, updating and querying
@@ -76,14 +90,16 @@ type Module struct {
 type Symbolizer struct {
 	modules atomic.Value
 
-	reloadModules chan bool
+	reloadModules chan libpf.Void
+	reloadSymbols chan libpf.Void
 }
 
 // NewSymbolizer creates and returns a new kallsyms symbolizer and loads
 // the initial 'kallsymbols'.
 func NewSymbolizer() (*Symbolizer, error) {
 	s := &Symbolizer{
-		reloadModules: make(chan bool, 1),
+		reloadModules: make(chan libpf.Void, 1),
+		reloadSymbols: make(chan libpf.Void, 1),
 	}
 	if err := s.loadKallsyms(); err != nil {
 		return nil, err
@@ -120,7 +136,7 @@ func (m *Module) bytesAt(index uint32) []byte {
 
 // stringAt recovers the string at `index` received from previous `addName` call.
 func (m *Module) stringAt(index uint32) string {
-	return stringutil.ByteSlice2String(m.bytesAt(index))
+	return pfunsafe.ToString(m.bytesAt(index))
 }
 
 // parseSysfsUint reads a kernel module specific attribute from sysfs.
@@ -129,7 +145,7 @@ func parseSysfsUint(mod, knob string) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return strconv.ParseUint(strings.Trim(stringutil.ByteSlice2String(text), "\n"), 0, pointerBits)
+	return strconv.ParseUint(strings.Trim(pfunsafe.ToString(text), "\n"), 0, pointerBits)
 }
 
 // loadModuleMetadata is the function to load module bounds and fileID data.
@@ -176,11 +192,18 @@ var loadModuleMetadata = func(m *Module, name string, oldMtime int64) bool {
 	// Require at least 16 bytes of BuildID to ensure there is enough entropy for a FileID.
 	// 16 bytes could happen when --build-id=md5 is passed to `ld`. This would imply a custom
 	// kernel.
-	var err error
-	m.buildID, err = pfelf.GetBuildIDFromNotesFile(notesFile)
-	if err == nil && len(m.buildID) >= 16 {
-		m.fileID = libpf.FileIDFromKernelBuildID(m.buildID)
+	fileID := libpf.UnknownKernelFileID
+	buildID, err := pfelf.GetBuildIDFromNotesFile(notesFile)
+	if err == nil && len(buildID) >= 16 {
+		fileID = libpf.FileIDFromKernelBuildID(buildID)
 	}
+	m.mapping = libpf.NewFrameMapping(libpf.FrameMappingData{
+		File: libpf.NewFrameMappingFile(libpf.FrameMappingFileData{
+			FileID:     fileID,
+			FileName:   libpf.Intern(name),
+			GnuBuildID: buildID,
+		}),
+	})
 	return true
 }
 
@@ -193,35 +216,7 @@ func (m *Module) finish() {
 		lastSymbol := m.start + libpf.Address(m.symbols[len(m.symbols)-1].offset)
 		m.end = (lastSymbol + 4095) & ^libpf.Address(4095)
 	}
-
-	sort.Slice(m.symbols, func(i, j int) bool {
-		return m.symbols[i].offset >= m.symbols[j].offset
-	})
-
-	// Synthesize fileID if it was not available via /sys
-	if m.fileID.Compare(libpf.FileID{}) == 0 && len(m.symbols) > 0 {
-		// Hash exports and their normalized addresses.
-		h := fnv.New128a()
-
-		h.Write(m.bytesAt(0)) // module name
-		size := uint64(m.end - m.start)
-		h.Write(libpf.SliceFrom(&size))
-
-		for _, sym := range m.symbols {
-			h.Write(m.bytesAt(sym.index))
-			addr := uint64(sym.offset)
-			h.Write(libpf.SliceFrom(&addr))
-		}
-
-		var hash [16]byte
-		fileID, err := libpf.FileIDFromBytes(h.Sum(hash[:0]))
-		if err != nil {
-			panic("kernel module fallback fileID construction is broken")
-		}
-
-		log.Debugf("Fallback module ID for module %s is '%s' (num syms: %d)",
-			m.Name(), fileID.Base64(), len(m.symbols))
-	}
+	slices.SortFunc(m.symbols, compareSymbol)
 }
 
 func (m *Module) Name() string {
@@ -236,12 +231,8 @@ func (m *Module) End() libpf.Address {
 	return m.end
 }
 
-func (m *Module) BuildID() string {
-	return m.buildID
-}
-
-func (m *Module) FileID() libpf.FileID {
-	return m.fileID
+func (m *Module) Mapping() libpf.FrameMapping {
+	return m.mapping
 }
 
 // LookupSymbolByAddress resolves the `pc` address to the function and offset from it.
@@ -251,9 +242,7 @@ func (m *Module) LookupSymbolByAddress(pc libpf.Address) (funcName string, offse
 		return "", 0, ErrModuleStub
 	}
 	pcOffs := uint32(pc - m.start)
-	symIdx := sort.Search(len(m.symbols), func(i int) bool {
-		return pcOffs >= m.symbols[i].offset
-	})
+	symIdx, _ := slices.BinarySearchFunc(m.symbols, symbol{offset: pcOffs}, compareSymbol)
 	if symIdx >= len(m.symbols) {
 		return "", 0, ErrNoSymbol
 	}
@@ -289,7 +278,7 @@ func (m *Module) LookupSymbolsByPrefix(prefix string) []*libpf.Symbol {
 }
 
 // updateSymbolsFrom parses /proc/kallsyms format data from the reader 'r'.
-// If possible the data from previous reads is re-used to avoid allocations.
+// If possible the data from previous reads is reused to avoid allocations.
 // The Symbolizer internal state is updated only if the input data is parsed
 // successfully.
 func (s *Symbolizer) updateSymbolsFrom(r io.Reader) error {
@@ -359,7 +348,7 @@ func (s *Symbolizer) updateSymbolsFrom(r io.Reader) error {
 		// Avoid heap allocation by not using scanner.Text().
 		// NOTE: The underlying bytes will change with the next call to scanner.Scan(),
 		// so make sure to not keep any references after the end of the loop iteration.
-		line := stringutil.ByteSlice2String(scanner.Bytes())
+		line := pfunsafe.ToString(scanner.Bytes())
 
 		// Avoid heap allocations here - do not use strings.FieldsN()
 		var fields [4]string
@@ -475,10 +464,8 @@ func (s *Symbolizer) updateSymbolsFrom(r io.Reader) error {
 	if noSymbols {
 		return ErrSymbolPermissions
 	}
+	slices.SortFunc(mods, compareModule)
 
-	sort.Slice(mods, func(i, j int) bool {
-		return mods[i].start >= mods[j].start
-	})
 	// Heap allocate the exact amount needed. This also makes the initial
 	// buffer stack allocated.
 	s.modules.Store(slices.Clone(mods))
@@ -556,9 +543,7 @@ func (s *Symbolizer) loadModules() (bool, error) {
 		}
 	}
 
-	sort.Slice(mods, func(i, j int) bool {
-		return mods[i].start >= mods[j].start
-	})
+	slices.SortFunc(mods, compareModule)
 	// Heap allocate the exact amount needed. This also makes the initial
 	// buffer stack allocated.
 	s.modules.Store(slices.Clone(mods))
@@ -590,6 +575,12 @@ func (s *Symbolizer) reloadWorker(ctx context.Context, kobjectClient *kobject.Cl
 				log.Warnf("Failed to reload kernel modules metadata: %v", err)
 				nextModulesReload = time.After(10 * time.Second)
 			}
+		case <-s.reloadSymbols:
+			// Just trigger reloading of symbols with small delay to batch
+			// potentially multiple module loads.
+			if nextKallsymsReload == noTimeout {
+				nextKallsymsReload = time.After(100 * time.Millisecond)
+			}
 		case <-nextKallsymsReload:
 			if err := s.loadKallsyms(); err == nil {
 				log.Debugf("Kernel symbols reloaded")
@@ -607,7 +598,7 @@ func (s *Symbolizer) reloadWorker(ctx context.Context, kobjectClient *kobject.Cl
 }
 
 // pollKobjectClient listens for kernel kobject events to reload kallsyms when needed.
-func (s *Symbolizer) pollKobjectClient(kobjectClient *kobject.Client) {
+func (s *Symbolizer) pollKobjectClient(_ context.Context, kobjectClient *kobject.Client) {
 	for {
 		event, err := kobjectClient.Receive()
 		if err != nil {
@@ -617,7 +608,7 @@ func (s *Symbolizer) pollKobjectClient(kobjectClient *kobject.Client) {
 			log.Debugf("Kernel modules changed")
 			// Notify worker thread without blocking
 			select {
-			case s.reloadModules <- true:
+			case s.reloadModules <- libpf.Void{}:
 			default:
 			}
 		}
@@ -631,8 +622,17 @@ func (s *Symbolizer) StartMonitor(ctx context.Context) error {
 		return fmt.Errorf("failed to create kobject netlink socket: %v", err)
 	}
 	go s.reloadWorker(ctx, kobjectClient)
-	go s.pollKobjectClient(kobjectClient)
+	go s.pollKobjectClient(ctx, kobjectClient)
 	return nil
+}
+
+// Reload triggers a non-blocking reload and update of Symbolizer
+// with the recent information of /proc/kallsyms.
+func (s *Symbolizer) Reload() {
+	select {
+	case s.reloadSymbols <- libpf.Void{}:
+	default:
+	}
 }
 
 // getModuleByAddress is a helper to find a Module from the sorted 'modules'

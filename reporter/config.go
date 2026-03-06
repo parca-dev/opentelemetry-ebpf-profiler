@@ -26,8 +26,6 @@ type Config struct {
 
 	// Disable secure communication with Collection Agent.
 	DisableTLS bool
-	// ExecutablesCacheElements defines item capacity of the executables cache.
-	ExecutablesCacheElements uint32
 	// samplesPerSecond defines the number of samples per second.
 	SamplesPerSecond int
 
@@ -38,6 +36,7 @@ type Config struct {
 	GRPCStartupBackoffTime time.Duration
 	GRPCConnectionTimeout  time.Duration
 	ReportInterval         time.Duration
+	ReportJitter           float64
 
 	// gRPCInterceptor is the client gRPC interceptor, e.g., for sending gRPC metadata.
 	GRPCClientInterceptor grpc.UnaryClientInterceptor

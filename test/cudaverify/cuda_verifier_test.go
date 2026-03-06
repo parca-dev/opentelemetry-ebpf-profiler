@@ -15,7 +15,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
-	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
 	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
 	"go.opentelemetry.io/ebpf-profiler/util"
@@ -25,14 +24,14 @@ var soPath = flag.String("so-path", "/libparcagpucupti.so", "path to libparcagpu
 
 type mockIntervals struct{}
 
-func (mockIntervals) MonitorInterval() time.Duration    { return 1 * time.Second }
-func (mockIntervals) TracePollInterval() time.Duration  { return 250 * time.Millisecond }
-func (mockIntervals) PIDCleanupInterval() time.Duration { return 1 * time.Second }
+func (mockIntervals) MonitorInterval() time.Duration       { return 1 * time.Second }
+func (mockIntervals) TracePollInterval() time.Duration     { return 250 * time.Millisecond }
+func (mockIntervals) PIDCleanupInterval() time.Duration    { return 1 * time.Second }
+func (mockIntervals) ExecutableUnloadDelay() time.Duration { return 1 * time.Second }
 
 type mockReporter struct{}
 
-func (mockReporter) ExecutableKnown(_ libpf.FileID) bool                   { return true }
-func (mockReporter) ExecutableMetadata(_ *reporter.ExecutableMetadataArgs) {}
+func (mockReporter) ExecutableKnown(_ libpf.FileID) bool { return true }
 
 // parseProbes opens the .so and extracts the required parcagpu USDT probes.
 func parseProbes(t *testing.T) []pfelf.USDTProbe {
@@ -84,7 +83,6 @@ func createTracer(t *testing.T) (*tracer.Tracer, interpreter.EbpfHandler, contex
 	enabledTracers, _ := tracertypes.Parse("")
 
 	tr, err := tracer.NewTracer(ctx, &tracer.Config{
-		Reporter:               &mockReporter{},
 		Intervals:              &mockIntervals{},
 		IncludeTracers:         enabledTracers,
 		FilterErrorFrames:      false,
@@ -151,7 +149,7 @@ func TestCUDAVerifierSingleShot(t *testing.T) {
 	lc, err := ebpfHandler.AttachUSDTProbes(
 		libpf.PID(os.Getpid()),
 		*soPath,
-		"",     // no multi-prog
+		"", // no multi-prog
 		probes,
 		cookies,
 		progNames,

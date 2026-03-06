@@ -7,12 +7,12 @@
 #include "usdt_args.h"
 
 // Test results map to communicate success/failure to userspace
-bpf_map_def SEC("maps") usdt_test_results = {
-  .type        = BPF_MAP_TYPE_HASH,
-  .key_size    = sizeof(u32),
-  .value_size  = sizeof(u64),
-  .max_entries = 64,
-};
+struct usdt_test_results_t {
+  __uint(type, BPF_MAP_TYPE_HASH);
+  __type(key, u32);
+  __type(value, u64);
+  __uint(max_entries, 64);
+} usdt_test_results SEC(".maps");
 
 // Helper to record test result
 static EBPF_INLINE void record_result(UNUSED u32 probe_id, u64 value)

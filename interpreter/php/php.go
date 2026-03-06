@@ -12,13 +12,14 @@ import (
 	"strconv"
 	"unsafe"
 
-	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
 	"github.com/elastic/go-freelru"
 
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
 	"go.opentelemetry.io/ebpf-profiler/support"
 )
@@ -50,12 +51,12 @@ var (
 	_ interpreter.Instance = &phpInstance{}
 )
 
-func phpVersion(major, minor, release uint) uint {
+func phpVersion(major, minor, release uint32) uint32 {
 	return major*0x10000 + minor*0x100 + release
 }
 
 type phpData struct {
-	version uint
+	version uint32
 
 	// egAddr is the `executor_globals` symbol value which is needed by the eBPF
 	// program to build php backtraces.
@@ -102,10 +103,10 @@ func (d *phpData) String() string {
 }
 
 func (d *phpData) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, bias libpf.Address,
-	rm remotememory.RemoteMemory) (interpreter.Instance, error) {
-	addrToFunction, err :=
-		freelru.New[libpf.Address, *phpFunction](interpreter.LruFunctionCacheSize,
-			libpf.Address.Hash32)
+	rm remotememory.RemoteMemory,
+) (interpreter.Instance, error) {
+	addrToFunction, err := freelru.New[libpf.Address, *phpFunction](interpreter.LruFunctionCacheSize,
+		libpf.Address.Hash32)
 	if err != nil {
 		return nil, err
 	}
@@ -145,19 +146,19 @@ func (d *phpData) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, bias libpf
 func (d *phpData) Unload(_ interpreter.EbpfHandler) {
 }
 
-func versionExtract(rodata string) (uint, error) {
+func versionExtract(rodata string) (uint32, error) {
 	matches := versionMatch.FindStringSubmatch(rodata)
 	if matches == nil {
 		return 0, errors.New("no valid PHP version string found")
 	}
 
-	major, _ := strconv.Atoi(matches[1])
-	minor, _ := strconv.Atoi(matches[2])
-	release, _ := strconv.Atoi(matches[3])
-	return phpVersion(uint(major), uint(minor), uint(release)), nil
+	major, _ := strconv.ParseUint(matches[1], 10, 32)
+	minor, _ := strconv.ParseUint(matches[2], 10, 32)
+	release, _ := strconv.ParseUint(matches[3], 10, 32)
+	return phpVersion(uint32(major), uint32(minor), uint32(release)), nil
 }
 
-func determinePHPVersion(ef *pfelf.File) (uint, error) {
+func determinePHPVersion(ef *pfelf.File) (uint32, error) {
 	// There is no ideal way to get the PHP version. This just searches
 	// for a known string with the version number from .rodata.
 	if ef.ROData == nil {
@@ -180,7 +181,7 @@ func determinePHPVersion(ef *pfelf.File) (uint, error) {
 		if zeroIdx < 0 {
 			continue
 		}
-		version, err := versionExtract(unsafe.String(unsafe.SliceData(rodata[idx:]), zeroIdx))
+		version, err := versionExtract(pfunsafe.ToString(rodata[idx : idx+zeroIdx]))
 		if err != nil {
 			continue
 		}
@@ -270,9 +271,9 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		return nil, err
 	}
 
-	// Only tested on PHP7.3-PHP8.3. Other similar versions probably only require
+	// Only tested on PHP7.3-PHP8.4. Other similar versions probably only require
 	// tweaking the offsets.
-	var minVer, maxVer = phpVersion(7, 3, 0), phpVersion(8, 4, 0)
+	minVer, maxVer := phpVersion(7, 3, 0), phpVersion(8, 5, 0)
 	if version < minVer || version >= maxVer {
 		return nil, fmt.Errorf("PHP version %d.%d.%d (need >= %d.%d and < %d.%d)",
 			(version>>16)&0xff, (version>>8)&0xff, version&0xff,
@@ -342,6 +343,10 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 	vms.zend_string.val = 24
 	vms.zend_op.lineno = 24
 	switch {
+	case version >= phpVersion(8, 4, 0):
+		vms.zend_function.op_array_filename = 168
+		vms.zend_function.op_array_linestart = 176
+		vms.zend_function.Sizeof = 184
 	case version >= phpVersion(8, 3, 0):
 		vms.zend_function.op_array_filename = 144
 		vms.zend_function.op_array_linestart = 152
