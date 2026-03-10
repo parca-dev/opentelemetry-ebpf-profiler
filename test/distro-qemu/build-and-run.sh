@@ -64,6 +64,7 @@ echo "Running debootstrap to create $DISTRO $RELEASE rootfs for $DEBOOTSTRAP_ARC
 if ! sudo debootstrap --variant=minbase \
     --arch="$DEBOOTSTRAP_ARCH" \
     --cache-dir="$CACHE_DIR" \
+    --foreign \
     "$RELEASE" "$ROOTFS_DIR" "$MIRROR" ; then
     echo "Debootstrap failed, log follows."
     cat "$ROOTFS_DIR/debootstrap/debootstrap.log"
