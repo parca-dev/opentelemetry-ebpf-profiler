@@ -107,6 +107,7 @@ fi
 # Copy test binaries and parcagpu .so into rootfs
 cp "${BUILD_DIR}"/*.test "$ROOTFS_DIR/"
 cp "${PARCAGPU_DIR}/libparcagpucupti.so" "$ROOTFS_DIR/"
+copy_lib_deps "${PARCAGPU_DIR}/libparcagpucupti.so"
 
 # Copy stub libcupti .so into the RUNPATH (/usr/local/cuda/lib64) so the
 # dynamic linker resolves the DT_NEEDED entry without a real CUDA install.
