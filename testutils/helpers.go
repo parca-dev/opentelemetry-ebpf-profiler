@@ -54,6 +54,14 @@ func (tr *traceReporter) ReportTraceEvent(trace *libpf.Trace, meta *samples.Trac
 	return nil
 }
 
+func InitializeMetrics() {
+	// Initialize metrics
+	meter := otel.Meter("go.opentelemetry.io/ebpf-profiler",
+		metric.WithInstrumentationVersion(vc.Version()))
+	metrics.Start(meter)
+
+}
+
 func StartTracer(ctx context.Context, t *testing.T, et tracertypes.IncludedTracers,
 	printBpfLogs bool) (<-chan TraceEvent, *tracer.Tracer) {
 	traceCh := make(chan TraceEvent)
@@ -61,10 +69,7 @@ func StartTracer(ctx context.Context, t *testing.T, et tracertypes.IncludedTrace
 		traceEventChan: traceCh,
 	}
 
-	// Initialize metrics
-	meter := otel.Meter("go.opentelemetry.io/ebpf-profiler",
-		metric.WithInstrumentationVersion(vc.Version()))
-	metrics.Start(meter)
+	InitializeMetrics()
 
 	trc, err := tracer.NewTracer(ctx, &tracer.Config{
 		TraceReporter:          tr,
