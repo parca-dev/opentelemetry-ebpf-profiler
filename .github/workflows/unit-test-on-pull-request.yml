@@ -142,7 +142,7 @@ jobs:
 
   integration-tests:
     name: Integration tests (v${{ matrix.kernel }} ${{ matrix.target_arch }})
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.target_arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     needs: build-integration-test-binaries
     timeout-minutes: 10
     strategy:
@@ -233,10 +233,50 @@ jobs:
           uname -a
           sudo go test ./interpreter/... -v -run "TestIntegration/(node-local-nightly|node-latest)"
 
+  build-distro-qemu-initramfs:
+    name: Build distro QEMU initramfs (${{ matrix.target_arch }})
+    runs-on: ${{ matrix.target_arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        target_arch: [amd64, arm64]
+    steps:
+      - name: Clone code
+        uses: actions/checkout@v4
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends busybox systemtap-sdt-dev
+      - name: Cache parcagpu library
+        uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: test/distro-qemu/parcagpu-lib
+          key: parcagpu-${{ matrix.target_arch }}
+      - name: Build initramfs
+        run: |
+          cd test/distro-qemu
+          case "${{ matrix.target_arch }}" in
+            amd64) export QEMU_ARCH=x86_64;;
+            arm64) export QEMU_ARCH=aarch64;;
+            *) echo >&2 "bug: bad arch selected"; exit 1;;
+          esac
+          ./build-initramfs.sh initramfs-${{ matrix.target_arch }}.gz
+      - name: Upload initramfs
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: distro-qemu-initramfs-${{ matrix.target_arch }}
+          path: test/distro-qemu/initramfs-${{ matrix.target_arch }}.gz
+
   distro-qemu-tests:
     name: Distro QEMU tests (${{ matrix.kernel }} ${{ matrix.target_arch }})
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    runs-on: ${{ matrix.target_arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    needs: build-distro-qemu-initramfs
+    timeout-minutes: 10
     strategy:
       matrix:
         include:
@@ -261,13 +301,6 @@ jobs:
     steps:
       - name: Clone code
         uses: actions/checkout@v4
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-          cache-dependency-path: go.sum
-      - name: Set up environment
-        uses: ./.github/workflows/env
       - name: Install dependencies
         run: |
           sudo tee /etc/apt/sources.list.d/ubuntu.sources <<EOF > /dev/null
@@ -294,17 +327,16 @@ jobs:
             arm64) sudo apt-get -y install qemu-system-arm ipxe-qemu gcc-aarch64-linux-gnu libc6-arm64-cross libc6:arm64 binutils-aarch64-linux-gnu musl-dev:arm64 systemtap-sdt-dev:arm64;;
             *) echo >&2 "bug: bad arch selected"; exit 1;;
           esac
-          sudo apt-get install -y debootstrap systemtap-sdt-dev
-      - name: Get parcagpu image digest
-        id: parcagpu-digest
-        run: |
-          digest=$(docker buildx imagetools inspect ghcr.io/parca-dev/parcagpu:latest --format '{{.Digest}}' 2>/dev/null || echo "unknown")
-          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
-      - name: Cache parcagpu library
+      - name: Fetch initramfs
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        with:
+          name: distro-qemu-initramfs-${{ matrix.target_arch }}
+          path: test/distro-qemu
+      - name: Cache kernel image
         uses: actions/cache@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
         with:
-          path: test/distro-qemu/parcagpu-lib
-          key: parcagpu-${{ matrix.target_arch }}-${{ steps.parcagpu-digest.outputs.digest }}
+          path: test/distro-qemu/ci-kernels/${{ matrix.kernel }}
+          key: ci-kernel-${{ matrix.target_arch }}-${{ matrix.kernel }}
       - name: Download kernel
         run: |
           cd test/distro-qemu
@@ -314,7 +346,7 @@ jobs:
             *) echo >&2 "bug: bad arch selected"; exit 1;;
           esac
           ./download-kernel.sh ${{ matrix.kernel }}
-      - name: Run Full Distro tests in QEMU
+      - name: Run tests in QEMU
         run: |
           cd test/distro-qemu
           case "${{ matrix.target_arch }}" in
@@ -322,4 +354,4 @@ jobs:
             arm64) export QEMU_ARCH=aarch64;;
             *) echo >&2 "bug: bad arch selected"; exit 1;;
           esac
-          ./build-and-run.sh ${{ matrix.kernel }}
+          ./run-qemu.sh ${{ matrix.kernel }} initramfs-${{ matrix.target_arch }}.gz

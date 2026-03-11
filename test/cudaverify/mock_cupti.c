@@ -17,7 +17,7 @@
 
 typedef int CUptiResult;
 #define CUPTI_SUCCESS                  0
-#define CUPTI_ERROR_MAX_LIMIT_REACHED  21
+#define CUPTI_ERROR_MAX_LIMIT_REACHED  12
 
 typedef void *CUpti_SubscriberHandle;
 typedef void *CUcontext;
