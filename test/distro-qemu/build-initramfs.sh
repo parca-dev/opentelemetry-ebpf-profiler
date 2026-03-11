@@ -61,7 +61,7 @@ if [ -z "$BUSYBOX" ]; then
 fi
 cp "$BUSYBOX" "$ROOTFS_DIR/bin/busybox"
 chmod +x "$ROOTFS_DIR/bin/busybox"
-for cmd in sh mount umount dmesg poweroff halt reboot hostname uname find head tail sleep cat grep cut echo; do
+for cmd in sh mount umount dmesg poweroff halt reboot hostname uname find head tail sleep cat grep cut echo ldconfig; do
     ln -sf busybox "$ROOTFS_DIR/bin/$cmd"
 done
 
@@ -110,10 +110,11 @@ cp "${BUILD_DIR}"/*.test "$ROOTFS_DIR/"
 cp "${PARCAGPU_DIR}/libparcagpucupti.so" "$ROOTFS_DIR/"
 copy_lib_deps "${PARCAGPU_DIR}/libparcagpucupti.so"
 
-# Copy stub libcupti .so next to libparcagpucupti.so so the dynamic linker
-# can resolve the DT_NEEDED entry without a real CUDA installation.
+# Copy stub libcupti .so into the RUNPATH (/usr/local/cuda/lib64) so the
+# dynamic linker resolves the DT_NEEDED entry without a real CUDA install.
+mkdir -p "$ROOTFS_DIR/usr/local/cuda/lib64"
 for stub in "${PARCAGPU_DIR}"/libcupti.so*; do
-    [ -f "$stub" ] && cp "$stub" "$ROOTFS_DIR/"
+    [ -f "$stub" ] && cp "$stub" "$ROOTFS_DIR/usr/local/cuda/lib64/"
 done
 
 # Ensure libstdc++ is available — ldd on libparcagpucupti.so may fail on the
@@ -141,6 +142,7 @@ cat << 'INIT_EOF' > "$ROOTFS_DIR/init"
 #!/bin/sh
 export PATH=/bin
 export LD_LIBRARY_PATH=/
+export PARCAGPU_DEBUG=1
 
 echo "===== Test Environment ====="
 echo "Kernel: $(uname -r)"
@@ -149,6 +151,9 @@ echo "Kernel: $(uname -r)"
 mount -t proc proc /proc 2>/dev/null || true
 mount -t sysfs sys /sys 2>/dev/null || true
 mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null || true
+
+# Rebuild ld.so cache so the linker finds libraries in RUNPATH and multiarch paths.
+ldconfig 2>/dev/null || true
 
 # Run the tests
 echo ""
