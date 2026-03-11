@@ -219,58 +219,8 @@ func TestCUDAVerifierMultiProbe(t *testing.T) {
 	t.Log("MultiProbe: all CUDA eBPF programs passed the BPF verifier")
 }
 
-// dumpDebugInfo logs diagnostic information to help debug missing perf events.
-func dumpDebugInfo(t *testing.T, soPath string) {
-	t.Helper()
-
-	// Dump /proc/self/maps entries for the .so
-	maps, err := os.ReadFile("/proc/self/maps")
-	if err == nil {
-		t.Log("=== /proc/self/maps (parcagpu) ===")
-		for _, line := range strings.Split(string(maps), "\n") {
-			if strings.Contains(line, "parcagpu") || strings.Contains(line, "libcupti") {
-				t.Log(line)
-			}
-		}
-	}
-
-	// Dump uprobe_events to see what the kernel has registered
-	for _, path := range []string{
-		"/sys/kernel/debug/tracing/uprobe_events",
-		"/sys/kernel/tracing/uprobe_events",
-	} {
-		data, err := os.ReadFile(path)
-		if err == nil {
-			t.Logf("=== %s ===", path)
-			for _, line := range strings.Split(string(data), "\n") {
-				if line != "" {
-					t.Log(line)
-				}
-			}
-			break
-		}
-	}
-
-	// Dump uprobe_profile to see hit counts
-	for _, path := range []string{
-		"/sys/kernel/debug/tracing/uprobe_profile",
-		"/sys/kernel/tracing/uprobe_profile",
-	} {
-		data, err := os.ReadFile(path)
-		if err == nil {
-			t.Logf("=== %s ===", path)
-			for _, line := range strings.Split(string(data), "\n") {
-				if line != "" {
-					t.Log(line)
-				}
-			}
-			break
-		}
-	}
-}
-
-// startTracePipeReader reads trace_pipe in the background and logs BPF output.
-// Returns a cancel function to stop reading.
+// startTracePipeReader reads trace_pipe in the background and logs only
+// cuda-related BPF debug_print output. Returns a cancel function to stop.
 func startTracePipeReader(t *testing.T) context.CancelFunc {
 	t.Helper()
 
@@ -288,12 +238,9 @@ func startTracePipeReader(t *testing.T) context.CancelFunc {
 		}
 	}
 	if tp == nil {
-		t.Log("DIAG: could not open trace_pipe")
 		cancel()
 		return func() {}
 	}
-
-	t.Logf("DIAG: reading trace_pipe from %s", tp.Name())
 
 	go func() {
 		defer tp.Close()
@@ -304,9 +251,9 @@ func startTracePipeReader(t *testing.T) context.CancelFunc {
 		scanner := bufio.NewScanner(tp)
 		for scanner.Scan() {
 			line := scanner.Text()
-			if line != "" {
-				fmt.Fprintf(os.Stderr, "TRACE: %s\n", line)
-				t.Logf("TRACE: %s", line)
+			if strings.Contains(line, "cuda") || strings.Contains(line, "parcagpu") {
+				fmt.Fprintf(os.Stderr, "BPF: %s\n", line)
+				t.Logf("BPF: %s", line)
 			}
 		}
 	}()
@@ -332,6 +279,9 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 		util.SetTestOnlyMultiUprobeSupport(&noMulti)
 		defer util.SetTestOnlyMultiUprobeSupport(nil)
 	}
+
+	stopTrace := startTracePipeReader(t)
+	defer stopTrace()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -438,13 +388,6 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 	// interpreter reporting "attached" and the uprobes actually being active.
 	time.Sleep(2 * time.Second)
 
-	// Start trace_pipe reader to capture BPF program output.
-	stopTrace := startTracePipeReader(t)
-	defer stopTrace()
-
-	// Dump diagnostic info before simulation.
-	dumpDebugInfo(t, *soPath)
-
 	// Simulate kernel launches and wait for timing events.  Retry the
 	// simulation several times — on slow CI the uprobes may not be fully
 	// active in the kernel immediately after the interpreter is detected.
@@ -494,15 +437,6 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 		}
 		t.Logf("no events after attempt %d, retrying...", attempt)
 		time.Sleep(time.Duration(attempt) * time.Second)
-	}
-
-	if len(events) == 0 {
-		// Dump diagnostics again after failure to see uprobe hit counts.
-		t.Log("=== post-simulation diagnostics ===")
-		dumpDebugInfo(t, *soPath)
-
-		// Give trace_pipe a moment to flush.
-		time.Sleep(500 * time.Millisecond)
 	}
 
 	require.NotEmpty(t, events, "no timing events received from cuda_timing_events perf buffer after %d attempts", maxAttempts)

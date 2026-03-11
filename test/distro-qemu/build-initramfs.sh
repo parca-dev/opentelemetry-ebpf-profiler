@@ -56,7 +56,7 @@ mkdir -p "$ROOTFS_DIR"/{bin,proc,sys,dev,tmp}
 # Install busybox for shell and basic utilities
 BUSYBOX=$(command -v busybox 2>/dev/null || true)
 if [ -z "$BUSYBOX" ]; then
-    echo "ERROR: busybox not found. Install busybox-static."
+    echo "ERROR: busybox not found. Install busybox."
     exit 1
 fi
 cp "$BUSYBOX" "$ROOTFS_DIR/bin/busybox"
@@ -88,6 +88,7 @@ copy_lib_deps() {
     done
 }
 
+copy_lib_deps "$ROOTFS_DIR/bin/busybox"
 for binary in "${BUILD_DIR}"/*.test; do
     copy_lib_deps "$binary"
 done
