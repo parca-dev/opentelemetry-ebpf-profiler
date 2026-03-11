@@ -3,14 +3,11 @@
 package cudaverify
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"flag"
-	"fmt"
 	"math"
 	"os"
-	"strings"
 	"testing"
 	"time"
 	"unsafe"
@@ -219,48 +216,6 @@ func TestCUDAVerifierMultiProbe(t *testing.T) {
 	t.Log("MultiProbe: all CUDA eBPF programs passed the BPF verifier")
 }
 
-// startTracePipeReader reads trace_pipe in the background and logs only
-// cuda-related BPF debug_print output. Returns a cancel function to stop.
-func startTracePipeReader(t *testing.T) context.CancelFunc {
-	t.Helper()
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	var tp *os.File
-	for _, path := range []string{
-		"/sys/kernel/debug/tracing/trace_pipe",
-		"/sys/kernel/tracing/trace_pipe",
-	} {
-		f, err := os.Open(path)
-		if err == nil {
-			tp = f
-			break
-		}
-	}
-	if tp == nil {
-		cancel()
-		return func() {}
-	}
-
-	go func() {
-		defer tp.Close()
-		go func() {
-			<-ctx.Done()
-			tp.Close()
-		}()
-		scanner := bufio.NewScanner(tp)
-		for scanner.Scan() {
-			line := scanner.Text()
-			if strings.Contains(line, "cuda") || strings.Contains(line, "parcagpu") {
-				fmt.Fprintf(os.Stderr, "BPF: %s\n", line)
-				t.Logf("BPF: %s", line)
-			}
-		}
-	}()
-
-	return cancel
-}
-
 // runEndToEnd exercises the full process-manager driven GPU probe attachment flow:
 //
 //  1. Start the full tracer pipeline (PID event processor, map monitors, profiling).
@@ -279,9 +234,6 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 		util.SetTestOnlyMultiUprobeSupport(&noMulti)
 		defer util.SetTestOnlyMultiUprobeSupport(nil)
 	}
-
-	stopTrace := startTracePipeReader(t)
-	defer stopTrace()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
