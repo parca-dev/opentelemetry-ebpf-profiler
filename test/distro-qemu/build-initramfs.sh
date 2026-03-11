@@ -61,7 +61,7 @@ if [ -z "$BUSYBOX" ]; then
 fi
 cp "$BUSYBOX" "$ROOTFS_DIR/bin/busybox"
 chmod +x "$ROOTFS_DIR/bin/busybox"
-for cmd in sh mount umount dmesg poweroff halt reboot hostname uname find head tail sleep cat grep; do
+for cmd in sh mount umount dmesg poweroff halt reboot hostname uname find head tail sleep cat grep cut echo; do
     ln -sf busybox "$ROOTFS_DIR/bin/$cmd"
 done
 
