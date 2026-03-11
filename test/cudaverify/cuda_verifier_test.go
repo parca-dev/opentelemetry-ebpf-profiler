@@ -19,7 +19,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
-	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/testutils"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
 	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
@@ -27,24 +26,6 @@ import (
 )
 
 var soPath = flag.String("so-path", "/libparcagpucupti.so", "path to libparcagpucupti.so")
-
-type mockIntervals struct{}
-
-func (mockIntervals) MonitorInterval() time.Duration       { return 1 * time.Second }
-func (mockIntervals) TracePollInterval() time.Duration     { return 250 * time.Millisecond }
-func (mockIntervals) PIDCleanupInterval() time.Duration    { return 1 * time.Second }
-func (mockIntervals) ExecutableUnloadDelay() time.Duration { return 1 * time.Second }
-
-type mockReporter struct{}
-
-func (mockReporter) ExecutableKnown(_ libpf.FileID) bool { return true }
-
-// discardTraceReporter is a TraceReporter that silently discards all traces.
-type discardTraceReporter struct{}
-
-func (discardTraceReporter) ReportTraceEvent(_ *libpf.Trace, _ *samples.TraceEventMeta) error {
-	return nil
-}
 
 // parseProbes opens the .so and extracts the required parcagpu USDT probes.
 func parseProbes(t *testing.T) []pfelf.USDTProbe {
@@ -87,16 +68,17 @@ func parseProbes(t *testing.T) []pfelf.USDTProbe {
 	return requiredProbes
 }
 
-// createTracer creates a Tracer with InstrumentCudaLaunch enabled so the CUDA
+// createTracer creates a Tracer with CUDATracer enabled so the CUDA
 // eBPF programs (tail-call destinations) are loaded and the verifier runs.
 func createTracer(t *testing.T) (*tracer.Tracer, interpreter.EbpfHandler, context.CancelFunc) {
 	t.Helper()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	enabledTracers, _ := tracertypes.Parse("")
+	enabledTracers.Enable(tracertypes.CUDATracer)
 
 	tr, err := tracer.NewTracer(ctx, &tracer.Config{
-		Intervals:              &mockIntervals{},
+		Intervals:              &testutils.MockIntervals{},
 		IncludeTracers:         enabledTracers,
 		FilterErrorFrames:      false,
 		SamplesPerSecond:       20,
@@ -106,7 +88,6 @@ func createTracer(t *testing.T) (*tracer.Tracer, interpreter.EbpfHandler, contex
 		ProbabilisticInterval:  100,
 		ProbabilisticThreshold: 100,
 		OffCPUThreshold:        1 * math.MaxUint32,
-		InstrumentCudaLaunch:   true,
 	})
 	require.NoError(t, err, "failed to create tracer")
 
@@ -248,8 +229,7 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 	enabledTracers.Enable(tracertypes.CUDATracer)
 
 	tr, err := tracer.NewTracer(ctx, &tracer.Config{
-		TraceReporter:          discardTraceReporter{},
-		Intervals:              &mockIntervals{},
+		Intervals:              &testutils.MockIntervals{},
 		IncludeTracers:         enabledTracers,
 		FilterErrorFrames:      false,
 		SamplesPerSecond:       20,
@@ -259,7 +239,6 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 		ProbabilisticInterval:  100,
 		ProbabilisticThreshold: 100,
 		OffCPUThreshold:        1 * math.MaxUint32,
-		InstrumentCudaLaunch:   true,
 		VerboseMode:            true,
 	})
 	require.NoError(t, err, "failed to create tracer")
