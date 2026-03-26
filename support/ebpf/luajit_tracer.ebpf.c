@@ -350,17 +350,11 @@ lj_prev_frame(PerCPURecord *record, TValue frame_val)
   return ERR_OK;
 }
 
+// Unwind a frame of native code, either a JITted Lua frame
+// or a CFRAME at the C/Lua boundary.
 static inline __attribute__((__always_inline__)) ErrorCode
-unwind_jit_frame(const LuaJITProcInfo *info, UnwindState *state)
+unwind_native_frame(UnwindState *state, u32 spadjust)
 {
-  // Interpreter frames unwind naturally, we need to poke sp/pc for JIT frames
-  // so we need to call this for the native unwinder to continue over them.
-  // https://github.com/openresty/luajit2/blob/7952882d/src/lj_frame.h#L178
-  u32 spadjust = (u32)state->text_section_id;
-  if (spadjust == 0) {
-    // Guess the default.
-    spadjust = info->cframe_size_jit;
-  }
   state->sp += spadjust;
   u64 frame[2];
   if (bpf_probe_read_user(frame, sizeof(frame), (void *)(state->sp - sizeof(frame)))) {
@@ -375,13 +369,34 @@ unwind_jit_frame(const LuaJITProcInfo *info, UnwindState *state)
   state->pc             = frame[1];
   state->return_address = true;
   DEBUG_PRINT(
-    "lj: unwound JIT frame old pc:(%lx) to new pc:%lx, sp:%lx",
+    "lj: unwound frame old pc:(%lx) to new pc:%lx, sp:%lx",
     (unsigned long)pc,
     (unsigned long)state->pc,
     (unsigned long)state->sp);
 
   return ERR_OK;
 }
+
+static inline __attribute__((__always_inline__)) ErrorCode
+unwind_jit_frame(const LuaJITProcInfo *info, UnwindState *state)
+{
+  // Interpreter frames unwind naturally, we need to poke sp/pc for JIT frames
+  // so we need to call this for the native unwinder to continue over them.
+  // https://github.com/openresty/luajit2/blob/7952882d/src/lj_frame.h#L178
+  u32 spadjust = (u32)state->text_section_id;
+  if (spadjust == 0) {
+    // Guess the default.
+    spadjust = info->cframe_size_jit;
+  }
+
+  return unwind_native_frame(state, spadjust);
+}
+
+#if defined(__x86_64__)
+  #define CFRAME_SPACE 80
+#elif defined(__aarch64__)
+  #define CFRAME_SPACE 208
+#endif
 
 // walk_luajit_stack walks the luajit stack by inspecting the frame values
 // and finding ones that indicate a function call frame. Code inspired by
@@ -445,13 +460,39 @@ walk_luajit_stack(PerCPURecord *record, const LuaJITProcInfo *info, int *next_un
       if (cf != NULL) {
         void *prev = cframe_prev(cframe_raw(cf));
         if (prev != NULL) {
+          /* u64 pc; */
+          /* if ((err = bpf_probe_read_user(&pc, sizeof(pc), cf + 200)) != ERR_OK) { */
+          /*   DEBUG_PRINT("[btv] err reading pc from frame: %d", err); */
+          /*   *next_unwinder = PROG_UNWIND_STOP; */
+          /*   return err; */
+          /* } */
+          /* DEBUG_PRINT("[btv] pc: %llx", pc); */
+          /* record->state.pc = pc; */
+          /* u64 fp; */
+          /* if ((err = bpf_probe_read_user(&fp, sizeof(fp), cf + 192)) != ERR_OK) { */
+          /*   DEBUG_PRINT("[btv] err reading fp from frame: %d", err); */
+          /*   *next_unwinder = PROG_UNWIND_STOP; */
+          /*   return err; */
+          /* } */
+          /* DEBUG_PRINT("[btv] fp: %llx", fp); */
+          /* record->state.fp = fp; */
+          /* record->state.sp = (u64)cf + 0xd0; */
+          record->state.sp = (u64)cf;
+          unwind_native_frame(&record->state, CFRAME_SPACE);
+          if ((err = resolve_unwind_mapping(record, next_unwinder)) != ERR_OK) {
+            DEBUG_PRINT("[btv] fuck: %d", err);
+            *next_unwinder = PROG_UNWIND_STOP;
+            return err;
+          }
+          DEBUG_PRINT("[btv] next unwinder: %d", *next_unwinder);
           DEBUG_PRINT(
             "lj: walk_lua_stack: cframe encountered, leaving unwinder, %lx prev: %lx",
             (unsigned long)cf,
             (unsigned long)prev);
           record->luajitUnwindState.cframe = prev;
           *next_unwinder                   = PROG_UNWIND_NATIVE;
-          return ERR_OK;
+
+          exitToNative = true;
         }
         // If there's no prev we're at the root cframe and finish normally.
       }
@@ -537,6 +578,7 @@ find_context(struct pt_regs *ctx, PerCPURecord *record, const LuaJITProcInfo *in
   }
 
   LJScratchSpace *scr = &record->luajitUnwindScratch;
+  DEBUG_PRINT("[btv] L at %llx", (u64)L_ptr);
   if (bpf_probe_read_user(&scr->L, sizeof(LJState), (char *)L_ptr + L_PART_OFFSET)) {
     DEBUG_PRINT("lj: bad L: failed to read L from: %lx", (unsigned long)L_ptr);
     increment_metric(metricID_UnwindLuaJITErrNoContext);
