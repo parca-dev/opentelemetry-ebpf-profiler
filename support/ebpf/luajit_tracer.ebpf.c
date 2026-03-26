@@ -498,7 +498,7 @@ walk_luajit_stack(PerCPURecord *record, const LuaJITProcInfo *info, int *next_un
           /* record->state.fp = fp; */
           /* record->state.sp = (u64)cf + 0xd0; */
           record->state.sp = (u64)cf;
-          unwind_cframe_frame(info, &record->state, record->luajitUnwindState.is_jit);
+          unwind_cframe_frame(info, &record->state, true);
           if ((err = resolve_unwind_mapping(record, next_unwinder)) != ERR_OK) {
             DEBUG_PRINT("[btv] fuck: %d", err);
             *next_unwinder = PROG_UNWIND_STOP;
