@@ -415,6 +415,7 @@ unwind_cframe_frame(const LuaJITProcInfo *info, UnwindState *state, bool is_jit)
   /* } */
 
   u32 spadjust = is_jit ? info->cframe_size_jit : CFRAME_SPACE;
+  DEBUG_PRINT("[btv] %x %x", (u32)state->text_section_id, spadjust);
 
   return unwind_native_frame(state, spadjust);
 }
