@@ -404,15 +404,17 @@ unwind_cframe_frame(const LuaJITProcInfo *info, UnwindState *state, bool is_jit)
   // Interpreter frames unwind naturally, we need to poke sp/pc for JIT frames
   // so we need to call this for the native unwinder to continue over them.
   // https://github.com/openresty/luajit2/blob/7952882d/src/lj_frame.h#L178
-  u32 spadjust = (u32)state->text_section_id;
-  if (spadjust == 0) {
-    // Guess the default.
-    if (is_jit) {
-      spadjust = info->cframe_size_jit;
-    } else {
-      spadjust = CFRAME_SPACE;
-    }
-  }
+  /* u32 spadjust = (u32)state->text_section_id; */
+  /* if (spadjust == 0) { */
+  /*   // Guess the default. */
+  /*   if (is_jit) { */
+  /*     spadjust = info->cframe_size_jit; */
+  /*   } else { */
+  /*     spadjust = CFRAME_SPACE; */
+  /*   } */
+  /* } */
+
+  u32 spadjust = is_jit ? info->cframe_size_jit : CFRAME_SPACE;
 
   return unwind_native_frame(state, spadjust);
 }
@@ -498,7 +500,7 @@ walk_luajit_stack(PerCPURecord *record, const LuaJITProcInfo *info, int *next_un
           /* record->state.fp = fp; */
           /* record->state.sp = (u64)cf + 0xd0; */
           record->state.sp = (u64)cf;
-          unwind_cframe_frame(info, &record->state, false);
+          unwind_cframe_frame(info, &record->state, record->luajitUnwindState.is_jit);
           if ((err = resolve_unwind_mapping(record, next_unwinder)) != ERR_OK) {
             DEBUG_PRINT("[btv] fuck: %d", err);
             *next_unwinder = PROG_UNWIND_STOP;
