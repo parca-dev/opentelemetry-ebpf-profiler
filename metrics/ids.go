@@ -647,69 +647,72 @@ const (
 	// Number of failed attempts to read a CME by exceeding max EP checks
 	IDUnwindRubyErrCmeMaxEp = 285
 
+	// Number of failures to read TLS variables via the DTV
+	IDUnwindErrBadDTVRead = 286
+
 	// Number of failures to get TSD base for native custom labels
-	IDUnwindNativeCustomLabelsErrReadTsdBase = 286
+	IDUnwindNativeCustomLabelsErrReadTsdBase = 287
 
 	// Number of failures to read native custom labels thread-local object
-	IDUnwindNativeCustomLabelsErrReadData = 287
+	IDUnwindNativeCustomLabelsErrReadData = 288
 
 	// Number of failures to read native custom labels key buffer
-	IDUnwindNativeCustomLabelsErrReadKey = 288
+	IDUnwindNativeCustomLabelsErrReadKey = 289
 
 	// Number of failures to read native custom labels value buffer
-	IDUnwindNativeCustomLabelsErrReadValue = 289
+	IDUnwindNativeCustomLabelsErrReadValue = 290
 
 	// Number of successful reads of native custom labels
-	IDUnwindNativeCustomLabelsReadSuccesses = 290
+	IDUnwindNativeCustomLabelsReadSuccesses = 291
 
 	// Total number of failures to add native custom labels
-	IDUnwindNativeCustomLabelsAddErrors = 291
+	IDUnwindNativeCustomLabelsAddErrors = 292
 
 	// Number of successes adding native custom labels
-	IDUnwindNativeCustomLabelsAddSuccesses = 292
+	IDUnwindNativeCustomLabelsAddSuccesses = 293
 
 	// Number of attempted LuaJIT unwinds
-	IDUnwindLuaJITAttempts = 293
+	IDUnwindLuaJITAttempts = 294
 
 	// Number of times we didn't find an entry for this process in the LuaJIT process info array
-	IDUnwindLuaJITErrNoProcInfo = 294
+	IDUnwindLuaJITErrNoProcInfo = 295
 
 	// Number of attempts to read Node.js custom labels
-	IDUnwindNodeCustomLabelsAttempts = 295
+	IDUnwindNodeCustomLabelsAttempts = 296
 
 	// Number of successful reads of Node.js custom labels
-	IDUnwindNodeCustomLabelsSuccesses = 296
+	IDUnwindNodeCustomLabelsSuccesses = 297
 
 	// Number of failed attempts to read Node.js custom labels
-	IDUnwindNodeCustomLabelsFailures = 297
+	IDUnwindNodeCustomLabelsFailures = 298
 
 	// Number of times dlopen uprobe was fired
-	IDDlopenUprobeHits = 298
+	IDDlopenUprobeHits = 299
 
 	// Number of GPU timing events waiting for matching traces
-	IDCudaTimesAwaitingTraces = 299
+	IDCudaTimesAwaitingTraces = 300
 
 	// Number of GPU traces waiting for matching timing events
-	IDCudaTracesAwaitingTimes = 300
+	IDCudaTracesAwaitingTimes = 301
 
 	// Number of GPU timing entries cleared due to threshold
-	IDCudaTimesCleared = 301
+	IDCudaTimesCleared = 302
 
 	// Number of GPU trace entries cleared due to threshold
-	IDCudaTracesCleared = 302
+	IDCudaTracesCleared = 303
 
 	// Number of failures to read LuaJIT context pointer
-	IDUnwindLuaJITErrNoContext = 303
+	IDUnwindLuaJITErrNoContext = 304
 
 	// Number of failures in context pointer validity check
-	IDUnwindLuaJITErrLMismatch = 304
+	IDUnwindLuaJITErrLMismatch = 305
 
 	// Number of Go custom labels dropped because the label name was empty or not valid UTF-8
-	IDGoLabelsDroppedInvalidName = 305
+	IDGoLabelsDroppedInvalidName = 306
 
 	// Number of Go custom labels dropped because the label value was not valid UTF-8
-	IDGoLabelsDroppedInvalidValue = 306
+	IDGoLabelsDroppedInvalidValue = 307
 
 	// max number of ID values, keep this as *last entry*
-	IDMax = 307
+	IDMax = 308
 )
