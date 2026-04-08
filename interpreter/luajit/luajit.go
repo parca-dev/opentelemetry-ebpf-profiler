@@ -224,7 +224,7 @@ func (l *luajitInstance) addTrace(ebpf interpreter.EbpfHandler, pid libpf.PID, t
 		logf("lj: failed to calculate lpm: %v", err)
 		return nil, err
 	}
-	logf("lj: add trace mapping for pid(%v) %x:%x", pid, start, end)
+	logf("lj: add trace mapping for pid(%v) %x:%x; startins is %x", pid, start, end, t.startins)
 	for _, prefix := range prefixes {
 		fileID := support.LJFileId<<32 | spadjust
 		if err := ebpf.UpdatePidInterpreterMapping(pid, prefix, support.ProgUnwindLuaJIT,
@@ -455,9 +455,10 @@ func (l *luajitInstance) Symbolize(frame libpf.EbpfFrame, frames *libpf.Frames, 
 		case 7:
 			funcName = "ff-pcall-hook"
 		}
+		logf("lj: symbolized as %v", funcName)
 		frames.Append(&libpf.Frame{
 			Type:         libpf.LuaJITFrame,
-			FunctionName: libpf.Intern(funcName),
+			FunctionName: libpf.Intern("LuaJIT FFI: " + funcName),
 		})
 		return nil
 	case support.LJGReport:

@@ -38,10 +38,10 @@ type jitStatePart struct {
 // Definition:
 // https://github.com/openresty/luajit2/blob/7952882d/src/lj_jit.h#L259
 type trace struct {
-	_       uint32 /* startins Original bytecode of starting instruction. */
-	szmcode uint32 /* Size of machine code. */
-	mcode   uint64 /* Start of machine code. */
-	_       uint32 /* mcloop */
+	startins uint32 /* startins Original bytecode of starting instruction. */
+	szmcode  uint32 /* Size of machine code. */
+	mcode    uint64 /* Start of machine code. */
+	_        uint32 /* mcloop */
 	// For arm is LJ_ABI_PAUTH defined?
 	// For docker images at least LJ_ABI_PAUTH is not defined.
 	// ASMFunction mcauth;	/* Start of machine code, with ptr auth applied. */
