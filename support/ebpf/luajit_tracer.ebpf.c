@@ -378,8 +378,6 @@ unwind_native_frame(const LuaJITProcInfo *info, UnwindState *state, bool is_jit)
     spadjust = CFRAME_SPACE;
   }
 
-  DEBUG_PRINT("[btv] unwind_cframe_frame: spadjust is %x", spadjust);
-
   state->sp += spadjust;
   u64 frame[2];
   if (bpf_probe_read_user(frame, sizeof(frame), (void *)(state->sp - sizeof(frame)))) {
@@ -500,16 +498,13 @@ walk_luajit_stack(PerCPURecord *record, const LuaJITProcInfo *info, int *next_un
       if (cf != NULL) {
         void *prev    = cframe_prev(cframe_raw(cf));
         done_with_lua = !prev;
-        DEBUG_PRINT("[btv] prev: %llx", (u64)prev);
 
         unwind_native_frame(
           info, &record->state, ((u32)(record->state.text_section_id >> 32)) == LUAJIT_JIT_FILE_ID);
         if ((err = resolve_unwind_mapping(record, next_unwinder)) != ERR_OK) {
-          DEBUG_PRINT("[btv] foo: %d", err);
           *next_unwinder = PROG_UNWIND_STOP;
           return err;
         }
-        DEBUG_PRINT("[btv] next unwinder: %d", *next_unwinder);
         DEBUG_PRINT(
           "lj: walk_lua_stack: cframe encountered, leaving unwinder, %lx prev: %lx",
           (unsigned long)cf,
@@ -612,7 +607,6 @@ find_context(struct pt_regs *ctx, PerCPURecord *record, const LuaJITProcInfo *in
   }
 
   LJScratchSpace *scr = &record->luajitUnwindScratch;
-  DEBUG_PRINT("[btv] L at %llx", (u64)L_ptr);
   if (bpf_probe_read_user(&scr->L, sizeof(LJState), (char *)L_ptr + L_PART_OFFSET)) {
     DEBUG_PRINT("lj: bad L: failed to read L from: %lx", (unsigned long)L_ptr);
     increment_metric(metricID_UnwindLuaJITErrNoContext);
