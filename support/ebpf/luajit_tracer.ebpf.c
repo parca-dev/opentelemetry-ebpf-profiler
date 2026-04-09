@@ -461,7 +461,7 @@ walk_luajit_stack(PerCPURecord *record, const LuaJITProcInfo *info, int *next_un
       DEBUG_PRINT("lj: unwound past the end of the stack... this shouldn't happen");
 
       // Let's try to continue anyway, to match the old behavior.
-      
+
       // We have processed all frames, send final frame which will just have
       // a callee proto/pc and no caller proto/pc.  This is fine, we'll make one
       // up, e.g. "main".
