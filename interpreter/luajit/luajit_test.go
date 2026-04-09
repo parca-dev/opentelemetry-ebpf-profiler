@@ -71,13 +71,13 @@ func TestIntegration(t *testing.T) {
 		// 	//			"cjson:decode",
 		// }},
 		// TODO: get the unwinding working across ffi callbacks.
-		// {"ffi", []string{
-		// 	"main",
-		// 	"u:run_duration",
-		// 	"f",
-		// 	"q:sort",
-		// 	"ffi:C:qsort",
-		// }},
+		{"ffi", []string{
+			"main",
+			"u:run_duration",
+			"f",
+			"q:sort",
+			"ffi:C:qsort",
+		}},
 	} {
 		t.Run(tc.resource, func(t *testing.T) {
 			for _, tag := range []string{
