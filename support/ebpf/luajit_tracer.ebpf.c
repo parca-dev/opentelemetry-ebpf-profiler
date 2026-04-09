@@ -17,8 +17,6 @@
 #include "tracemgmt.h"
 #include "types.h"
 
-/* #include <stddef.h> */
-
 struct luajit_procs_t {
   __uint(type, BPF_MAP_TYPE_HASH);
   __type(key, pid_t);
@@ -237,12 +235,6 @@ lj_debug_framepc(PerCPURecord *record, void *fn, u32 *startpc, TValue *prevframe
       }
     }
   }
-  /* u32 realins; */
-  /* if (bpf_probe_read_user(&realins, sizeof(realins), (void *)ins)) { */
-  /*   DEBUG_PRINT("[btv] couldn't read ins"); */
-  /* } else { */
-  /*   DEBUG_PRINT("[btv] bc: %d", realins & 0xff); */
-  /* } */
   // startpc can be for a different function if we land on instructions where things aren't synced.
   // For instance the PC is up to date on the stack but jit_base wasn't updated yet.
   if (ins < startpc) {
@@ -305,9 +297,6 @@ lj_record_frame(PerCPURecord *record, TValue *frame, TValue frame_value, TValue 
     if (!data)
       return ERR_STACK_LENGTH_EXCEEDED;
     data[0] = frame_value;
-    // XXX[btv] -- surely we don't need to keep trying to unwind lua stuff??
-    // Question -- why does this happen for cpcall but not pcall? Where is ffid set?
-    /* return ERR_OK; */
   }
 
   u32 *start_ip = (u32 *)f->pc;
@@ -340,9 +329,12 @@ exit:
   return err;
 }
 
+// See:
+// https://github.com/openresty/luajit2/blob/7952882d/src/lj_frame.h#L33
 static inline __attribute__((__always_inline__)) ErrorCode
-lj_get_prev_frame(TValue *frame, TValue frame_val, TValue **out)
+lj_prev_frame(PerCPURecord *record, TValue frame_val)
 {
+  TValue *frame = record->luajitUnwindState.frame;
   if (frame_islua(frame_val)) {
     frame = frame_prevl(frame, frame_val);
   } else {
@@ -354,24 +346,40 @@ lj_get_prev_frame(TValue *frame, TValue frame_val, TValue **out)
   if (frame_isvarg(frame_val)) {
     frame = frame_prevd(frame, frame_val);
   }
-  *out = frame;
+  record->luajitUnwindState.frame = frame;
   return ERR_OK;
 }
 
-// See:
-// https://github.com/openresty/luajit2/blob/7952882d/src/lj_frame.h#L33
-static inline __attribute__((__always_inline__)) ErrorCode
-lj_prev_frame(PerCPURecord *record, TValue frame_val)
-{
-  TValue *frame = record->luajitUnwindState.frame;
-  return lj_get_prev_frame(frame, frame_val, &record->luajitUnwindState.frame);
-}
+#if defined(__x86_64__)
+  #define CFRAME_SPACE 80
+#elif defined(__aarch64__)
+  #define CFRAME_SPACE 208
+#endif
 
-// Unwind a frame of native code, either a JITted Lua frame
-// or a CFRAME at the C/Lua boundary.
+// Unwind a frame of native code; for example,
+// a CFRAME at the C/Lua boundary.
+//
+// `is_jit`should be true if there is JITted code anywhere in the Lua code corresponding to this
+// cframe.
 static inline __attribute__((__always_inline__)) ErrorCode
-unwind_native_frame(UnwindState *state, u32 spadjust)
+unwind_native_frame(const LuaJITProcInfo *info, UnwindState *state, bool is_jit)
 {
+  /* Interpreter frames unwind naturally, we need to poke sp/pc for JIT frames */
+  /* so we need to call this for the native unwinder to continue over them. */
+  /* https://github.com/openresty/luajit2/blob/7952882d/src/lj_frame.h#L178 */
+  u32 spadjust;
+  if (is_jit) {
+    spadjust = (u32)state->text_section_id;
+    if (spadjust == 0) {
+      // Guess the default.
+      spadjust = info->cframe_size_jit;
+    }
+  } else {
+    spadjust = CFRAME_SPACE;
+  }
+
+  DEBUG_PRINT("[btv] unwind_cframe_frame: spadjust is %x", spadjust);
+
   state->sp += spadjust;
   u64 frame[2];
   if (bpf_probe_read_user(frame, sizeof(frame), (void *)(state->sp - sizeof(frame)))) {
@@ -394,52 +402,6 @@ unwind_native_frame(UnwindState *state, u32 spadjust)
   return ERR_OK;
 }
 
-#if defined(__x86_64__)
-  #define CFRAME_SPACE 80
-#elif defined(__aarch64__)
-  #define CFRAME_SPACE 208
-#endif
-
-static inline __attribute__((__always_inline__)) ErrorCode
-unwind_cframe_frame(const LuaJITProcInfo *info, UnwindState *state, bool is_jit)
-{
-  /* Interpreter frames unwind naturally, we need to poke sp/pc for JIT frames */
-  /* so we need to call this for the native unwinder to continue over them. */
-  /* https://github.com/openresty/luajit2/blob/7952882d/src/lj_frame.h#L178 */
-  u32 spadjust;
-  if (is_jit) {
-    spadjust = (u32)state->text_section_id;
-    if (spadjust == 0) {
-      // Guess the default.
-      spadjust = info->cframe_size_jit;
-    }
-  } else {
-    spadjust = CFRAME_SPACE;
-  }
-
-  DEBUG_PRINT("[btv] unwind_cframe_frame: spadjust is %x", spadjust);
-
-  return unwind_native_frame(state, spadjust);
-}
-
-enum { BC_FUNCF = 89, BC_IFUNCF, BC_JFUNCF, BC_FUNCV, BC_IFUNCV, BC_JFUNCV, BC_FUNCC, BC_FUNCCW };
-
-/* static inline __attribute__((__always_inline__)) bool is_jit(u32 ins) */
-/* { */
-/*   u8 opcode = ins & 0xFF; */
-/*   switch (opcode) { */
-/*   case BC_FUNCF: */
-/*   case BC_IFUNCF: */
-/*   case BC_FUNCV: */
-/*   case BC_IFUNCV: */
-/*   case BC_FUNCC: */
-/*   case BC_FUNCCW: return false; */
-/*   default: DEBUG_PRINT("lj: unknown function header instruction: %d\n", ins); */
-/*   case BC_JFUNCF: */
-/*   case BC_JFUNCV: return true; */
-/*   } */
-/* } */
-
 // walk_luajit_stack walks the luajit stack by inspecting the frame values
 // and finding ones that indicate a function call frame. Code inspired by
 // lj_debug_frame.
@@ -451,40 +413,39 @@ walk_luajit_stack(PerCPURecord *record, const LuaJITProcInfo *info, int *next_un
   ErrorCode err;
   LJState *L        = &record->luajitUnwindScratch.L;
   TValue *prevframe = record->luajitUnwindState.prevframe;
-  TValue *bot       = L->stack + 1;
 
   for (int i = 0; i < FRAMES_PER_WALK_LUAJIT_STACK; i++) {
+    // A LuaJIT stack segment looks like this, where each cell is a TValue:
+    // [ FUNC |  PC  | ARG1 | ARG2 | ARG3 | ..... ]
+    //        ^      ^
+    //        |      |
+    //        |     BASE
+    //        |
+    //      frame
+    //
+    // In this diagram, `frame` points to our frame pointer (set below),
+    // and BASE points to the bottom of the stack frame that is exposed to user code
+    // (which can't access FUNC and PC).
+    // Every time Lua calls into C, it sets L->base appropriately and then never
+    // lets the C function read below it, so
+    // it effectively has its own isolated stack. But in reality,
+    // from the interpreter's perspective, these segments are concatenated into one array
+    // pointed to by the L->stack object.
+    //
+    // For reasons of not-very-interesting internal implementation details,
+    // BASE must always be two elements above the bottom of the stack,
+    // even when the stack is logically empty. So whenever a new Lua state is created
+    // (e.g. via luaL_newstate() or lua_newthread()), the interpreter
+    // pushes two dummy values.
+    //
+    // Thus, when `diff` (set below) is <= 2, we've actually unwound past the logical
+    // root of the stack, which should never happen...
     TValue *frame = (TValue *)(record->luajitUnwindState.frame);
 
-    int pd = frame - bot;
-    DEBUG_PRINT("[btv] lua diff: %d", pd);
+    int diff = frame - L->stack;
+    DEBUG_PRINT("lj: distance to bot: %d", diff);
 
-    // XXX - dedup this with where we're already reading it?
-    void *fn = frame_func(frame);
-    u64 pc   = (u64)(deref(frame_pc(frame)));
-    DEBUG_PRINT("[btv] frame: %llx, frame_func: %llx, (lua) pc: %llx", (u64)frame, (u64)fn, pc);
-    DEBUG_PRINT("[btv] native sp: %llx, native pc: %llx", record->state.sp, record->state.pc);
-    LJFuncPart f;
-    // +1 to skip the 8 byte GCHeader
-    if (bpf_probe_read_user(&f, sizeof(LJFuncPart), (void **)fn + 1)) {
-      return ERR_LUAJIT_FRAME_READ;
-    }
-    u32 ins;
-    TValue frame_val;
-    if (bpf_probe_read_user(&frame_val, sizeof(TValue), frame)) {
-      return ERR_LUAJIT_FRAME_READ;
-    }
-
-    int ftype = frame_typep(frame_val);
-    DEBUG_PRINT("[btv] ftype: %d, f.pc is %llx", ftype, (u64)f.pc);
-    if ((err = bpf_probe_read_user(&ins, sizeof(ins), f.pc))) {
-      // XXX - better error
-      DEBUG_PRINT("[btv] wtf reading ins");
-      return err;
-    }
-    DEBUG_PRINT("[btv] ins is 0x%x", ins);
-
-    if (frame <= bot) {
+    if (diff <= 2) {
       // Need to clear 'frame' if we have more than one LuaJIT call on the stack,
       // ie two different instances of LuaJIT, not sure if this happens in practice.
       // While conceptually this makes sense its kind of an edge case and
@@ -497,6 +458,10 @@ walk_luajit_stack(PerCPURecord *record, const LuaJITProcInfo *info, int *next_un
       // When that's fixed we can uncomment this and be more correct.
       // record->luajitUnwindState.frame = NULL;
 
+      DEBUG_PRINT("lj: unwound past the end of the stack... this shouldn't happen");
+
+      // Let's try to continue anyway, to match the old behavior.
+      
       // We have processed all frames, send final frame which will just have
       // a callee proto/pc and no caller proto/pc.  This is fine, we'll make one
       // up, e.g. "main".
@@ -506,7 +471,7 @@ walk_luajit_stack(PerCPURecord *record, const LuaJITProcInfo *info, int *next_un
         return err;
       }
       if (record->luajitUnwindState.is_jit) {
-        unwind_cframe_frame(info, &record->state, true);
+        unwind_native_frame(info, &record->state, true);
 
         if ((err = resolve_unwind_mapping(record, next_unwinder)) != ERR_OK) {
           DEBUG_PRINT("lj: failed to walk over jit frame");
@@ -517,6 +482,11 @@ walk_luajit_stack(PerCPURecord *record, const LuaJITProcInfo *info, int *next_un
       DEBUG_PRINT("lj: end lua frame");
       *next_unwinder = PROG_UNWIND_NATIVE;
       return ERR_OK;
+    }
+
+    TValue frame_val;
+    if (bpf_probe_read_user(&frame_val, sizeof(TValue), frame)) {
+      return ERR_LUAJIT_FRAME_READ;
     }
 
     // If we have a frame with its own C stack frame we need to exit to native unwinder.
@@ -531,27 +501,8 @@ walk_luajit_stack(PerCPURecord *record, const LuaJITProcInfo *info, int *next_un
         void *prev    = cframe_prev(cframe_raw(cf));
         done_with_lua = !prev;
         DEBUG_PRINT("[btv] prev: %llx", (u64)prev);
-        /* if (prev != NULL) { */
-        /* u64 pc; */
-        /* if ((err = bpf_probe_read_user(&pc, sizeof(pc), cf + 200)) != ERR_OK) { */
-        /*   DEBUG_PRINT("[btv] err reading pc from frame: %d", err); */
-        /*   *next_unwinder = PROG_UNWIND_STOP; */
-        /*   return err; */
-        /* } */
-        /* DEBUG_PRINT("[btv] pc: %llx", pc); */
-        /* record->state.pc = pc; */
-        /* u64 fp; */
-        /* if ((err = bpf_probe_read_user(&fp, sizeof(fp), cf + 192)) != ERR_OK) { */
-        /*   DEBUG_PRINT("[btv] err reading fp from frame: %d", err); */
-        /*   *next_unwinder = PROG_UNWIND_STOP; */
-        /*   return err; */
-        /* } */
-        /* DEBUG_PRINT("[btv] fp: %llx", fp); */
-        /* record->state.fp = fp; */
-        /* record->state.sp = (u64)cf + 0xd0; */
-        /* record->state.sp = (u64)cf; */
 
-        unwind_cframe_frame(
+        unwind_native_frame(
           info, &record->state, ((u32)(record->state.text_section_id >> 32)) == LUAJIT_JIT_FILE_ID);
         if ((err = resolve_unwind_mapping(record, next_unwinder)) != ERR_OK) {
           DEBUG_PRINT("[btv] foo: %d", err);
@@ -568,8 +519,6 @@ walk_luajit_stack(PerCPURecord *record, const LuaJITProcInfo *info, int *next_un
 
         exitToNative = true;
       }
-      // If there's no prev we're at the root cframe and finish normally.
-      /* } */
     }
     if ((err = lj_record_frame(record, frame, frame_val, prevframe))) {
       DEBUG_PRINT("lj: walk_lua_stack: lj_record_frame=%d", err);
