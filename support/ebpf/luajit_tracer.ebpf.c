@@ -519,15 +519,17 @@ walk_luajit_stack(PerCPURecord *record, const LuaJITProcInfo *info, int *next_un
       return ERR_OK;
     }
 
-    // If we have a frame with its own C stack frame we need to exit to native unwinder if
-    // there's a parent cframe.
+    // If we have a frame with its own C stack frame we need to exit to native unwinder.
+    // In addition, if this is the rootmost C stack, we are done with Lua entirely.
+    bool done_with_lua = false;
     if (frame_typep(frame_val) == FRAME_CP) {
       void *cf = record->luajitUnwindState.cframe;
       if (cf == NULL) {
         cf = record->luajitUnwindState.cframe = record->luajitUnwindScratch.L.cframe;
       }
       if (cf != NULL) {
-        void *prev = cframe_prev(cframe_raw(cf));
+        void *prev    = cframe_prev(cframe_raw(cf));
+        done_with_lua = !prev;
         DEBUG_PRINT("[btv] prev: %llx", (u64)prev);
         /* if (prev != NULL) { */
         /* u64 pc; */
@@ -548,10 +550,11 @@ walk_luajit_stack(PerCPURecord *record, const LuaJITProcInfo *info, int *next_un
         /* record->state.fp = fp; */
         /* record->state.sp = (u64)cf + 0xd0; */
         /* record->state.sp = (u64)cf; */
-        
-        unwind_cframe_frame(info, &record->state, ((u32)(record->state.text_section_id >> 32)) == LUAJIT_JIT_FILE_ID);
+
+        unwind_cframe_frame(
+          info, &record->state, ((u32)(record->state.text_section_id >> 32)) == LUAJIT_JIT_FILE_ID);
         if ((err = resolve_unwind_mapping(record, next_unwinder)) != ERR_OK) {
-          DEBUG_PRINT("[btv] fuck: %d", err);
+          DEBUG_PRINT("[btv] foo: %d", err);
           *next_unwinder = PROG_UNWIND_STOP;
           return err;
         }
@@ -586,6 +589,17 @@ walk_luajit_stack(PerCPURecord *record, const LuaJITProcInfo *info, int *next_un
     if (exitToNative) {
       // Let the native walker kick in now when we called into lua from C.
       *next_unwinder = PROG_UNWIND_NATIVE;
+      if (done_with_lua) {
+        // We have processed all frames, send final frame which will just have
+        // a callee proto/pc and no caller proto/pc.  This is fine, we'll make one
+        // up, e.g. "main".
+        LJScratchSpace *scr = &record->luajitUnwindScratch;
+        if ((err = lj_push_frame(
+               &record->state, &record->trace, (u64)scr->prev_proto, (u64)0, scr->prev_pc, 0))) {
+          return err;
+        }
+      }
+
       return ERR_OK;
     }
   }
