@@ -366,7 +366,7 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 	// Since we load maps individually with cebpf.NewMap, we must manually propagate
 	// variable values back into the map spec contents before creating the maps.
 	if err = syncVariablesToMapSpecs(coll); err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to sync variables to map specs: %v", err)
+		return nil, nil, nil, nil, fmt.Errorf("failed to sync variables to map specs: %v", err)
 	}
 
 	// Load all maps into the kernel that are used later on in eBPF programs. So we can rewrite
