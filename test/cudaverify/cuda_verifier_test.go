@@ -23,15 +23,32 @@ import (
 
 var soPath = flag.String("so-path", "/libparcagpucupti.so", "path to libparcagpucupti.so")
 
+func TestMain(m *testing.M) {
+	flag.Parse()
+
+	if os.Getuid() == 0 {
+		rc := cInitParcaGPU(*soPath)
+		if rc != 0 {
+			os.Exit(1)
+		}
+	}
+
+	code := m.Run()
+
+	if os.Getuid() == 0 {
+		cCleanupParcaGPU()
+	}
+
+	os.Exit(code)
+}
+
 // runEndToEnd exercises the full process-manager driven GPU probe attachment flow:
 //
 //  1. Start the full tracer pipeline (PID event processor, map monitors, profiling).
-//  2. ForceProcessPID to trigger initial process sync — this causes the tracer to
-//     read our /proc/self/maps, discover libc, and attach the dlopen uprobe via rtld.
-//  3. Wait until the dlopen uprobe is confirmed attached (metric increments).
-//  4. dlopen libparcagpu — the dlopen uprobe fires, triggering a re-sync that
-//     discovers libparcagpu and automatically attaches the GPU USDT probes.
-//  5. Verify GPU interpreter instance is attached, then simulate kernel launches
+//  2. ForceProcessPID to trigger process sync — the tracer reads /proc/self/maps,
+//     discovers libc and libparcagpucupti.so (loaded in TestMain), and attaches
+//     the GPU USDT probes.
+//  3. Verify GPU interpreter instance is attached, then simulate kernel launches
 //     and check that timing events arrive on the perf buffer.
 func runEndToEnd(t *testing.T, multiProbe bool) {
 	t.Helper()
@@ -70,8 +87,7 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 		return false
 	}, 30*time.Second, 200*time.Millisecond, "process manager never synced our PID")
 
-	// Set up perf reader on the cuda_timing_events map BEFORE the dlopen so we
-	// don't miss any events.
+	// Set up perf reader on the cuda_timing_events map before simulation.
 	timingMap := trc.GetEbpfMaps()["cuda_timing_events"]
 	require.NotNil(t, timingMap, "cuda_timing_events map not found")
 
@@ -79,14 +95,8 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 	require.NoError(t, err, "perf.NewReader failed")
 	defer reader.Close()
 
-	// dlopen libparcagpu — this fires the dlopen uprobe, which causes a PID
-	// re-sync. The process manager will discover the newly mapped .so, the GPU
-	// loader will find its USDT probes, and Attach will hook them up.
-	rc := cInitParcaGPU(*soPath)
-	require.Equal(t, 0, rc, "init_parcagpu (dlopen) failed")
-	defer cCleanupParcaGPU()
-
-	// Speed up the re-sync after dlopen.
+	// libparcagpucupti.so was loaded in TestMain — ForceProcessPID will
+	// discover it from /proc/self/maps and attach the GPU USDT probes.
 	trc.ForceProcessPID(pid)
 
 	// Wait until the GPU interpreter instance appears, confirming the USDT

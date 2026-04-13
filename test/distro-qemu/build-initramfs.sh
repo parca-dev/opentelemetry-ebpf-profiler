@@ -100,10 +100,10 @@ copy_lib_deps() {
 cp "${BUILD_DIR}"/*.test "$ROOTFS_DIR/"
 cp "${PARCAGPU_DIR}/libparcagpucupti.so" "$ROOTFS_DIR/"
 
-# Copy stub libcupti .so and libstdc++ into the RUNPATH so dlopen of
-# libparcagpucupti.so can resolve its DT_NEEDED entries.
-for stub in "${PARCAGPU_DIR}"/libcupti.so*; do
-    [ -f "$stub" ] && cp "$stub" "$ROOTFS_DIR/usr/local/cuda/lib64/"
+# Copy mock CUPTI/CUDA libraries into the RUNPATH so dlopen of
+# libparcagpucupti.so can resolve them at runtime.
+for lib in "${PARCAGPU_DIR}"/libcupti.so* "${PARCAGPU_DIR}"/libcuda.so*; do
+    [ -f "$lib" ] && cp -a "$lib" "$ROOTFS_DIR/usr/local/cuda/lib64/"
 done
 LIBSTDCXX=$(find /lib* /usr/lib* -name 'libstdc++.so.6' 2>/dev/null | head -1)
 if [ -n "$LIBSTDCXX" ]; then
@@ -155,6 +155,8 @@ mount -t debugfs debugfs /sys/kernel/debug 2>/dev/null || true
 export DEBUG_TEST=1
 # Help the dynamic linker find libs in the CUDA RUNPATH.
 export LD_LIBRARY_PATH=/usr/local/cuda/lib64
+# Tell libparcagpucupti.so where to find the stub libcupti.so.
+export TRITON_CUPTI_LIB_PATH=/usr/local/cuda/lib64
 
 # Run the tests
 echo ""

@@ -198,6 +198,18 @@ static void                    *soHandle           = NULL;
 // init_parcagpu loads the .so, calls InitializeInjection, and extracts
 // the callback pointers that were registered via the mock CUPTI APIs.
 int init_parcagpu(const char *so_path) {
+  // Pre-load mock libcupti.so with RTLD_NODELETE so its state persists
+  // across test runs.  InitializeInjection uses a singleton pattern and
+  // won't re-register CUPTI callbacks on subsequent calls, so the mock's
+  // globals from the first run must survive cleanup/reinit cycles.
+  const char *cupti_dir = getenv("TRITON_CUPTI_LIB_PATH");
+  char cupti_path[512];
+  if (cupti_dir)
+    snprintf(cupti_path, sizeof(cupti_path), "%s/libcupti.so", cupti_dir);
+  else
+    snprintf(cupti_path, sizeof(cupti_path), "libcupti.so");
+  dlopen(cupti_path, RTLD_LAZY | RTLD_NODELETE);
+
   soHandle = dlopen(so_path, RTLD_NOW | RTLD_GLOBAL);
   if (!soHandle) {
     fprintf(stderr, "mock_cupti: dlopen failed: %s\n", dlerror());
@@ -217,10 +229,28 @@ int init_parcagpu(const char *so_path) {
   int rc = initFunc();
   fprintf(stderr, "mock_cupti: InitializeInjection returned %d\n", rc);
 
-  // Extract callbacks set by InitializeInjection via our mock CUPTI.
-  parcagpuCallback  = __cupti_runtime_api_callback;
-  bufferReqCallback = __cupti_buffer_requested_callback;
-  bufferCompCallback = __cupti_buffer_completed_callback;
+  // Extract callbacks registered by InitializeInjection via cuptiSubscribe.
+  //
+  // Two cases depending on the libparcagpucupti.so build:
+  //  (a) New builds: no DT_NEEDED for libcupti — the library loads the mock
+  //      libcupti.so via dlopen/dlsym, so callbacks live in the mock's globals.
+  //  (b) Old builds: DT_NEEDED for libcupti.so.N — symbols resolve from the
+  //      test binary's --export-dynamic, so callbacks live in our own globals.
+  //
+  // Check the mock library first, then fall back to our own copy.
+  void *cupti_lib = dlopen(cupti_path, RTLD_LAZY);
+  if (cupti_lib) {
+    CUpti_CallbackFunc *p1 = dlsym(cupti_lib, "__cupti_runtime_api_callback");
+    CUpti_BufferRequestFunc *p2 = dlsym(cupti_lib, "__cupti_buffer_requested_callback");
+    CUpti_BufferCompletedFunc *p3 = dlsym(cupti_lib, "__cupti_buffer_completed_callback");
+    if (p1 && *p1) parcagpuCallback  = *p1;
+    if (p2 && *p2) bufferReqCallback = *p2;
+    if (p3 && *p3) bufferCompCallback = *p3;
+    dlclose(cupti_lib);
+  }
+  if (!parcagpuCallback)  parcagpuCallback  = __cupti_runtime_api_callback;
+  if (!bufferReqCallback) bufferReqCallback = __cupti_buffer_requested_callback;
+  if (!bufferCompCallback) bufferCompCallback = __cupti_buffer_completed_callback;
 
   if (!parcagpuCallback) {
     fprintf(stderr, "mock_cupti: parcagpuCuptiCallback is NULL\n");
