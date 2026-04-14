@@ -2,11 +2,13 @@ package parcagpu // import "go.opentelemetry.io/ebpf-profiler/parcagpu"
 
 import (
 	"context"
+	"encoding/binary"
+	"errors"
 	"sync/atomic"
 	"time"
 	"unsafe"
 
-	"github.com/cilium/ebpf/perf"
+	"github.com/cilium/ebpf/ringbuf"
 	log "github.com/sirupsen/logrus"
 
 	"go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
@@ -20,24 +22,29 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/traceutil"
 )
 
-// Start starts a goroutine that reads GPU timing events and returns a TraceInterceptor
-// that diverts CUDA traces (post-symbolization) into the GPU fixer.
-// Completed CUDA traces are reported directly via rep.
+// Start starts a goroutine that reads GPU events from the cupti_events ringbuf
+// and returns a TraceInterceptor that diverts CUDA traces (post-symbolization)
+// into the GPU fixer. Completed CUDA traces are reported directly via rep.
+//
+// Every event in the ringbuf begins with a u32 event_type discriminator at
+// offset 0; this loop dispatches by tag. Today only EVENT_TYPE_KERNEL is wired
+// up to a real handler — the other event types are accepted (so the BPF side
+// can produce them without dropping) and counted, but otherwise ignored. Real
+// handlers for cubin/pc_sample/stall_reason/error follow in a separate change.
 func Start(ctx context.Context, tr *tracer.Tracer,
 	rep reporter.TraceReporter) processmanager.TraceInterceptor {
-	gpuTimingEvents := tr.GetEbpfMaps()["cuda_timing_events"]
+	cuptiEvents := tr.GetEbpfMaps()["cupti_events"]
 
-	// Per-CPU buffer size for timing events. CuptiTimingEvent is ~300 bytes,
-	// so 1MB allows ~3400 events per CPU before overflow.
-	eventReader, err := perf.NewReader(gpuTimingEvents, 1024*1024 /* perCPUBufferSize */)
+	eventReader, err := ringbuf.NewReader(cuptiEvents)
 	if err != nil {
-		log.Fatalf("Failed to setup perf reporting via %s: %v", gpuTimingEvents, err)
+		log.Fatalf("Failed to open cupti_events ringbuf: %v", err)
 	}
 
 	var lostEventsCount, readErrorCount, noDataCount atomic.Uint64
+	var cubinCount, pcSampleCount, stallMapCount, errorCount, unknownCount atomic.Uint64
 
 	// processBatch processes a batch of timing events and reports completed traces.
-	processBatch := func(batch []gpu.CuptiTimingEvent) {
+	processBatch := func(batch []gpu.CuptiKernelEvent) {
 		outputs := gpu.AddTimes(batch)
 		for i := range outputs {
 			outputs[i].Trace.Hash = traceutil.HashTrace(outputs[i].Trace)
@@ -49,8 +56,8 @@ func Start(ctx context.Context, tr *tracer.Tracer,
 
 	const batchSize = 100
 	go func() {
-		var data perf.Record
-		batch := make([]gpu.CuptiTimingEvent, 0, batchSize)
+		var rec ringbuf.Record
+		batch := make([]gpu.CuptiKernelEvent, 0, batchSize)
 
 		logTicker := time.NewTicker(5 * time.Second)
 		defer logTicker.Stop()
@@ -64,9 +71,18 @@ func Start(ctx context.Context, tr *tracer.Tracer,
 				lost := lostEventsCount.Swap(0)
 				readErr := readErrorCount.Swap(0)
 				noData := noDataCount.Swap(0)
-				if lost > 0 || readErr > 0 || noData > 0 {
-					log.Warnf("[cuda] timing event reader: lost=%d readErrors=%d noData=%d",
-						lost, readErr, noData)
+				cubin := cubinCount.Swap(0)
+				pcs := pcSampleCount.Swap(0)
+				stall := stallMapCount.Swap(0)
+				errs := errorCount.Swap(0)
+				unknown := unknownCount.Swap(0)
+				if lost > 0 || readErr > 0 || noData > 0 || unknown > 0 {
+					log.Warnf("[cuda] cupti_events reader: lost=%d readErrors=%d noData=%d unknown=%d",
+						lost, readErr, noData, unknown)
+				}
+				if cubin > 0 || pcs > 0 || stall > 0 || errs > 0 {
+					log.Debugf("[cuda] cupti_events: cubin=%d pcSample=%d stallMap=%d errors=%d",
+						cubin, pcs, stall, errs)
 				}
 			case <-clearTicker.C:
 				// Periodically clean up all GPU trace fixers and report metrics.
@@ -77,24 +93,55 @@ func Start(ctx context.Context, tr *tracer.Tracer,
 				eventReader.Close()
 				return
 			default:
-				if err := eventReader.ReadInto(&data); err != nil {
+				if err := eventReader.ReadInto(&rec); err != nil {
+					if errors.Is(err, ringbuf.ErrClosed) {
+						return
+					}
 					readErrorCount.Add(1)
 					continue
 				}
-				if data.LostSamples != 0 {
-					lostEventsCount.Add(data.LostSamples)
-					continue
-				}
-				if len(data.RawSample) == 0 {
+				// Ringbuf has no per-record LostSamples — the producer drops
+				// directly when reserve fails. We add a BPF-side stat for
+				// drops in a later change.
+				if len(rec.RawSample) < 4 {
 					noDataCount.Add(1)
 					continue
 				}
-				// Copy event into batch since data.RawSample is reused
-				ev := (*gpu.CuptiTimingEvent)(unsafe.Pointer(&data.RawSample[0]))
-				batch = append(batch, *ev)
-				if len(batch) >= batchSize {
-					go processBatch(batch)
-					batch = make([]gpu.CuptiTimingEvent, 0, batchSize)
+
+				// Peek the event_type discriminator at offset 0.
+				eventType := binary.NativeEndian.Uint32(rec.RawSample[:4])
+				switch eventType {
+				case gpu.EventTypeKernel:
+					if len(rec.RawSample) < int(unsafe.Sizeof(gpu.CuptiKernelEvent{})) {
+						noDataCount.Add(1)
+						continue
+					}
+					ev := (*gpu.CuptiKernelEvent)(unsafe.Pointer(&rec.RawSample[0]))
+					batch = append(batch, *ev)
+					if len(batch) >= batchSize {
+						go processBatch(batch)
+						batch = make([]gpu.CuptiKernelEvent, 0, batchSize)
+					}
+				case gpu.EventTypeCubinLoaded:
+					cubinCount.Add(1)
+					// TODO: hand to cubin/symbol pipeline.
+				case gpu.EventTypePCSample:
+					pcSampleCount.Add(1)
+					// TODO: hand to PC-sample aggregator.
+				case gpu.EventTypeStallReasonMap:
+					stallMapCount.Add(1)
+					// TODO: cache stall reason name table per pid.
+				case gpu.EventTypeError:
+					errorCount.Add(1)
+					if len(rec.RawSample) >= int(unsafe.Sizeof(gpu.CuptiErrorEvent{})) {
+						ev := (*gpu.CuptiErrorEvent)(unsafe.Pointer(&rec.RawSample[0]))
+						msg := nullTerm(ev.Message[:])
+						comp := nullTerm(ev.Component[:])
+						log.Warnf("[cuda] BPF error event: pid=%d code=%d component=%q msg=%q",
+							ev.Pid, ev.Code, comp, msg)
+					}
+				default:
+					unknownCount.Add(1)
 				}
 			}
 		}
@@ -109,4 +156,13 @@ func Start(ctx context.Context, tr *tracer.Tracer,
 		gpu.InterceptTrace(trace, meta, finishTrace)
 		return true
 	}
+}
+
+func nullTerm(b []byte) string {
+	for i, c := range b {
+		if c == 0 {
+			return string(b[:i])
+		}
+	}
+	return string(b)
 }

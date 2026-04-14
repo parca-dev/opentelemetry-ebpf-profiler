@@ -9,7 +9,7 @@ import "go.opentelemetry.io/ebpf-profiler/libpf"
 // For use in tests only.
 func RegisterTestFixer(pid libpf.PID) {
 	fixer := &gpuTraceFixer{
-		timesAwaitingTraces: make(map[uint32][]CuptiTimingEvent),
+		timesAwaitingTraces: make(map[uint32][]CuptiKernelEvent),
 		tracesAwaitingTimes: make(map[uint32]*SymbolizedCudaTrace),
 	}
 	gpuFixers.Store(pid, fixer)

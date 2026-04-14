@@ -109,6 +109,10 @@ static unsigned long long (*bpf_get_current_task)(void)       = (void *)BPF_FUNC
 static int (*bpf_perf_event_output)(
   void *ctx, void *map, unsigned long long flags, void *data, int size) = (void *)
   BPF_FUNC_perf_event_output;
+static void *(*bpf_ringbuf_reserve)(void *ringbuf, u64 size, u64 flags) = (void *)
+  BPF_FUNC_ringbuf_reserve;
+static void (*bpf_ringbuf_submit)(void *data, u64 flags)       = (void *)BPF_FUNC_ringbuf_submit;
+static void (*bpf_ringbuf_discard)(void *data, u64 flags)      = (void *)BPF_FUNC_ringbuf_discard;
 static int (*bpf_get_stackid)(void *ctx, void *map, u64 flags) = (void *)BPF_FUNC_get_stackid;
 static unsigned long long (*bpf_get_prandom_u32)(void)         = (void *)BPF_FUNC_get_prandom_u32;
 

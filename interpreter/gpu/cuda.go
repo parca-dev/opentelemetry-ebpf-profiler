@@ -27,18 +27,86 @@ const (
 	USDTProgCudaKernel            = "cuda_kernel_exec"
 	USDTProgCudaActivityBatch     = "cuda_activity_batch"
 	USDTProgCudaActivityBatchTail = "cuda_activity_batch_tail"
+	USDTProgCudaCubinLoaded       = "cuda_cubin_loaded"
+	USDTProgCudaPCSampleBatch     = "cuda_pc_sample_batch"
+	USDTProgCudaPCSampleBatchTail = "cuda_pc_sample_batch_tail"
+	USDTProgCudaStallReasonMap    = "cuda_stall_reason_map"
+	USDTProgCudaError             = "cuda_error"
 	USDTProgCudaProbe             = "cuda_probe"
 
 	// BPF attach cookie values - must match CUDA_PROG_* in cuda.ebpf.c.
 	// Used in the low 32 bits of the BPF attach cookie so cuda_probe can
-	// distinguish probes.  The cuda_progs prog array uses a fixed key (0)
-	// for the single tail-call target (activity_batch).
-	CudaProgCorrelation   = 0
-	CudaProgKernelExec    = 1
-	CudaProgActivityBatch = 2
+	// distinguish probes.  The cuda_progs prog array uses keys 0 (activity_batch)
+	// and 1 (pc_sample_batch) for tail-call dispatch of heavy loops; everything
+	// else is inlined directly in cuda_probe.
+	CudaProgCorrelation    = 0
+	CudaProgKernelExec     = 1
+	CudaProgActivityBatch  = 2
+	CudaProgCubinLoaded    = 3
+	CudaProgPCSampleBatch  = 4
+	CudaProgStallReasonMap = 5
+	CudaProgError          = 6
 )
 
 const cudaProgsMap = "cuda_progs"
+
+// Event type discriminators for the cupti_events ringbuf. Must match the
+// EVENT_TYPE_* constants in support/ebpf/cuda.ebpf.c.
+const (
+	EventTypeKernel         uint32 = 1
+	EventTypeCubinLoaded    uint32 = 2
+	EventTypePCSample       uint32 = 3
+	EventTypeStallReasonMap uint32 = 4
+	EventTypeError          uint32 = 5
+)
+
+// CuptiCubinEvent matches struct cubin_event in cuda.ebpf.c.
+type CuptiCubinEvent struct {
+	EventType uint32
+	Pid       uint32
+	CubinCRC  uint64
+	CubinPtr  uint64
+	CubinSize uint64
+}
+
+// CuptiPCSampleEvent matches struct pc_sample_event in cuda.ebpf.c.
+type CuptiPCSampleEvent struct {
+	EventType         uint32
+	StallReasonCount  uint32
+	CubinCRC          uint64
+	PCOffset          uint64
+	FunctionIndex     uint32
+	CorrelationID     uint32
+	Pid               uint32
+	_pad              uint32
+	FunctionName      [128]byte
+	StallReasons      [64]CuptiStallReason
+}
+
+// CuptiStallReason matches struct cupti_stall_reason in cupti_bpf.h.
+type CuptiStallReason struct {
+	Index   uint32
+	Samples uint32
+}
+
+// CuptiStallReasonMapEvent matches struct stall_reason_map_event in cuda.ebpf.c.
+type CuptiStallReasonMapEvent struct {
+	EventType uint32
+	Count     uint32
+	Pid       uint32
+	_pad      uint32
+	Names     [64][64]byte
+}
+
+// CuptiErrorEvent matches struct error_event in cuda.ebpf.c.
+type CuptiErrorEvent struct {
+	EventType uint32
+	Code      int32
+	Pid       uint32
+	_pad      uint32
+	Message   [256]byte
+	Component [64]byte
+}
 
 var (
 	// gpuFixers maps PID to gpuTraceFixer
@@ -73,7 +141,7 @@ type CudaTraceOutput struct {
 // that launched the kernel."
 type gpuTraceFixer struct {
 	mu                  sync.Mutex
-	timesAwaitingTraces map[uint32][]CuptiTimingEvent   // keyed by correlation ID
+	timesAwaitingTraces map[uint32][]CuptiKernelEvent   // keyed by correlation ID
 	tracesAwaitingTimes map[uint32]*SymbolizedCudaTrace // keyed by correlation ID
 	maxCorrelationId    uint32                          // track highest ID for threshold-based clearing
 }
@@ -100,11 +168,15 @@ type Instance struct {
 	odfi util.OnDiskFileIdentifier
 }
 
-// CuptiTimingEvent is the structure received from eBPF via perf buffer
-type CuptiTimingEvent struct {
+// CuptiKernelEvent is the kernel-timing event received from eBPF via the
+// cupti_events ringbuf. The first field is the EVENT_TYPE_KERNEL discriminator
+// shared by every event submitted on cupti_events. Layout must match
+// struct kernel_event in support/ebpf/cuda.ebpf.c.
+type CuptiKernelEvent struct {
+	EventType               uint32
 	Pid                     uint32
-	Id                      uint32
 	Start, End, GraphNodeId uint64
+	Id                      uint32
 	Dev, Stream, Graph      uint32
 	KernelName              [256]byte
 }
@@ -132,11 +204,17 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 			return nil, nil
 		}
 
-		// Filter to only the probes we need.
+		// Filter to the probes we know how to handle.
 		// Always require cuda_correlation. Prefer activity_batch over kernel_executed.
+		// cubin_loaded, pc_sample_batch, stall_reason_map and error are optional —
+		// attached opportunistically when present.
 		var correlationProbe *pfelf.USDTProbe
 		var kernelProbe *pfelf.USDTProbe
 		var batchProbe *pfelf.USDTProbe
+		var cubinProbe *pfelf.USDTProbe
+		var pcSampleProbe *pfelf.USDTProbe
+		var stallMapProbe *pfelf.USDTProbe
+		var errorProbe *pfelf.USDTProbe
 		for i := range parcagpuProbes {
 			switch parcagpuProbes[i].Name {
 			case "cuda_correlation":
@@ -145,6 +223,14 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 				kernelProbe = &parcagpuProbes[i]
 			case "activity_batch":
 				batchProbe = &parcagpuProbes[i]
+			case "cubin_loaded":
+				cubinProbe = &parcagpuProbes[i]
+			case "pc_sample_batch":
+				pcSampleProbe = &parcagpuProbes[i]
+			case "stall_reason_map":
+				stallMapProbe = &parcagpuProbes[i]
+			case "error":
+				errorProbe = &parcagpuProbes[i]
 			}
 		}
 		if correlationProbe == nil {
@@ -163,6 +249,18 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		} else {
 			log.Warnf("parcagpu USDT probes in %s missing kernel probe (need activity_batch or kernel_executed): %v", info.FileName(), parcagpuProbes)
 			return nil, nil
+		}
+		if cubinProbe != nil {
+			requiredProbes = append(requiredProbes, *cubinProbe)
+		}
+		if pcSampleProbe != nil {
+			requiredProbes = append(requiredProbes, *pcSampleProbe)
+		}
+		if stallMapProbe != nil {
+			requiredProbes = append(requiredProbes, *stallMapProbe)
+		}
+		if errorProbe != nil {
+			requiredProbes = append(requiredProbes, *errorProbe)
 		}
 		parcagpuProbes = requiredProbes
 
@@ -185,10 +283,10 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 
 func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Address,
 	_ remotememory.RemoteMemory) (interpreter.Instance, error) {
-	// If using activity_batch, ensure the tail-call prog array is populated.
-	// UpdateProgArray is idempotent (programs are cached, map updates are atomic)
-	// so it is safe to call on every Attach.
-	// On failure (e.g. verifier rejection), fall back to kernel_executed.
+	// Populate the cuda_progs tail-call array. UpdateProgArray is idempotent
+	// (programs are cached, map updates are atomic), so it is safe to call on
+	// every Attach. activity_batch failure falls back to kernel_executed;
+	// pc_sample_batch failure just drops the pc sample probe.
 	for i, probe := range d.probes {
 		if probe.Name != "activity_batch" {
 			continue
@@ -206,9 +304,22 @@ func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Addre
 		}
 		break
 	}
+	for i := 0; i < len(d.probes); {
+		if d.probes[i].Name != "pc_sample_batch" {
+			i++
+			continue
+		}
+		if err := ebpf.UpdateProgArray(cudaProgsMap, 1,
+			USDTProgCudaPCSampleBatchTail); err != nil {
+			log.Errorf("[cuda] pc_sample_batch tail call failed: %v — dropping pc_sample_batch", err)
+			d.probes = append(d.probes[:i], d.probes[i+1:]...)
+			continue
+		}
+		i++
+	}
 
-	// Map USDT probe names to eBPF program names and tail-call indices.
-	// The cookie doubles as the cuda_progs prog array key for tail-call dispatch.
+	// Map USDT probe names to eBPF program names and cookies.
+	// The cookie tells cuda_probe which inlined branch (or tail call) to take.
 	cookies := make([]uint64, len(d.probes))
 	progNames := make([]string, len(d.probes))
 	for i, probe := range d.probes {
@@ -222,6 +333,18 @@ func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Addre
 		case "activity_batch":
 			cookies[i] = CudaProgActivityBatch
 			progNames[i] = USDTProgCudaActivityBatch
+		case "cubin_loaded":
+			cookies[i] = CudaProgCubinLoaded
+			progNames[i] = USDTProgCudaCubinLoaded
+		case "pc_sample_batch":
+			cookies[i] = CudaProgPCSampleBatch
+			progNames[i] = USDTProgCudaPCSampleBatch
+		case "stall_reason_map":
+			cookies[i] = CudaProgStallReasonMap
+			progNames[i] = USDTProgCudaStallReasonMap
+		case "error":
+			cookies[i] = CudaProgError
+			progNames[i] = USDTProgCudaError
 		default:
 			log.Debugf("unknown parcagpu USDT probe name: %s", probe.Name)
 		}
@@ -257,7 +380,7 @@ func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Addre
 
 	// Create and register fixer for this PID
 	fixer := &gpuTraceFixer{
-		timesAwaitingTraces: make(map[uint32][]CuptiTimingEvent),
+		timesAwaitingTraces: make(map[uint32][]CuptiKernelEvent),
 		tracesAwaitingTimes: make(map[uint32]*SymbolizedCudaTrace),
 	}
 
@@ -379,7 +502,7 @@ func (f *gpuTraceFixer) addGraphTrace(trace *libpf.Trace, meta *samples.TraceEve
 
 // addTime is called when timing info is received from eBPF, to match it with a trace.
 // Caller must hold f.mu.
-func (f *gpuTraceFixer) addTime(ev *CuptiTimingEvent) (CudaTraceOutput, bool) {
+func (f *gpuTraceFixer) addTime(ev *CuptiKernelEvent) (CudaTraceOutput, bool) {
 	// Update max, detecting wrap-around (new ID much smaller than max means wrap)
 	if ev.Id > f.maxCorrelationId || f.maxCorrelationId-ev.Id > 1<<31 {
 		f.maxCorrelationId = ev.Id
@@ -456,7 +579,7 @@ func init() {
 // prepTrace attaches timing information and the demangled kernel name to a symbolized
 // CUDA trace, producing a CudaTraceOutput ready for reporting.
 func (f *gpuTraceFixer) prepTrace(trace *libpf.Trace, meta *samples.TraceEventMeta,
-	cudaFrameIdx int, ev *CuptiTimingEvent) CudaTraceOutput {
+	cudaFrameIdx int, ev *CuptiKernelEvent) CudaTraceOutput {
 	out := CudaTraceOutput{
 		Trace: trace,
 		Meta:  meta,
@@ -554,7 +677,7 @@ func InterceptTrace(trace *libpf.Trace, meta *samples.TraceEventMeta,
 }
 
 // addTimeSingle is a static function that delegates to the appropriate fixer for the PID.
-func addTimeSingle(ev *CuptiTimingEvent) (CudaTraceOutput, bool) {
+func addTimeSingle(ev *CuptiKernelEvent) (CudaTraceOutput, bool) {
 	pid := libpf.PID(ev.Pid)
 	value, ok := gpuFixers.Load(pid)
 	if !ok {
@@ -569,7 +692,7 @@ func addTimeSingle(ev *CuptiTimingEvent) (CudaTraceOutput, bool) {
 
 // AddTimes processes a batch of timing events, taking the lock once per PID.
 // Returns all completed traces.
-func AddTimes(events []CuptiTimingEvent) []CudaTraceOutput {
+func AddTimes(events []CuptiKernelEvent) []CudaTraceOutput {
 	if len(events) == 0 {
 		return nil
 	}
@@ -585,7 +708,7 @@ func AddTimes(events []CuptiTimingEvent) []CudaTraceOutput {
 	}
 	fixer := value.(*gpuTraceFixer)
 
-	var otherPID []CuptiTimingEvent
+	var otherPID []CuptiKernelEvent
 	fixer.mu.Lock()
 	for i := range events {
 		ev := &events[i]

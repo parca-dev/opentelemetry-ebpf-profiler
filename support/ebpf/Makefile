@@ -29,10 +29,12 @@ else
 TARGET_FLAGS = -target x86_64-linux-gnu
 endif
 
-# Resolve the path to the parca-dev/usdt eBPF headers via the Go module
-# cache (honors any `replace` directive in go.mod). The headers
-# (usdt_defs.h, usdt_args.h) live there as the single source of truth and
-# are not duplicated in this repo.
+# Resolve the paths to external BPF header directories via the Go module
+# cache (honors any `replace` directive in go.mod). Headers live in their
+# canonical upstream repos as the single source of truth and are not
+# duplicated here:
+#   * github.com/parca-dev/usdt      -> usdt_defs.h, usdt_args.h
+#   * github.com/parca-dev/parcagpu  -> cupti_bpf.h
 #
 # Lazy assignment (`=`, not `:=`): only computed when an actual compile
 # rule expands FLAGS, so `clean`/`format`/`lint` don't trigger it. We
@@ -42,17 +44,26 @@ USDT_HEADERS = $(shell cd $(CURDIR)/../.. && \
 	go mod download github.com/parca-dev/usdt >/dev/null && \
 	go list -m -f '{{.Dir}}' github.com/parca-dev/usdt)/ebpf
 
+# parcagpu has no Go packages (only C headers), so it cannot live in go.mod
+# (go mod tidy would remove it).  Use `go mod download -json @latest` which
+# works for arbitrary modules without requiring a go.mod entry.
+CUPTI_HEADERS = $(shell cd $(CURDIR)/../.. && \
+	go mod download -json github.com/parca-dev/parcagpu@latest 2>/dev/null | \
+	sed -n 's/.*"Dir": "\(.*\)".*/\1/p')/ebpf
+
 # Use -g to generate the btf section in the resulting binary.
 #
-# We remap two source roots to stable strings so the compiled .o (and the
+# We remap source roots to stable strings so the compiled .o (and the
 # linked tracer.ebpf.* blob, since BTF/.BTF.ext survive `--strip-debug`)
 # are byte-identical regardless of where the build happens:
-#   * $(CURDIR)        — this directory (support/ebpf), already remapped.
-#   * $(USDT_HEADERS)  — the parca-dev/usdt module's ebpf/ headers, which
-#                        live in the Go module cache (different absolute
-#                        path locally vs. in CI). Without this remap, the
-#                        absolute paths of usdt_defs.h/usdt_args.h get
-#                        baked into BTF and the blob diffs across machines.
+#   * $(CURDIR)         — this directory (support/ebpf), already remapped.
+#   * $(USDT_HEADERS)   — parca-dev/usdt module's ebpf/ headers, in the Go
+#                         module cache (different absolute path locally
+#                         vs. in CI).
+#   * $(CUPTI_HEADERS)  — parca-dev/parcagpu module's ebpf/ headers, same
+#                         reproducibility concern as USDT_HEADERS.
+# Without these remaps, absolute paths get baked into BTF and the blob
+# diffs across machines.
 FLAGS=$(TARGET_FLAGS) -g \
 	-fno-jump-tables \
 	-nostdlib \
@@ -60,6 +71,7 @@ FLAGS=$(TARGET_FLAGS) -g \
 	-ffreestanding \
 	-O2 -emit-llvm -c $< \
 	-I$(USDT_HEADERS) \
+	-I$(CUPTI_HEADERS) \
 	-Wall -Wextra -Werror \
 	-Wno-address-of-packed-member \
 	-Wno-unused-label \
@@ -70,7 +82,9 @@ FLAGS=$(TARGET_FLAGS) -g \
 	-Xclang -fdebug-prefix-map=$(CURDIR)=$(REPRODUCIBLE_PREFIX) \
 	-Xclang -fmacro-prefix-map=$(CURDIR)=$(REPRODUCIBLE_PREFIX) \
 	-Xclang -fdebug-prefix-map=$(USDT_HEADERS)=usdt \
-	-Xclang -fmacro-prefix-map=$(USDT_HEADERS)=usdt
+	-Xclang -fmacro-prefix-map=$(USDT_HEADERS)=usdt \
+	-Xclang -fdebug-prefix-map=$(CUPTI_HEADERS)=cupti \
+	-Xclang -fmacro-prefix-map=$(CUPTI_HEADERS)=cupti
 
 SRCS := $(wildcard *.ebpf.c)
 OBJS := $(SRCS:.c=.$(TARGET_ARCH).o)
