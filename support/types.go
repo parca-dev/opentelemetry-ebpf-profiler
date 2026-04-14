@@ -101,6 +101,7 @@ const (
 	TraceOriginProbe    = 0x3
 	TraceOriginMemory   = 0x4
 	TraceOriginCuda     = 0x5
+	TraceOriginGpuPC    = 0x6
 )
 
 type ApmSpanID [8]byte

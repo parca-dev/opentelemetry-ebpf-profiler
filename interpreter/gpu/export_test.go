@@ -11,6 +11,7 @@ func RegisterTestFixer(pid libpf.PID) {
 	fixer := &gpuTraceFixer{
 		timesAwaitingTraces: make(map[uint32][]CuptiKernelEvent),
 		tracesAwaitingTimes: make(map[uint32]*SymbolizedCudaTrace),
+		pcTraces:            make(map[uint32]*SymbolizedCudaTrace),
 	}
 	gpuFixers.Store(pid, fixer)
 }

@@ -135,7 +135,12 @@ func Start(ctx context.Context, tr *tracer.Tracer,
 					go handleCubinLoaded(*ev, exeRep)
 				case gpu.EventTypePCSample:
 					pcSampleCount.Add(1)
-					// TODO: hand to PC-sample aggregator.
+					if len(rec.RawSample) < int(unsafe.Sizeof(gpu.CuptiPCSampleEvent{})) {
+						noDataCount.Add(1)
+						continue
+					}
+					ev := *(*gpu.CuptiPCSampleEvent)(unsafe.Pointer(&rec.RawSample[0]))
+					go gpu.HandlePCSample(&ev, rep)
 				case gpu.EventTypeStallReasonMap:
 					stallMapCount.Add(1)
 					if len(rec.RawSample) < int(unsafe.Sizeof(gpu.CuptiStallReasonMapEvent{})) {

@@ -112,6 +112,7 @@ const (
 	TraceOriginProbe    = C.TRACE_PROBE
 	TraceOriginMemory   = C.TRACE_MEMORY
 	TraceOriginCuda     = C.TRACE_CUDA_LAUNCH
+	TraceOriginGpuPC    = C.TRACE_GPU_PC
 )
 
 type ApmSpanID C.ApmSpanID

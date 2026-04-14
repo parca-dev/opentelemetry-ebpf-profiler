@@ -8,7 +8,7 @@ module go.opentelemetry.io/ebpf-profiler
 // For the OpenTelemetry eBPF Profiler distribution specifically, see
 // https://github.com/open-telemetry/opentelemetry-collector-releases/tree/main/distributions/otelcol-ebpf-profiler
 
-go 1.25.0
+go 1.25.1
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.3
@@ -149,3 +149,5 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260209200024-4cfbd4190f57 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+require github.com/gnurizen/sass-table v0.0.1

@@ -144,6 +144,11 @@ type gpuTraceFixer struct {
 	timesAwaitingTraces map[uint32][]CuptiKernelEvent   // keyed by correlation ID
 	tracesAwaitingTimes map[uint32]*SymbolizedCudaTrace // keyed by correlation ID
 	maxCorrelationId    uint32                          // track highest ID for threshold-based clearing
+
+	// pcTraces keeps recently received traces available for PC sample correlation.
+	// Unlike tracesAwaitingTimes, entries here are not consumed when timing arrives.
+	// Cleaned up by the same threshold-based logic in maybeClear.
+	pcTraces map[uint32]*SymbolizedCudaTrace
 }
 
 type linkEntry struct {
@@ -382,6 +387,7 @@ func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Addre
 	fixer := &gpuTraceFixer{
 		timesAwaitingTraces: make(map[uint32][]CuptiKernelEvent),
 		tracesAwaitingTimes: make(map[uint32]*SymbolizedCudaTrace),
+		pcTraces:            make(map[uint32]*SymbolizedCudaTrace),
 	}
 
 	gpuFixers.Store(pid, fixer)
@@ -446,6 +452,15 @@ func (f *gpuTraceFixer) addSingleTrace(trace *libpf.Trace, meta *samples.TraceEv
 		f.maxCorrelationId = correlationID
 	}
 
+	// Always store for PC sample correlation, even if timing already arrived.
+	f.pcTraces[correlationID] = &SymbolizedCudaTrace{
+		Trace:         trace,
+		Meta:          meta,
+		CUDAFrameIdx:  cudaFrameIdx,
+		CorrelationID: correlationID,
+		CBID:          cbid,
+	}
+
 	evs, ok := f.timesAwaitingTraces[correlationID]
 	if ok && len(evs) > 0 {
 		log.Debugf("[cuda] gpu trace completed id %d cbid %d (0x%x) for pid %d",
@@ -455,14 +470,8 @@ func (f *gpuTraceFixer) addSingleTrace(trace *libpf.Trace, meta *samples.TraceEv
 		return out, true
 	}
 
-	// Store trace for future timing events
-	f.tracesAwaitingTimes[correlationID] = &SymbolizedCudaTrace{
-		Trace:         trace,
-		Meta:          meta,
-		CUDAFrameIdx:  cudaFrameIdx,
-		CorrelationID: correlationID,
-		CBID:          cbid,
-	}
+	// Store trace for future timing events (reuse the pcTraces entry).
+	f.tracesAwaitingTimes[correlationID] = f.pcTraces[correlationID]
 	return CudaTraceOutput{}, false
 }
 
@@ -491,13 +500,15 @@ func (f *gpuTraceFixer) addGraphTrace(trace *libpf.Trace, meta *samples.TraceEve
 	}
 
 	// Always store for future timing events
-	f.tracesAwaitingTimes[correlationID] = &SymbolizedCudaTrace{
+	st := &SymbolizedCudaTrace{
 		Trace:         trace,
 		Meta:          meta,
 		CUDAFrameIdx:  cudaFrameIdx,
 		CorrelationID: correlationID,
 		CBID:          cbid,
 	}
+	f.tracesAwaitingTimes[correlationID] = st
+	f.pcTraces[correlationID] = st
 	return outputs
 }
 
@@ -518,6 +529,31 @@ func (f *gpuTraceFixer) addTime(ev *CuptiKernelEvent) (CudaTraceOutput, bool) {
 	}
 	f.timesAwaitingTraces[ev.Id] = append(f.timesAwaitingTraces[ev.Id], *ev)
 	return CudaTraceOutput{}, false
+}
+
+// lookupTraceForPC returns the symbolized trace for a given correlation ID,
+// if available. Used by PC sample processing to correlate GPU samples with
+// CPU call stacks.
+func (f *gpuTraceFixer) lookupTraceForPC(correlationID uint32) *SymbolizedCudaTrace {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if st, ok := f.pcTraces[correlationID]; ok {
+		return st
+	}
+	if st, ok := f.tracesAwaitingTimes[correlationID]; ok {
+		return st
+	}
+	return nil
+}
+
+// LookupTraceForPCSample finds the CPU trace associated with a given PID and
+// correlation ID for PC sample correlation.
+func LookupTraceForPCSample(pid libpf.PID, correlationID uint32) *SymbolizedCudaTrace {
+	value, ok := gpuFixers.Load(pid)
+	if !ok {
+		return nil
+	}
+	return value.(*gpuTraceFixer).lookupTraceForPC(correlationID)
 }
 
 // fixerStats holds statistics from a single fixer for aggregation.
@@ -542,7 +578,9 @@ func (f *gpuTraceFixer) maybeClear() fixerStats {
 		tracesLen: tracesLen,
 	}
 
-	if timesLen > 10000 || tracesLen > 10000 {
+	pcLen := len(f.pcTraces)
+
+	if timesLen > 10000 || tracesLen > 10000 || pcLen > 10000 {
 		// Keep entries within 5000 of the max correlation ID
 		// Use signed distance to handle wrap-around correctly
 		for k := range f.timesAwaitingTraces {
@@ -553,6 +591,11 @@ func (f *gpuTraceFixer) maybeClear() fixerStats {
 		for k := range f.tracesAwaitingTimes {
 			if int32(f.maxCorrelationId-k) > 5000 {
 				delete(f.tracesAwaitingTimes, k)
+			}
+		}
+		for k := range f.pcTraces {
+			if int32(f.maxCorrelationId-k) > 5000 {
+				delete(f.pcTraces, k)
 			}
 		}
 
