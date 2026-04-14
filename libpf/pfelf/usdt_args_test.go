@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"testing"
 
-	"go.opentelemetry.io/ebpf-profiler/support/usdt"
+	"github.com/parca-dev/usdt"
 )
 
 // Common test cases that work on all architectures

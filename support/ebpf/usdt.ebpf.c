@@ -2,7 +2,7 @@
 #include "tracemgmt.h"
 
 #include "types.h"
-#include "usdt.h"
+#include "usdt_defs.h"
 
 #ifndef BPF_USDT_MAX_SPEC_CNT
   #define BPF_USDT_MAX_SPEC_CNT 256

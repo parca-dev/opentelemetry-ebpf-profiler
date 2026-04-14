@@ -58,25 +58,45 @@ if [[ ! -f "${PARCAGPU_DIR}/libparcagpucupti.so" ]]; then
     ls -la "${PARCAGPU_DIR}/libparcagpucupti.so"
 fi
 
-# Build a stub libcupti .so so that dlopen of libparcagpucupti.so succeeds
-# without a real CUDA installation.  The stub only needs to satisfy the
-# DT_NEEDED file lookup — the actual CUPTI symbols are provided by
-# mock_cupti.c in the test binary (exported via --export-dynamic).
-CUPTI_SONAME=$(readelf -d "${PARCAGPU_DIR}/libparcagpucupti.so" \
-    | sed -n 's/.*NEEDED.*\[\(libcupti\.so[^]]*\)\].*/\1/p')
+# Build mock libcupti.so and libcuda.so from the parcagpu repo's test sources.
+# These provide real mock implementations of all CUPTI/CUDA APIs that
+# libparcagpucupti.so resolves via dlsym at runtime.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+MOCK_HEADERS="${SCRIPT_DIR}/mock-cupti-headers"
+PARCAGPU_REPO="parca-dev/parcagpu"
 
-if [[ -n "${CUPTI_SONAME}" && ! -f "${PARCAGPU_DIR}/${CUPTI_SONAME}" ]]; then
-    STUB_C=$(mktemp --suffix=.c)
-    echo "void __cupti_stub(void){}" > "${STUB_C}"
+# Determine compiler for the target arch.
+if [ "$QEMU_ARCH" = "aarch64" ] && [ "$(uname -m)" != "aarch64" ]; then
+    STUB_CC="${CC:-aarch64-linux-gnu-gcc}"
+else
+    STUB_CC="${CC:-cc}"
+fi
 
-    # Determine cross-compiler for the target arch.
-    case "$QEMU_ARCH" in
-        aarch64) STUB_CC="${CC:-aarch64-linux-gnu-gcc}" ;;
-        *)       STUB_CC="${CC:-cc}" ;;
-    esac
+if [[ ! -f "${PARCAGPU_DIR}/libcupti.so" ]]; then
+    echo "Building mock libcupti.so from ${PARCAGPU_REPO}..."
+    MOCK_SRC=$(mktemp -d)
 
-    ${STUB_CC} -shared -o "${PARCAGPU_DIR}/${CUPTI_SONAME}" \
-        -Wl,-soname,"${CUPTI_SONAME}" "${STUB_C}"
-    rm -f "${STUB_C}"
-    echo "✅ Built stub ${CUPTI_SONAME}"
+    # Download mock sources from the parcagpu repo.
+    for f in test/mock_cupti.c test/mock_cuda.c; do
+        curl -sL "https://raw.githubusercontent.com/${PARCAGPU_REPO}/main/${f}" \
+            -o "${MOCK_SRC}/$(basename "$f")"
+    done
+
+    # Build mock libcupti.so with our minimal type-definition headers.
+    ${STUB_CC} -shared -fPIC -o "${PARCAGPU_DIR}/libcupti.so" \
+        -Wl,-soname,"libcupti.so" \
+        -I"${MOCK_HEADERS}" \
+        "${MOCK_SRC}/mock_cupti.c"
+    echo "✅ Built mock libcupti.so"
+
+    # Build mock libcuda.so.
+    ${STUB_CC} -shared -fPIC -o "${PARCAGPU_DIR}/libcuda.so" \
+        -Wl,-soname,"libcuda.so.1" \
+        -I"${MOCK_HEADERS}" \
+        "${MOCK_SRC}/mock_cuda.c"
+    # Triton's Proton looks for the versioned soname.
+    ln -sf libcuda.so "${PARCAGPU_DIR}/libcuda.so.1"
+    echo "✅ Built mock libcuda.so"
+
+    rm -rf "${MOCK_SRC}"
 fi

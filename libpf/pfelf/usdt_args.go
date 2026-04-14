@@ -12,7 +12,7 @@ import (
 	"strings"
 	"unsafe"
 
-	"go.opentelemetry.io/ebpf-profiler/support/usdt"
+	"github.com/parca-dev/usdt"
 )
 
 // x86_64 register name to ID mapping

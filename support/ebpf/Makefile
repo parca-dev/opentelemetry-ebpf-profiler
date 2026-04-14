@@ -29,13 +29,37 @@ else
 TARGET_FLAGS = -target x86_64-linux-gnu
 endif
 
+# Resolve the path to the parca-dev/usdt eBPF headers via the Go module
+# cache (honors any `replace` directive in go.mod). The headers
+# (usdt_defs.h, usdt_args.h) live there as the single source of truth and
+# are not duplicated in this repo.
+#
+# Lazy assignment (`=`, not `:=`): only computed when an actual compile
+# rule expands FLAGS, so `clean`/`format`/`lint` don't trigger it. We
+# `go mod download` first because `go list -m -f '{{.Dir}}'` does not
+# auto-download a specific module path on a cold cache.
+USDT_HEADERS = $(shell cd $(CURDIR)/../.. && \
+	go mod download github.com/parca-dev/usdt >/dev/null && \
+	go list -m -f '{{.Dir}}' github.com/parca-dev/usdt)/ebpf
+
 # Use -g to generate the btf section in the resulting binary.
+#
+# We remap two source roots to stable strings so the compiled .o (and the
+# linked tracer.ebpf.* blob, since BTF/.BTF.ext survive `--strip-debug`)
+# are byte-identical regardless of where the build happens:
+#   * $(CURDIR)        — this directory (support/ebpf), already remapped.
+#   * $(USDT_HEADERS)  — the parca-dev/usdt module's ebpf/ headers, which
+#                        live in the Go module cache (different absolute
+#                        path locally vs. in CI). Without this remap, the
+#                        absolute paths of usdt_defs.h/usdt_args.h get
+#                        baked into BTF and the blob diffs across machines.
 FLAGS=$(TARGET_FLAGS) -g \
 	-fno-jump-tables \
 	-nostdlib \
 	-nostdinc \
 	-ffreestanding \
 	-O2 -emit-llvm -c $< \
+	-I$(USDT_HEADERS) \
 	-Wall -Wextra -Werror \
 	-Wno-address-of-packed-member \
 	-Wno-unused-label \
@@ -44,7 +68,9 @@ FLAGS=$(TARGET_FLAGS) -g \
 	-D__SOURCE_DATE_EPOCH__=0 \
 	-std=gnu17 \
 	-Xclang -fdebug-prefix-map=$(CURDIR)=$(REPRODUCIBLE_PREFIX) \
-	-Xclang -fmacro-prefix-map=$(CURDIR)=$(REPRODUCIBLE_PREFIX)
+	-Xclang -fmacro-prefix-map=$(CURDIR)=$(REPRODUCIBLE_PREFIX) \
+	-Xclang -fdebug-prefix-map=$(USDT_HEADERS)=usdt \
+	-Xclang -fmacro-prefix-map=$(USDT_HEADERS)=usdt
 
 SRCS := $(wildcard *.ebpf.c)
 OBJS := $(SRCS:.c=.$(TARGET_ARCH).o)
