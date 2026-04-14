@@ -138,7 +138,20 @@ func Start(ctx context.Context, tr *tracer.Tracer,
 					// TODO: hand to PC-sample aggregator.
 				case gpu.EventTypeStallReasonMap:
 					stallMapCount.Add(1)
-					// TODO: cache stall reason name table per pid.
+					if len(rec.RawSample) < int(unsafe.Sizeof(gpu.CuptiStallReasonMapEvent{})) {
+						noDataCount.Add(1)
+						continue
+					}
+					ev := (*gpu.CuptiStallReasonMapEvent)(unsafe.Pointer(&rec.RawSample[0]))
+					count := ev.Count
+					if count > 64 {
+						count = 64
+					}
+					names := make([]string, count)
+					for i := uint32(0); i < count; i++ {
+						names[i] = nullTerm(ev.Names[i][:])
+					}
+					gpu.StoreStallReasonMap(ev.Pid, names)
 				case gpu.EventTypeError:
 					errorCount.Add(1)
 					if len(rec.RawSample) >= int(unsafe.Sizeof(gpu.CuptiErrorEvent{})) {

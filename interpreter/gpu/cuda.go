@@ -395,6 +395,7 @@ func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Addre
 
 func (i *Instance) Detach(_ interpreter.EbpfHandler, _ libpf.PID) error {
 	gpuFixers.Delete(i.pid)
+	DeleteStallReasonMap(uint32(i.pid))
 	if le := i.d.links[i.odfi]; le != nil {
 		le.refs--
 		if le.refs <= 0 {
