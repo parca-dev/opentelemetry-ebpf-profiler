@@ -30,7 +30,7 @@ import (
 
 	"time"
 
-	"github.com/docker/go-connections/nat"
+	"github.com/moby/moby/api/types/network"
 	"github.com/stretchr/testify/require"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -52,7 +52,7 @@ var files = []string{
 	"broken.md",
 }
 
-func runTest(t *testing.T, ctx context.Context, host string, port nat.Port) {
+func runTest(t *testing.T, ctx context.Context, host string, port network.Port) {
 	enabledTracers, err := tracertypes.Parse("labels,v8")
 	require.NoError(t, err)
 
@@ -292,7 +292,7 @@ func startNightlyContainer(ctx context.Context,
 	return cont
 }
 
-func testHTTPEndpoint(t *testing.T, host string, port nat.Port) {
+func testHTTPEndpoint(t *testing.T, host string, port network.Port) {
 	const numGoroutines = 10
 	const requestsPerGoroutine = 10000
 
