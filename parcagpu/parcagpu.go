@@ -1,9 +1,11 @@
 package parcagpu // import "go.opentelemetry.io/ebpf-profiler/parcagpu"
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"time"
 	"unsafe"
@@ -14,6 +16,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
+	"go.opentelemetry.io/ebpf-profiler/process"
 	"go.opentelemetry.io/ebpf-profiler/processmanager"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
@@ -32,7 +35,7 @@ import (
 // can produce them without dropping) and counted, but otherwise ignored. Real
 // handlers for cubin/pc_sample/stall_reason/error follow in a separate change.
 func Start(ctx context.Context, tr *tracer.Tracer,
-	rep reporter.TraceReporter) processmanager.TraceInterceptor {
+	rep reporter.TraceReporter, exeRep reporter.ExecutableReporter) processmanager.TraceInterceptor {
 	cuptiEvents := tr.GetEbpfMaps()["cupti_events"]
 
 	eventReader, err := ringbuf.NewReader(cuptiEvents)
@@ -124,7 +127,12 @@ func Start(ctx context.Context, tr *tracer.Tracer,
 					}
 				case gpu.EventTypeCubinLoaded:
 					cubinCount.Add(1)
-					// TODO: hand to cubin/symbol pipeline.
+					if len(rec.RawSample) < int(unsafe.Sizeof(gpu.CuptiCubinEvent{})) {
+						noDataCount.Add(1)
+						continue
+					}
+					ev := (*gpu.CuptiCubinEvent)(unsafe.Pointer(&rec.RawSample[0]))
+					go handleCubinLoaded(*ev, exeRep)
 				case gpu.EventTypePCSample:
 					pcSampleCount.Add(1)
 					// TODO: hand to PC-sample aggregator.
@@ -165,4 +173,53 @@ func nullTerm(b []byte) string {
 		}
 	}
 	return string(b)
+}
+
+// handleCubinLoaded reads cubin bytes from process memory, parses the ELF,
+// caches metadata for PC sample processing, and reports the cubin to the
+// ExecutableReporter for debug file upload.
+func handleCubinLoaded(ev gpu.CuptiCubinEvent, exeRep reporter.ExecutableReporter) {
+	data, err := gpu.ReadCubinFromProcess(ev.Pid, ev.CubinPtr, ev.CubinSize)
+	if err != nil {
+		log.Warnf("[cuda] failed to read cubin from pid %d: %v", ev.Pid, err)
+		return
+	}
+
+	fileID, err := libpf.FileIDFromExecutableReader(bytes.NewReader(data))
+	if err != nil {
+		log.Warnf("[cuda] failed to compute cubin file ID: %v", err)
+		return
+	}
+
+	smVersion, texts, err := gpu.ParseCubinELF(data)
+	if err != nil {
+		log.Warnf("[cuda] failed to parse cubin ELF (crc=0x%x): %v", ev.CubinCRC, err)
+		return
+	}
+
+	gpu.StoreCubin(&gpu.CubinInfo{
+		CRC:       ev.CubinCRC,
+		FileID:    fileID,
+		SMVersion: smVersion,
+		Texts:     texts,
+	})
+
+	log.Debugf("[cuda] cubin loaded: crc=0x%x sm=%d texts=%d fileID=%s",
+		ev.CubinCRC, smVersion, len(texts), fileID)
+
+	if exeRep == nil {
+		return
+	}
+	cubinName := fmt.Sprintf("cubin-%016x", ev.CubinCRC)
+	mappingFile := libpf.NewFrameMappingFile(libpf.FrameMappingFileData{
+		FileID:     fileID,
+		FileName:   libpf.Intern(cubinName),
+		GnuBuildID: fmt.Sprintf("%016x", ev.CubinCRC),
+	})
+	exeRep.ReportExecutable(&reporter.ExecutableMetadata{
+		MappingFile: mappingFile,
+		Process:     gpu.NewCubinProcess(ev.Pid, data),
+		Mapping:     &process.Mapping{Path: libpf.Intern(cubinName)},
+		IsElf:       true,
+	})
 }
