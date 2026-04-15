@@ -426,7 +426,8 @@ walk_luajit_stack(PerCPURecord *record, const LuaJITProcInfo *info, int *next_un
     // BASE must always be two elements above the bottom of the stack,
     // even when the stack is logically empty. So whenever a new Lua state is created
     // (e.g. via luaL_newstate() or lua_newthread()), the interpreter
-    // pushes two dummy values (see https://github.com/luajit/luajit/blob/659a6169/src/lj_state.c#L168-L180).
+    // pushes two dummy values (see
+    // https://github.com/luajit/luajit/blob/659a6169/src/lj_state.c#L168-L180).
     //
     // Thus, when `diff` (set below) is <= 2, we've actually unwound past the logical
     // root of the stack, which should never happen...
