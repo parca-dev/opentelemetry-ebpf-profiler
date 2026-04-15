@@ -79,6 +79,7 @@ var interpreterTypeToString = map[InterpreterType]string{
 	V8:           "v8js",
 	Dotnet:       "dotnet",
 	BEAM:         "beam",
+	CUDA:         "cuda",
 	APMInt:       "apm-integration",
 	LuaJIT:       "luajit",
 	Go:           "go",

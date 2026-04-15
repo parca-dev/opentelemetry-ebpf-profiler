@@ -2,6 +2,7 @@ package gpu // import "go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 
 import (
 	"fmt"
+	"time"
 	"unique"
 
 	log "github.com/sirupsen/logrus"
@@ -37,6 +38,9 @@ func HandlePCSample(ev *CuptiPCSampleEvent, rep reporter.TraceReporter) {
 		cpuTrace = LookupTraceForPCSample(libpf.PID(ev.Pid), ev.CorrelationID)
 	}
 
+	log.Debugf("[cuda] pc sample: pid=%d kernel=%q offset=0x%x mnemonic=%q corrID=%d stallReasons=%d cpuTrace=%v",
+		ev.Pid, kernelName, ev.PCOffset, mnemonic, ev.CorrelationID, ev.StallReasonCount, cpuTrace != nil)
+
 	// Build cubin file mapping for the offset frame.
 	cubinName := fmt.Sprintf("cubin-%016x", cubinInfo.CRC)
 	cubinMapping := libpf.NewFrameMapping(libpf.FrameMappingData{
@@ -60,13 +64,16 @@ func HandlePCSample(ev *CuptiPCSampleEvent, rep reporter.TraceReporter) {
 
 		stallName := LookupStallReason(ev.Pid, sr.Index)
 		trace := buildGpuPCTrace(cpuTrace, cubinMapping, kernelName,
-			ev.PCOffset, mnemonic, stallName)
+			ev.PCOffset, mnemonic, stallName, sr.Index)
 
 		meta := buildGpuPCMeta(cpuTrace, ev.Pid, int64(sr.Samples))
 
 		trace.Hash = traceutil.HashTrace(trace)
 		if err := rep.ReportTraceEvent(trace, meta); err != nil {
-			log.Errorf("[parcagpu] failed to report GPU PC sample: %v", err)
+			log.Errorf("[cuda] failed to report GPU PC sample: %v", err)
+		} else {
+			log.Debugf("[cuda] reported gpupc: kernel=%q offset=0x%x mnemonic=%q stall=%q stallIdx=%d samples=%d",
+				kernelName, ev.PCOffset, mnemonic, stallName, sr.Index, sr.Samples)
 		}
 	}
 }
@@ -82,7 +89,7 @@ func HandlePCSample(ev *CuptiPCSampleEvent, rep reporter.TraceReporter) {
 //	[3] kernel_name   — CUDAKernelFrame
 //	[4..N] CPU frames — from correlated trace (if available)
 func buildGpuPCTrace(cpuTrace *SymbolizedCudaTrace, cubinMapping libpf.FrameMapping,
-	kernelName string, pcOffset uint64, mnemonic, stallName string) *libpf.Trace {
+	kernelName string, pcOffset uint64, mnemonic, stallName string, stallIndex uint32) *libpf.Trace {
 
 	// Count GPU frames: kernel + offset + stall_reason, plus instruction if available.
 	gpuFrameCount := 3
@@ -104,9 +111,12 @@ func buildGpuPCTrace(cpuTrace *SymbolizedCudaTrace, cubinMapping libpf.FrameMapp
 	}
 
 	// GPU frames (leaf to root order).
+	// AddressOrLineno on the stall reason frame ensures HashTrace produces
+	// distinct hashes per stall reason (the hash only covers FileID + AddressOrLineno).
 	trace.Frames = append(trace.Frames, unique.Make(libpf.Frame{
-		Type:         libpf.CUDAKernelFrame,
-		FunctionName: libpf.Intern(stallName),
+		Type:            libpf.CUDAKernelFrame,
+		FunctionName:    libpf.Intern(stallName),
+		AddressOrLineno: libpf.AddressOrLineno(stallIndex),
 	}))
 
 	if mnemonic != "" {
@@ -145,9 +155,10 @@ func buildGpuPCTrace(cpuTrace *SymbolizedCudaTrace, cubinMapping libpf.FrameMapp
 func buildGpuPCMeta(cpuTrace *SymbolizedCudaTrace, pid uint32,
 	sampleCount int64) *samples.TraceEventMeta {
 	meta := &samples.TraceEventMeta{
-		PID:     libpf.PID(pid),
-		Origin:  support.TraceOriginGpuPC,
-		OffTime: sampleCount,
+		Timestamp: libpf.UnixTime64(time.Now().UnixNano()),
+		PID:       libpf.PID(pid),
+		Origin:    support.TraceOriginGpuPC,
+		OffTime:   sampleCount,
 	}
 	if cpuTrace != nil && cpuTrace.Meta != nil {
 		meta.Timestamp = cpuTrace.Meta.Timestamp
