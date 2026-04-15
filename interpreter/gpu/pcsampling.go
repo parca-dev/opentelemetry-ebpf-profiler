@@ -45,9 +45,8 @@ func HandlePCSample(ev *CuptiPCSampleEvent, rep reporter.TraceReporter) {
 	cubinName := fmt.Sprintf("cubin-%016x", cubinInfo.CRC)
 	cubinMapping := libpf.NewFrameMapping(libpf.FrameMappingData{
 		File: libpf.NewFrameMappingFile(libpf.FrameMappingFileData{
-			FileID:     cubinInfo.FileID,
-			FileName:   libpf.Intern(cubinName),
-			GnuBuildID: fmt.Sprintf("%016x", cubinInfo.CRC),
+			FileID:   cubinInfo.FileID,
+			FileName: libpf.Intern(cubinName),
 		}),
 	})
 

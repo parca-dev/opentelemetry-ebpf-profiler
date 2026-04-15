@@ -230,9 +230,11 @@ func handleCubinLoaded(ev gpu.CuptiCubinEvent, exeRep reporter.ExecutableReporte
 	}
 	cubinName := fmt.Sprintf("cubin-%016x", ev.CubinCRC)
 	mappingFile := libpf.NewFrameMappingFile(libpf.FrameMappingFileData{
-		FileID:     fileID,
-		FileName:   libpf.Intern(cubinName),
-		GnuBuildID: fmt.Sprintf("%016x", ev.CubinCRC),
+		FileID:   fileID,
+		FileName: libpf.Intern(cubinName),
+		// GnuBuildID left empty — cubins don't have .note.gnu.build-id.
+		// The uploader falls back to BUILD_ID_TYPE_HASH with the FileID,
+		// which matches what buildStacktraceRecord sends for the frame.
 	})
 	exeRep.ReportExecutable(&reporter.ExecutableMetadata{
 		MappingFile: mappingFile,
