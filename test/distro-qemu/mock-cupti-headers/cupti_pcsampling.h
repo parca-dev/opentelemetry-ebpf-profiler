@@ -14,14 +14,33 @@ typedef struct {
     uint32_t samples;
 } CUpti_PCSamplingStallReason;
 
+// Layout must match cupti_pc_data in cupti_bpf.h — BPF reads this struct
+// directly from user-space memory via bpf_probe_read_user.
+//
+// Pre-CUDA 12.4 (size == 56):
+//   offset  0: size_t   size
+//   offset  8: uint64_t cubinCrc
+//   offset 16: uint64_t pcOffset
+//   offset 24: uint32_t functionIndex
+//   offset 28: (4 bytes padding)
+//   offset 32: char    *functionName       (pointer)
+//   offset 40: uint64_t stallReasonCount   (note: u64 not u32)
+//   offset 48: CUpti_PCSamplingStallReason *stallReason (pointer)
+//   = 56 bytes
+//
+// CUDA 12.4+ (size > 56):
+//   offset 56: uint32_t correlationId
 typedef struct {
     size_t    size;
     uint64_t  cubinCrc;
     uint64_t  pcOffset;
     uint32_t  functionIndex;
+    uint32_t  _pad0;
     char     *functionName;
-    uint32_t  stallReasonCount;
-    CUpti_PCSamplingStallReason stallReason[CUPTI_PC_SAMPLING_MAX_STALL_REASONS];
+    uint64_t  stallReasonCount;
+    CUpti_PCSamplingStallReason *stallReason;
+    // CUDA 12.4+ extension
+    uint32_t  correlationId;
 } CUpti_PCSamplingPCData;
 
 typedef struct {
