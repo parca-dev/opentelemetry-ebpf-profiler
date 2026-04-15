@@ -36,11 +36,10 @@ struct luajit_procs_t {
     __val;                                                                                         \
   })
 
-#define L_PART_OFFSET   0x10
-#define CFRAME_SIZE_JIT 0x60
+#define L_PART_OFFSET 0x10
 // (gdb) p/x sizeof(GCproto)
 // $4 = 0x68
-#define GCPROTO_SIZE    0x68
+#define GCPROTO_SIZE  0x68
 
 // This is L offset into interpreter stack frames.
 #define L_STACK_OFFSET 0x10
@@ -116,7 +115,7 @@ enum { LJ_CONT_TAILCALL, LJ_CONT_FFI_CALLBACK }; /* Special continuations. */
 
 ///////// END code copied from luajit2 sources.
 
-static inline __attribute__((__always_inline__)) TValue *frame_prevl(TValue *f, TValue frame_val)
+static EBPF_INLINE TValue *frame_prevl(TValue *f, TValue frame_val)
 {
   // This is the EBPF version of the frame_prevl macro.
   // #define frame_prevl(f)		((f) - (1+LJ_FR2+bc_a(frame_pc(f)[-1])))
@@ -131,7 +130,7 @@ static inline __attribute__((__always_inline__)) TValue *frame_prevl(TValue *f, 
 // there's a bunch of places the return address is stored depending on the frame
 // type.
 // https://github.com/openresty/luajit2/blob/7952882d/src/lj_debug.c#L53
-static inline __attribute__((__always_inline__)) ErrorCode
+static EBPF_INLINE ErrorCode
 lj_debug_framepc(PerCPURecord *record, void *fn, u32 *startpc, TValue *prevframe, u32 *pc)
 {
   LJFuncPart *func = &record->luajitUnwindScratch.f;
@@ -252,7 +251,7 @@ lj_debug_framepc(PerCPURecord *record, void *fn, u32 *startpc, TValue *prevframe
 // bytecode which we will walk backwards in userland to figure out a name for the
 // callee. The callee_pc is for information purposes only, so the user can see where
 // execution was.
-static inline __attribute__((__always_inline__)) ErrorCode lj_push_frame(
+static EBPF_INLINE ErrorCode lj_push_frame(
   UnwindState *state, Trace *trace, u64 callee_pt, u64 caller_pt, u32 callee_pc, u32 caller_pc)
 {
   u64 *data =
@@ -265,7 +264,7 @@ static inline __attribute__((__always_inline__)) ErrorCode lj_push_frame(
   return ERR_OK;
 }
 
-static inline __attribute__((__always_inline__)) ErrorCode
+static EBPF_INLINE ErrorCode
 lj_record_frame(PerCPURecord *record, TValue *frame, TValue frame_value, TValue *prevframe)
 {
   LJScratchSpace *scr = &record->luajitUnwindScratch;
@@ -331,8 +330,7 @@ exit:
 
 // See:
 // https://github.com/openresty/luajit2/blob/7952882d/src/lj_frame.h#L33
-static inline __attribute__((__always_inline__)) ErrorCode
-lj_prev_frame(PerCPURecord *record, TValue frame_val)
+static EBPF_INLINE ErrorCode lj_prev_frame(PerCPURecord *record, TValue frame_val)
 {
   TValue *frame = record->luajitUnwindState.frame;
   if (frame_islua(frame_val)) {
@@ -350,18 +348,12 @@ lj_prev_frame(PerCPURecord *record, TValue frame_val)
   return ERR_OK;
 }
 
-#if defined(__x86_64__)
-  #define CFRAME_SPACE 80
-#elif defined(__aarch64__)
-  #define CFRAME_SPACE 208
-#endif
-
 // Unwind a frame of native code; for example,
 // a CFRAME at the C/Lua boundary.
 //
 // `is_jit`should be true if there is JITted code anywhere in the Lua code corresponding to this
 // cframe.
-static inline __attribute__((__always_inline__)) ErrorCode
+static EBPF_INLINE ErrorCode
 unwind_native_frame(const LuaJITProcInfo *info, UnwindState *state, bool is_jit)
 {
   /* Interpreter frames unwind naturally, we need to poke sp/pc for JIT frames */
@@ -375,7 +367,7 @@ unwind_native_frame(const LuaJITProcInfo *info, UnwindState *state, bool is_jit)
       spadjust = info->cframe_size_jit;
     }
   } else {
-    spadjust = CFRAME_SPACE;
+    spadjust = LUAJIT_CFRAME_SPACE;
   }
 
   state->sp += spadjust;
@@ -404,7 +396,7 @@ unwind_native_frame(const LuaJITProcInfo *info, UnwindState *state, bool is_jit)
 // and finding ones that indicate a function call frame. Code inspired by
 // lj_debug_frame.
 // https://github.com/openresty/luajit2/blob/7952882d/src/lj_debug.c#L25
-static inline __attribute__((__always_inline__)) ErrorCode
+static EBPF_INLINE ErrorCode
 walk_luajit_stack(PerCPURecord *record, const LuaJITProcInfo *info, int *next_unwinder)
 {
   bool exitToNative = false;
@@ -434,7 +426,7 @@ walk_luajit_stack(PerCPURecord *record, const LuaJITProcInfo *info, int *next_un
     // BASE must always be two elements above the bottom of the stack,
     // even when the stack is logically empty. So whenever a new Lua state is created
     // (e.g. via luaL_newstate() or lua_newthread()), the interpreter
-    // pushes two dummy values.
+    // pushes two dummy values (see https://github.com/luajit/luajit/blob/659a6169/src/lj_state.c#L168-L180).
     //
     // Thus, when `diff` (set below) is <= 2, we've actually unwound past the logical
     // root of the stack, which should never happen...
@@ -554,7 +546,7 @@ walk_luajit_stack(PerCPURecord *record, const LuaJITProcInfo *info, int *next_un
   return ERR_OK;
 }
 
-static inline __attribute__((__always_inline__)) ErrorCode
+static EBPF_INLINE ErrorCode
 find_context(struct pt_regs *ctx, PerCPURecord *record, const LuaJITProcInfo *info)
 {
   bool reportG = false;
@@ -662,7 +654,7 @@ find_context(struct pt_regs *ctx, PerCPURecord *record, const LuaJITProcInfo *in
   return ERR_OK;
 }
 
-static inline __attribute__((__always_inline__)) int unwind_luajit(struct pt_regs *ctx)
+static EBPF_INLINE int unwind_luajit(struct pt_regs *ctx)
 {
   PerCPURecord *record = get_per_cpu_record();
   if (!record)

@@ -15,14 +15,9 @@
 
 package luajit // import "go.opentelemetry.io/ebpf-profiler/interpreter/luajit"
 
-// This is CFRAME_SIZE in src/lj_frame.h
-// We could dynamically get this from lj_vm_ffi_callback disassembly and look for the
-// add to sp register instruction but that is not available in stripped binaries.
+import "go.opentelemetry.io/ebpf-profiler/support"
+
 const (
-	cframeSize int32 = 208
-	// CFRAME_SIZE_JIT in the luajit source code
-	// claims this should be the same as CFRAME_SIZE,
-	// but that's a bug. It's actually indeed also reserving 16 more bytes:
-	// https://github.com/luajit/luajit/blob/659a6169/src/vm_arm64.dasc#L3949-L3949
+	cframeSize    int32 = support.LJCframeSpaceArm
 	cframeSizeJIT int32 = cframeSize + 16
 )
