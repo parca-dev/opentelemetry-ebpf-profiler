@@ -3,7 +3,7 @@
 	codespell lint ebpf-profiler format format-ebpf format-go pprof-execs \
 	pprof_1_23 pprof_1_24 pprof_1_24_cgo otelcol-ebpf-profiler \
 	rust-components rust-targets rust-tests vanity-import-check vanity-import-fix \
-	otel-from-tree otel-from-lib
+	otel-from-tree otel-from-lib cudaverify-test
 
 SHELL := /usr/bin/env bash
 
@@ -190,6 +190,21 @@ agent:
 
 legal:
 	go tool $(GO_TOOLS) go-licenses save --force . --save_path=LICENSES
+
+cudaverify-test: ebpf
+	@set -e; \
+	tmpdir=$$(mktemp -d); \
+	trap 'rm -rf "$$tmpdir"' EXIT; \
+	cupti_headers=$$(go mod download -json github.com/parca-dev/parcagpu@latest 2>/dev/null | \
+		sed -n 's/.*"Dir": "\(.*\)".*/\1/p')/ebpf; \
+	echo "==> Downloading parcagpu libs into $$tmpdir"; \
+	PARCAGPU_DIR="$$tmpdir" $(CURDIR)/test/distro-qemu/download-parcagpu.sh; \
+	echo "==> Building cudaverify.test (cupti headers: $$cupti_headers)"; \
+	CGO_ENABLED=1 CGO_CFLAGS="-I$$cupti_headers" \
+		go test -c -o "$$tmpdir/cudaverify.test" ./test/cudaverify; \
+	echo "==> Running cudaverify tests (sudo)"; \
+	cd "$$tmpdir" && sudo env LD_LIBRARY_PATH="$$tmpdir" \
+		./cudaverify.test -test.v -so-path ./libparcagpucupti.so
 
 codespell:
 	@codespell

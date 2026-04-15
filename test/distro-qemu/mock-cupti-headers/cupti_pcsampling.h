@@ -21,7 +21,8 @@ typedef struct {
     uint32_t  functionIndex;
     char     *functionName;
     uint32_t  stallReasonCount;
-    CUpti_PCSamplingStallReason stallReason[CUPTI_PC_SAMPLING_MAX_STALL_REASONS];
+    CUpti_PCSamplingStallReason *stallReason;
+    uint32_t  correlationId;
 } CUpti_PCSamplingPCData;
 
 typedef struct {
