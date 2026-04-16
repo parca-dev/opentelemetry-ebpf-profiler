@@ -91,7 +91,6 @@ struct stack_delta_page_to_info_t {
 
 #include "native_stack_trace.h"
 
-
 // unwind_native is the tail call destination for PROG_UNWIND_NATIVE.
 static EBPF_INLINE int unwind_native(struct pt_regs *ctx)
 {
