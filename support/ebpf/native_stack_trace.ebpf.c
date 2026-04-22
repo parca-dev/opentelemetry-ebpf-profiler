@@ -89,16 +89,6 @@ struct stack_delta_page_to_info_t {
   __uint(max_entries, 40000);
 } stack_delta_page_to_info SEC(".maps");
 
-// This contains the kernel PCs as returned by bpf_get_stackid(). Unfortunately the ebpf
-// program cannot read the contents, so we return the stackid in the Trace directly, and
-// make the profiling agent read the kernel mode stack trace portion from this map.
-struct kernel_stackmap_t {
-  __uint(type, BPF_MAP_TYPE_STACK_TRACE);
-  __type(key, u32);
-  __type(value, u64[PERF_MAX_STACK_DEPTH]);
-  __uint(max_entries, 16 * 1024);
-} kernel_stackmap SEC(".maps");
-
 #include "native_stack_trace.h"
 
 // unwind_native is the tail call destination for PROG_UNWIND_NATIVE.
