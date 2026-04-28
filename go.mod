@@ -13,7 +13,7 @@ go 1.25.0
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.4
 	github.com/aws/aws-sdk-go-v2/config v1.32.12
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.97.1
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.97.2
 	github.com/cilium/ebpf v0.21.0
 	github.com/coreos/pkg v0.0.0-20240122114842-bbd7aa9bf6fb
 	github.com/elastic/go-freelru v0.16.0
@@ -22,7 +22,7 @@ require (
 	github.com/klauspost/compress v1.18.5
 	github.com/mdlayher/kobject v0.0.0-20200520190114-19ca17470d7d
 	github.com/minio/sha256-simd v1.0.1
-	github.com/moby/moby/api v1.54.1
+	github.com/moby/moby/api v1.54.2
 	github.com/open-telemetry/sig-profiling/tools/profcheck v0.0.0-20260303084341-52f633d434c9
 	github.com/parca-dev/oomprof v0.1.6
 	github.com/parca-dev/usdt v0.0.2
@@ -57,7 +57,7 @@ require (
 	dario.cat/mergo v1.0.2 // indirect
 	github.com/Azure/go-ansiterm v0.0.0-20250102033503-faa5f7b0171c // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
-	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.7 // indirect
+	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.8 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.12 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.20 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.20 // indirect
