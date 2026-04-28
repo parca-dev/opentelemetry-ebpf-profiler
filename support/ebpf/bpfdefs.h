@@ -190,12 +190,9 @@ static long (*bpf_probe_read_user_str)(void *dst, int size, const void *unsafe_p
  */
 static long (*bpf_get_attach_cookie)(void *ctx) = (void *)BPF_FUNC_get_attach_cookie;
 
-  // The sizeof in bpf_trace_printk() must include \0, else no output
-  // is generated. The \n is not needed on 5.8+ kernels, but definitely on
-  // 5.4 kernels.
   #define printt(fmt, ...)                                                                         \
     ({                                                                                             \
-      const char ____fmt[] = fmt "\n";                                                             \
+      const char ____fmt[] = fmt;                                                                  \
       bpf_trace_printk(____fmt, sizeof(____fmt), ##__VA_ARGS__);                                   \
     })
 
