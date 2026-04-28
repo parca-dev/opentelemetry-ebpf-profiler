@@ -260,7 +260,7 @@ static EBPF_INLINE ErrorCode get_PyFrame(const PyProcInfo *pyinfo, void **frame)
 // one Python frame or one native frame depending on the current unwinder state.
 // This is a RODATA variable so the host agent can tune it based on whether
 // debug output is enabled (which affects the verifier instruction budget).
-BPF_RODATA_VAR(u32, python_native_loop_iters, 6)
+BPF_RODATA_VAR(u32, python_native_loop_iters, 4)
 
 // step_python processes one Python frame and updates *unwinder to indicate
 // what should happen next
