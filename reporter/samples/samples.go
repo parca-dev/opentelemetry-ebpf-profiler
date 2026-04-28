@@ -19,6 +19,8 @@ type TraceEventMeta struct {
 	Origin         libpf.Origin
 	OffTime        int64
 	PID, TID       libpf.PID
+	SpanID         libpf.APMSpanID
+	TraceID        libpf.APMTraceID
 
 	// Populated by parca-agent's oomprof path for TraceOriginMemory samples.
 	Allocs, Frees         uint64
@@ -82,4 +84,7 @@ type SampleKey struct {
 
 	TID int64
 	CPU int64
+
+	SpanID  libpf.APMSpanID
+	TraceID libpf.APMTraceID
 }
