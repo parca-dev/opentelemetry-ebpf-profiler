@@ -85,6 +85,13 @@ jobs:
           restore-keys: |
             coredumps-${{ matrix.target_arch }}
             coredumps-
+      - name: Cache luajit offset artifacts
+        uses: actions/cache@668228422ae6a00e4ad889ee87cd7109ec5666a7 # v5.0.4
+        with:
+          path: /tmp/offsets_artifacts
+          key: luajit-offsets-${{ hashFiles('interpreter/luajit/offsets_test.go') }}
+          restore-keys: |
+            luajit-offsets-
       - name: Tests
         run: make test TARGET_ARCH=${{ matrix.target_arch }} GO_FLAGS="${{ matrix.go_flags }}"
 
