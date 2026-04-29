@@ -19,6 +19,8 @@ type TraceEventMeta struct {
 	Origin         libpf.Origin
 	OffTime        int64
 	PID, TID       libpf.PID
+	SpanID         libpf.APMSpanID
+	TraceID        libpf.APMTraceID
 
 	// OriginData carries optional Origin-specific payload.
 	OriginData any
@@ -81,4 +83,7 @@ type SampleKey struct {
 
 	TID int64
 	CPU int64
+
+	SpanID  libpf.APMSpanID
+	TraceID libpf.APMTraceID
 }
