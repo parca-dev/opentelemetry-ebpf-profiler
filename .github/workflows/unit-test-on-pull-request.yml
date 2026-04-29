@@ -284,7 +284,6 @@ jobs:
     strategy:
       matrix:
         include:
-          - { target_arch: amd64, kernel: 5.4.276 }
           - { target_arch: amd64, kernel: 5.10.217 }
           - { target_arch: amd64, kernel: 5.15.159 }
           - { target_arch: amd64, kernel: 6.1.91 }
