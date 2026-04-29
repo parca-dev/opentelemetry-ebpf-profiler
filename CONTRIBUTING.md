@@ -20,7 +20,7 @@ slack channel for discussions and questions.
 
 ## Pre-requisites
 
-- Linux (5.4+ for x86-64, 5.5+ for ARM64) with eBPF enabled (the profiler currently only runs on Linux)
+- Linux (5.10+) with eBPF enabled (the profiler currently only runs on Linux)
 - Go as specified in [go.mod](https://github.com/open-telemetry/opentelemetry-ebpf-profiler/blob/main/go.mod)
 - docker
 - Rust as specified in [Cargo.toml](https://github.com/open-telemetry/opentelemetry-ebpf-profiler/blob/main/Cargo.toml)
@@ -85,6 +85,25 @@ All pull requests are squashed to a single commit upon merge to `main`.
 	tag it as `work-in-progress`, or mark it as
 	[`draft`](https://github.blog/2019-02-14-introducing-draft-pull-requests/).
 * Make sure CLA is signed and CI is clear.
+
+### How to Address Review Feedback
+
+Please use the GitHub UI to accept review suggestions that you don't
+subsequently modify. Do not reimplement them in a separate commit.
+The latter behavior is problematic as it:
+
+1. Increases burden on reviewers who have to spend additional time to check
+   that your reimplementation accurately reflects the original suggestion.
+2. Increases the probability of bugs being introduced into the codebase.
+   This is not a theoretical concern as we've seen it happen multiple times.
+3. Does not credit the reviewer who came up with the accepted suggestion.
+
+You can pull the GitHub-generated commits (after you've accepted a suggestion)
+into your local repository by executing:
+
+```sh
+git pull <YOUR_FORK> <YOUR_BRANCH_NAME>
+```
 
 ### How to Get PRs Merged
 
