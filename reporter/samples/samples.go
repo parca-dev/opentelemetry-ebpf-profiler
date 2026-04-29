@@ -20,9 +20,8 @@ type TraceEventMeta struct {
 	OffTime        int64
 	PID, TID       libpf.PID
 
-	// Populated by parca-agent's oomprof path for TraceOriginMemory samples.
-	Allocs, Frees         uint64
-	AllocBytes, FreeBytes uint64
+	// OriginData carries optional Origin-specific payload.
+	OriginData any
 }
 
 // TraceEvents holds known information about a trace.
