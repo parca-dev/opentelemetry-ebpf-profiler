@@ -146,7 +146,7 @@ func TestAddTraceAndTimes(t *testing.T) {
 	kernelName := [256]byte{}
 	copy(kernelName[:], "_Z9myKernelPfS_i")
 
-	events := []gpu.CuptiTimingEvent{{
+	events := []gpu.CuptiKernelEvent{{
 		Pid:        uint32(pid),
 		Id:         100,
 		Start:      1000,
@@ -181,7 +181,7 @@ func TestAddTimeThenTrace(t *testing.T) {
 	kernelName := [256]byte{}
 	copy(kernelName[:], "_Z6squarePfS_")
 
-	events := []gpu.CuptiTimingEvent{{
+	events := []gpu.CuptiKernelEvent{{
 		Pid:        uint32(pid),
 		Id:         200,
 		Start:      5000,
@@ -234,7 +234,7 @@ func TestCachedTemplateWithDifferentCorrelationIDs(t *testing.T) {
 
 		kn := [256]byte{}
 		copy(kn[:], tc.kernelName)
-		outputs := gpu.AddTimes([]gpu.CuptiTimingEvent{{
+		outputs := gpu.AddTimes([]gpu.CuptiKernelEvent{{
 			Pid:        uint32(pid),
 			Id:         tc.corrID,
 			Start:      0,
@@ -270,7 +270,7 @@ func TestCUDAFrameIdxNonZero(t *testing.T) {
 	kernelName := [256]byte{}
 	copy(kernelName[:], "_Z4testv")
 
-	outputs := gpu.AddTimes([]gpu.CuptiTimingEvent{{
+	outputs := gpu.AddTimes([]gpu.CuptiKernelEvent{{
 		Pid:        uint32(pid),
 		Id:         400,
 		Start:      0,
