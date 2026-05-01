@@ -41,11 +41,13 @@ type frameCacheKey struct {
 	data [3]uint64
 }
 
-// TraceInterceptor is called with the symbolized trace and metadata.
-// Return true to consume the trace (skip reporting), false to proceed
-// normally. The finishTrace callback hashes and reports the trace.
-type TraceInterceptor func(trace *libpf.Trace, meta *samples.TraceEventMeta,
-	finishTrace func(*libpf.Trace, *samples.TraceEventMeta)) bool
+// TraceInterceptor is called after symbolization with the symbolized trace
+// and metadata. Return true to consume the trace, in which case HandleTrace
+// skips its default reporting path; return false to let HandleTrace report
+// the trace normally. Consumers that need to report intercepted traces are
+// expected to do so via their own TraceReporter — the hook is intentionally
+// a one-way handoff, not a passthrough callback.
+type TraceInterceptor func(trace *libpf.Trace, meta *samples.TraceEventMeta) bool
 
 // ProcessManager is responsible for managing the events happening throughout the lifespan of a
 // process.

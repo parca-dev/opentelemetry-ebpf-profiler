@@ -101,12 +101,21 @@ func Start(ctx context.Context, tr *tracer.Tracer,
 	}()
 
 	// Return the interceptor function that diverts CUDA traces post-symbolization.
-	return func(trace *libpf.Trace, meta *samples.TraceEventMeta,
-		finishTrace func(*libpf.Trace, *samples.TraceEventMeta)) bool {
+	// Any traces InterceptTrace returns as already-complete (graph launches, or
+	// single launches whose timing arrived early) are reported here directly;
+	// traces awaiting timing are retained in the fixer and emitted later from
+	// processBatch via AddTimes.
+	return func(trace *libpf.Trace, meta *samples.TraceEventMeta) bool {
 		if meta.Origin != support.TraceOriginCuda {
 			return false
 		}
-		gpu.InterceptTrace(trace, meta, finishTrace)
+		outputs := gpu.InterceptTrace(trace, meta)
+		for i := range outputs {
+			outputs[i].Trace.Hash = traceutil.HashTrace(outputs[i].Trace)
+			if err := rep.ReportTraceEvent(outputs[i].Trace, outputs[i].Meta); err != nil {
+				log.Errorf("[parcagpu] failed to report CUDA trace: %v", err)
+			}
+		}
 		return true
 	}
 }
