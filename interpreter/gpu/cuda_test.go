@@ -138,13 +138,8 @@ func TestAddTraceAndTimes(t *testing.T) {
 	trace := makeSymbolizedTrace(0, 2, 100, 1) // CUDA frame at index 0
 	meta := &samples.TraceEventMeta{PID: pid}
 
-	var finished []gpu.CudaTraceOutput
-	finishTrace := func(t *libpf.Trace, m *samples.TraceEventMeta) {
-		finished = append(finished, gpu.CudaTraceOutput{Trace: t, Meta: m})
-	}
-
-	// InterceptTrace with no pending timing -> stored, finishTrace not called.
-	gpu.InterceptTrace(trace, meta, finishTrace)
+	// InterceptTrace with no pending timing -> stored, no outputs returned.
+	finished := gpu.InterceptTrace(trace, meta)
 	assert.Empty(t, finished, "no timing yet, should produce no outputs")
 
 	// Now timing arrives.
@@ -199,16 +194,11 @@ func TestAddTimeThenTrace(t *testing.T) {
 	outputs := gpu.AddTimes(events)
 	assert.Empty(t, outputs)
 
-	// Now trace arrives and matches - finishTrace called immediately.
+	// Now trace arrives and matches - InterceptTrace returns the output immediately.
 	trace := makeSymbolizedTrace(0, 1, 200, 1)
 	meta := &samples.TraceEventMeta{PID: pid}
 
-	var finished []gpu.CudaTraceOutput
-	finishTrace := func(t *libpf.Trace, m *samples.TraceEventMeta) {
-		finished = append(finished, gpu.CudaTraceOutput{Trace: t, Meta: m})
-	}
-
-	gpu.InterceptTrace(trace, meta, finishTrace)
+	finished := gpu.InterceptTrace(trace, meta)
 	require.Len(t, finished, 1)
 
 	out := finished[0]
@@ -226,12 +216,8 @@ func TestCachedTemplateWithDifferentCorrelationIDs(t *testing.T) {
 	t.Cleanup(func() { gpu.UnregisterTestFixer(pid) })
 
 	// Simulate two launches from the same call site with different correlation
-	// IDs and different kernel names from timing. Trace arrives first each time.
-	var finished []gpu.CudaTraceOutput
-	finishTrace := func(t *libpf.Trace, m *samples.TraceEventMeta) {
-		finished = append(finished, gpu.CudaTraceOutput{Trace: t, Meta: m})
-	}
-
+	// IDs and different kernel names from timing. Trace arrives first each time,
+	// so InterceptTrace returns no early-complete outputs.
 	for _, tc := range []struct {
 		corrID     uint32
 		kernelName string
@@ -243,7 +229,8 @@ func TestCachedTemplateWithDifferentCorrelationIDs(t *testing.T) {
 		trace := makeSymbolizedTrace(0, 2, tc.corrID, 1)
 		meta := &samples.TraceEventMeta{PID: pid}
 
-		gpu.InterceptTrace(trace, meta, finishTrace)
+		assert.Empty(t, gpu.InterceptTrace(trace, meta),
+			"trace arrives first, no early-complete outputs expected")
 
 		kn := [256]byte{}
 		copy(kn[:], tc.kernelName)
@@ -277,14 +264,8 @@ func TestCUDAFrameIdxNonZero(t *testing.T) {
 	trace := makeSymbolizedTrace(2, 2, 400, 1) // [native, native, CUDA, native, native]
 	meta := &samples.TraceEventMeta{PID: pid}
 
-	var finished []gpu.CudaTraceOutput
-	finishTrace := func(t *libpf.Trace, m *samples.TraceEventMeta) {
-		finished = append(finished, gpu.CudaTraceOutput{Trace: t, Meta: m})
-	}
-
 	// Trace first, timing second.
-	gpu.InterceptTrace(trace, meta, finishTrace)
-	assert.Empty(t, finished)
+	assert.Empty(t, gpu.InterceptTrace(trace, meta))
 
 	kernelName := [256]byte{}
 	copy(kernelName[:], "_Z4testv")

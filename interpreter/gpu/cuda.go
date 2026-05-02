@@ -507,11 +507,11 @@ func (f *gpuTraceFixer) prepTrace(trace *libpf.Trace, meta *samples.TraceEventMe
 }
 
 // InterceptTrace finds the CUDA frame, extracts the correlation ID and CBID,
-// and delegates to the appropriate fixer. When timing is already available the
-// finishTrace callback is invoked (outside the fixer lock); otherwise the trace
-// is stored for later matching via AddTimes.
-func InterceptTrace(trace *libpf.Trace, meta *samples.TraceEventMeta,
-	finishTrace func(*libpf.Trace, *samples.TraceEventMeta)) {
+// and delegates to the appropriate fixer. Returns any traces that are now
+// complete — graph launches, or single launches whose timing already arrived.
+// Traces awaiting timing are retained inside the fixer and emitted later via
+// AddTimes. The caller is responsible for hashing and reporting each output.
+func InterceptTrace(trace *libpf.Trace, meta *samples.TraceEventMeta) []CudaTraceOutput {
 	// Find the CUDA kernel frame and extract correlation ID + CBID.
 	cudaFrameIdx := -1
 	var correlationID uint32
@@ -527,7 +527,7 @@ func InterceptTrace(trace *libpf.Trace, meta *samples.TraceEventMeta,
 	}
 	if cudaFrameIdx < 0 {
 		log.Errorf("[cuda] CUDA trace has no CUDAKernelFrame")
-		return
+		return nil
 	}
 
 	log.Debugf("[cuda] adding trace with id %d cbid %d (0x%x) for pid %d",
@@ -537,20 +537,17 @@ func InterceptTrace(trace *libpf.Trace, meta *samples.TraceEventMeta,
 	value, ok := gpuFixers.Load(pid)
 	if !ok {
 		log.Warnf("no GPU fixer found for PID %d in InterceptTrace", pid)
-		return
+		return nil
 	}
 	fixer := value.(*gpuTraceFixer)
 
 	if isGraphLaunch(cbid) {
-		outputs := fixer.addGraphTrace(trace, meta, cudaFrameIdx, correlationID, cbid)
-		for i := range outputs {
-			finishTrace(outputs[i].Trace, outputs[i].Meta)
-		}
-	} else {
-		if out, ok := fixer.addSingleTrace(trace, meta, cudaFrameIdx, correlationID, cbid); ok {
-			finishTrace(out.Trace, out.Meta)
-		}
+		return fixer.addGraphTrace(trace, meta, cudaFrameIdx, correlationID, cbid)
 	}
+	if out, ok := fixer.addSingleTrace(trace, meta, cudaFrameIdx, correlationID, cbid); ok {
+		return []CudaTraceOutput{out}
+	}
+	return nil
 }
 
 // addTimeSingle is a static function that delegates to the appropriate fixer for the PID.
