@@ -138,4 +138,27 @@ TODO - explain why JITted functions occupy additional space.
 
 ## Putting it All Together: How Our Unwinder Unwinds
 
-Assume that we have already extracted all necessary information about the LuaJIT process (so we know the location of the top-level per-thread state and the global state, all relevant field offsets in structs, and which memory ranges correspond to JITted code or interpreter code). How we collect this information is the subject of another page in these docs (TODO: link it once it's written). We now need to explain how, given this information and the internals documented above, we unwind LuaJIT stacks. (TODO.)
+Assume that we have already extracted all necessary information about the LuaJIT process (so we know the location of the top-level per-thread state and the global state, all relevant field offsets in structs, and which memory ranges correspond to JITted code or interpreter code). How we collect this information is the subject of another page in these docs (TODO: link it once it's written). We now need to explain how, given this information and the internals documented above, we unwind LuaJIT stacks.
+
+During LuaJIT unwinding, there are two relevant stacks: the virtual stack (pointed to by a field in the top-level per-thread `L` object) and the physical machine stack. Lua-to-Lua calls (whether JITted or interpreted) do not push or pop new frames onto the physical stack; all Lua interpretation happens within one physical stack frame.
+
+Thus, the algorithm for walking LuaJIT stacks look like this, in pseudocode:
+
+``` pseudocode
+initialize virtual frame from L->base
+While we haven't reached the root of the virtual stack:
+    Record the Lua frame
+    Set the virtual frame for the next iteration to the next Lua frame down the stack
+    If the current Lua frame is associated with a physical stack frame:
+        # Presumably we are at the beginning of a Native-to-Lua transition
+        # (e.g. lua_call, lua_pcall, lua_cpcall, etc.)
+        unwind one native frame and jump back into the native unwinder.
+```
+
+In order to record the Lua frame, we need two pieces of information: the start instruction address of the function, and the current program counter. By subtracting one from the other, we can get the offset of the current instruction within its function, which is what is actually needed for symbolization.
+
+To get the start IP of the function, we read the function object of the currently-executing frame: this is always on the virtual stack two elements below the frame base (see the [`FRAME_FUNC`](https://github.com/luajit/luajit/blob/659a6169/src/vm_arm64.dasc#L205-L205) constant in the interpreter). The start IP is a field on the C struct pointed to by that value.
+
+To get the current program counter, our approach depends on whether we are considering the leaf frame or an internal frame. If an internal frame, the answer is simple: the return address is pushed onto the stack, one element before the frame base, and so we can read it directly from the stack (just like how we get the physical return address from the physical stack when unwinding native code). For a leaf frame, on the other hand, the process is slightly more complicated. When executing bytecode instruction handlers in the interpreter, the virtual program counter is stored in a known register (x21 on aarch64, or rbx in x86-64). When executing JITted Lua code, that register holds the last PC executed before entering the JITted loop, which is the best we can do (we don't currently attempt to correlate the physical machine program counter to a line of code. TODO figure out whether this is even possible; if so, we should do it! If not explain why). The final case is when the code has called out to an internal helper function written in C; for example, arithmetic operations [`may invoke lj_meta_arith`](https://github.com/luajit/luajit/blob/659a6169/src/vm_arm64.dasc#L891-L892). When the interpreter invokes helpers like this, it stores the virtual PC at a known place on the _physical_ stack; see the line `str PC, SAVE_PC` in the link above, which macro-expands to `str x21, [sp, #8]` on aarch64.
+
+To get the previous Lua frame, if the current frame is a Lua frame, we get the return address of the current frame from the virtual stack. We then subtract 1 to get the call instruction that set up the current frame. By decoding that call instruction, we can determine the size of the frame it sets up, allowing us to unwind. If, on the other hand, the current frame is a C-to-Lua transition frame, the frame size is directly stored on the virtual stack.
