@@ -698,6 +698,12 @@ const (
 	// Number of GPU trace entries cleared due to threshold
 	IDCudaTracesCleared = 302
 
+	// Number of failures to read LuaJIT context pointer
+	IDUnwindLuaJITErrNoContext = 303
+
+	// Number of failures in context pointer validity check
+	IDUnwindLuaJITErrLMismatch = 304
+
 	// max number of ID values, keep this as *last entry*
-	IDMax = 303
+	IDMax = 305
 )

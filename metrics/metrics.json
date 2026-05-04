@@ -2208,5 +2208,20 @@
     "name": "CudaTracesCleared",
     "field": "cuda.traces_cleared",
     "id": 302
+  },
+  {
+    "description": "Number of failures to read LuaJIT context pointer",
+    "type": "counter",
+    "name": "UnwindLuaJITErrNoContext",
+    "field": "bpf.luajit.errors.no_context",
+    "id": 303
+  },
+  {
+    "description": "Number of failures in context pointer validity check",
+    "type": "counter",
+    "name": "UnwindLuaJITErrLMismatch",
+    "field": "bpf.luajit.errors.l_mismatch",
+    "id": 304
   }
+
 ]
