@@ -89,12 +89,53 @@ When the Lua function returns, the `BC_RET` instruction (or a variant) is able t
 
 ### `lua_CFunction`s and `lua_cpcall`
 
-TODO
+A C program may define functions that are intended to be called from Lua. These must have the signature defined as `lua_CFunction` as follows:
+
+``` c
+typedef int (*lua_CFunction) (lua_State *L);
+```
+
+That is, a function that takes a pointer to `lua_State` and returns an integer, which represents the number of return values on the Lua virtual stack.
+
+For example, a function that, from the perspective of Lua code, takes two integers and returns their sum and product can be written in C as follows:
+
+``` c
+int return_numbers(lua_State *L)
+{  
+  int x = (int)lua_tointeger(L, -1);
+  int y = (int)lua_tointeger(L, -2);
+  lua_pushstring(L, "hello, world!");
+  lua_pushinteger(L, x + y);
+  lua_pushinteger(L, x * y);
+  return 2;
+}
+```
+
+It can be registered as follows from C code, after which it can be called from Lua.
+
+``` c
+lua_pushcclosure(L, return_numbers, 0);
+lua_setglobal(L, "retnums");
+```
+
+Note that the `return_numbers` function pushes a value to the stack that is not ultimately returned: the "hello, world!" string. This simulates a function using the stack as scratch space for temporary values, and is intended to illustrate the fact that the interpreter handles popping all temporary values and moving the return values to the proper place on the stack.
+
+The `lua_pushcclosure` sets the `pc` value of the resulting function object to point to the [`FUNCC`](https://github.com/luajit/luajit/blob/659a6169/src/vm_arm64.dasc#L4046-L4075) bytecode handler, which sets up the values in `L` so that the C function (and the API calls it uses) can find the base and top of the virtual stack frame. This bytecode does not need to do any manipulation of the _physical_ stack; the `lua_CFunction` (here, `return_numbers`) handles setting up its own stack frame, like any C function (at least in the ABIs of the systems we are interested in).
+
+`lua_CFunction`s can be invoked from within C by passing them to `lua_cpcall`. The only reason to do this (as opposed to creating the function object and invoking it with `lua_call` or `lua_pcall`, or even just calling into the C function directly) is subtle and related to error-handling, and not particularly interesting for our purposes. However, we do need to be able to unwind `lua_cpcall` invocations, because one is used in interpreter startup and is thus below all user code in the stack. What's relevant for our purposes is that these behave almost identically to `lua_pcall` or `lua_call` invocations: a new physical frame is created with size `CFRAME_SIZE` and pushed onto the linked list of cframes maintained in the per-thread top-level state
 
 ### Lua-to-C FFI
 
-TODO
+The functions described in the previous section, while superficially written in C, are basically Lua functions: they take and return values on the Lua stack, and interoperate seamlessly with Lua code. For calling "normal" C functions that know nothing about Lua (for example, C standard library functions), another approach is needed.
+
+We don't yet fully support stacks that enter C functions via the FFI mechanism.
+
+TODO: update this section once we do. See vm_ffi_call and vm_ffi_callack in vm_arm64.dasc.
+
+### JIT Functions
+
+TODO - explain why JITted functions occupy additional space.
 
 ## Putting it All Together: How Our Unwinder Unwinds
 
-TODO
+Assume that we have already extracted all necessary information about the LuaJIT process (so we know the location of the top-level per-thread state and the global state, all relevant field offsets in structs, and which memory ranges correspond to JITted code or interpreter code). How we collect this information is the subject of another page in these docs (TODO: link it once it's written). We now need to explain how, given this information and the internals documented above, we unwind LuaJIT stacks. (TODO.)
