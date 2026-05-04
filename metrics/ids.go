@@ -699,10 +699,10 @@ const (
 	IDCudaTracesCleared = 302
 
 	// Number of failures to read LuaJIT context pointer
-	IDLuaJITErrNoContext = 303
+	IDUnwindLuaJITErrNoContext = 303
 
 	// Number of failures in context pointer validity check
-	IDLuaJITErrLMismatch = 304
+	IDUnwindLuaJITErrLMismatch = 304
 
 	// max number of ID values, keep this as *last entry*
 	IDMax = 305
