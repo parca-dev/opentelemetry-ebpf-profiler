@@ -19,9 +19,6 @@ type TraceEventMeta struct {
 	Origin         libpf.Origin
 	OffTime        int64
 	PID, TID       libpf.PID
-
-	// OriginData carries optional Origin-specific payload.
-	OriginData any
 }
 
 // TraceEvents holds known information about a trace.
