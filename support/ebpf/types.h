@@ -415,6 +415,7 @@ typedef enum TraceOrigin {
   TRACE_PROBE,
   TRACE_MEMORY,
   TRACE_CUDA_LAUNCH,
+  TRACE_GPU_PC,
 } TraceOrigin;
 
 // Maximum number of unique stack deltas needed on a system. This is based on
