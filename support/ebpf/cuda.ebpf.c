@@ -61,15 +61,25 @@ struct cubin_event {
   u64 cubin_size;
 };
 
+// CUDA 12.4+ extends cupti_pc_data with a trailing correlationId (u32) at
+// offset CUPTI_PC_DATA_BASE_SIZE.  We require 12.4+ for pc sampling.
+#define CUPTI_PC_DATA_V22_SIZE (CUPTI_PC_DATA_BASE_SIZE + 4)
+
+// pc_sample_event embeds cupti_pc_data + correlation_id so cuda_pc_sample_batch
+// can read the producer's 60-byte record directly into the ringbuf-reserved
+// event with a single bpf_probe_read_user — no stack-local intermediate, no
+// field-by-field copy.  cupti_pc_data is packed but all its fields are already
+// naturally aligned, so the layout matches a plain Go struct with the same
+// fields.
+//
+// The data.size, data.function_index, data._pc_pad, data.function_name_ptr,
+// data.stall_reason_ptr fields are unused by the Go consumer but ride along.
 struct pc_sample_event {
   u32 event_type; // = EVENT_TYPE_PC_SAMPLE
-  u32 stall_reason_count;
-  u64 cubin_crc;
-  u64 pc_offset;
-  u32 function_index;
-  u32 correlation_id; // 0 if pre-CUDA-12.4
   u32 pid;
-  u32 _pad;
+  struct cupti_pc_data data; // 56 bytes (packed but naturally aligned)
+  u32 correlation_id;        // CUDA 12.4+ extension, follows immediately
+  u32 _pad;                  // align next field to 8
   char function_name[MAX_FUNC_NAME_LEN];
   struct cupti_stall_reason stall_reasons[MAX_STALL_REASONS];
 };
@@ -96,19 +106,24 @@ struct error_event {
 // Also stashes pre-parsed USDT args for the activity_batch and pc_sample_batch
 // tail calls — bpf_get_attach_cookie does not return the correct cookie after
 // bpf_tail_call, so we parse args in cuda_probe and pass them via this map.
-#define MAX_BATCH_SIZE     128
-#define PTR_BATCH          16
-// BPF-side limit for pc_sample_batch.  MAX_PC_BATCH_SIZE (512) from cupti_bpf.h
-// is the producer-side max; using it directly blows past the BPF verifier's 1M
-// instruction cap because each iteration has conditional stall-reason and
-// function-name reads.
-#define BPF_PC_BATCH_LIMIT 256
+#define MAX_BATCH_SIZE        128
+#define PTR_BATCH             16
+// Per-chunk limit for pc_sample_batch.  Verified independently per program;
+// BPF_PC_BATCH_LIMIT is what the verifier walks in a single load.  Using
+// MAX_PC_BATCH_SIZE (512) directly blows past the 1M-insn complexity cap on
+// older kernels (e.g. 6.1) because each iteration has stall-reason +
+// function-name reads.  We chain up to BPF_PC_MAX_TAIL_CALLS chunks via
+// bpf_tail_call to handle batches up to BPF_PC_TOTAL_LIMIT records.
+#define BPF_PC_BATCH_LIMIT    128
+#define BPF_PC_MAX_TAIL_CALLS 8
+#define BPF_PC_TOTAL_LIMIT    (BPF_PC_BATCH_LIMIT * BPF_PC_MAX_TAIL_CALLS)
 struct cuda_scratch {
   struct cupti_activity_kernel5 rec;
   u64 ab_ptrs_base;
   u32 ab_num_activities;
   u64 pc_ptrs_base;
   u32 pc_count;
+  u32 pc_next_offset; // start of the next chunk to process; 0 on entry
 };
 
 struct cuda_scratch_heap_t {
@@ -117,6 +132,22 @@ struct cuda_scratch_heap_t {
   __type(value, struct cuda_scratch);
   __uint(max_entries, 1);
 } cuda_scratch_heap SEC(".maps");
+
+// Tail-call prog array for cuda_probe and the pc_sample_batch chunk chain.
+// Heavy loop bodies (activity_batch, pc_sample_batch) push the inlined
+// dispatcher past BPF_COMPLEXITY_LIMIT_JMP_SEQ (8192), so they live in
+// dedicated tail-called programs.  pc_sample_batch additionally tail-chains
+// into itself (slot 1) up to BPF_PC_MAX_TAIL_CALLS times to process batches
+// larger than BPF_PC_BATCH_LIMIT records.
+//
+// Key 0: cuda_activity_batch_tail
+// Key 1: cuda_pc_sample_batch_tail
+struct cuda_progs_t {
+  __uint(type, BPF_MAP_TYPE_PROG_ARRAY);
+  __type(key, u32);
+  __type(value, u32);
+  __uint(max_entries, 2);
+} cuda_progs SEC(".maps");
 
 // Unified ringbuf for all CUPTI events sent to user-space. Every event begins
 // with a u32 event_type discriminator at offset 0. 1 MB capacity.
@@ -332,99 +363,141 @@ int BPF_USDT(cuda_stall_reason_map, u64 names_base, u32 count)
   return 0;
 }
 
-// USDT: parcagpu/pc_sample_batch(const void **ptrs, uint32 count).
-// Iterates pointers to CUpti_PCSamplingPCData records, chases each one and
-// emits a pc_sample_event per record.  Heavy loop, tail-called from cuda_probe.
-SEC("usdt/parcagpu/pc_sample_batch")
-int BPF_USDT(cuda_pc_sample_batch, u64 ptrs_base, u32 count)
+// Error codes for the err_exit path of cuda_pc_sample_batch.
+#define PC_SAMPLE_ERR_PROBE_READ   1
+#define PC_SAMPLE_ERR_RINGBUF_FULL 2
+
+// process_pc_sample_chunk handles a single chunk of up to BPF_PC_BATCH_LIMIT
+// records starting at start_offset within ptrs_base[0..count).  After the
+// chunk, if more records remain (start_offset + BPF_PC_BATCH_LIMIT < count),
+// it stashes the continuation state in scratch and tail-calls into
+// cuda_progs[1] (== cuda_pc_sample_batch_tail).  Up to BPF_PC_MAX_TAIL_CALLS
+// hops cover BPF_PC_TOTAL_LIMIT records; each program is verified
+// independently, so the per-program complexity stays under the 1M-insn cap on
+// older kernels.
+//
+// Error handling: any read or ringbuf failure jumps to err_exit, which bails
+// out of the entire batch.  We don't `continue` past per-record errors because
+// the BPF verifier on kernels < 6.4 doesn't merge post-continue state cleanly
+// with the next iteration's head, blowing past the 1M-insn complexity cap.
+// A single termination path is dramatically cheaper to verify.
+static EBPF_INLINE int
+process_pc_sample_chunk(struct pt_regs *ctx, u64 ptrs_base, u32 count, u32 start_offset)
 {
   u64 pid_tgid = bpf_get_current_pid_tgid();
   u32 pid      = pid_tgid >> 32;
+  u32 err      = 0;
 
-  if (count > BPF_PC_BATCH_LIMIT) {
-    count = BPF_PC_BATCH_LIMIT;
+  u32 end = count;
+  if (end > start_offset + BPF_PC_BATCH_LIMIT) {
+    end = start_offset + BPF_PC_BATCH_LIMIT;
   }
 
   // Nested loop mirrors cuda_activity_batch — outer reads PTR_BATCH pointers
-  // at a time into a stack-local array, inner processes them.  Keeps the
-  // verifier's jump-sequence count under control.
-  u64 ptrs[PTR_BATCH] = {};
+  // at a time into a stack-local array, inner processes them.
+  u64 ptrs[PTR_BATCH];
 
   for (u32 batch = 0; batch < BPF_PC_BATCH_LIMIT / PTR_BATCH; batch++) {
-    u32 base = batch * PTR_BATCH;
-    if (base >= count) {
+    u32 base = start_offset + batch * PTR_BATCH;
+    if (base >= end) {
       break;
     }
 
     if (bpf_probe_read_user(ptrs, sizeof(ptrs), (void *)(ptrs_base + base * sizeof(u64))) != 0) {
-      break;
+      err = PC_SAMPLE_ERR_PROBE_READ;
+      goto err_exit;
     }
 
     for (u32 j = 0; j < PTR_BATCH; j++) {
-      if (base + j >= count) {
+      if (base + j >= end) {
         break;
       }
 
       u64 rec_ptr = ptrs[j];
-      if (rec_ptr == 0) {
-        continue;
-      }
-
-      struct cupti_pc_data rec = {};
-      if (bpf_probe_read_user(&rec, sizeof(rec), (void *)rec_ptr) != 0) {
-        continue;
-      }
 
       struct pc_sample_event *evt = bpf_ringbuf_reserve(&cupti_events, sizeof(*evt), 0);
       if (!evt) {
-        continue;
-      }
-      evt->event_type     = EVENT_TYPE_PC_SAMPLE;
-      evt->pid            = pid;
-      evt->_pad           = 0;
-      evt->cubin_crc      = rec.cubin_crc;
-      evt->pc_offset      = rec.pc_offset;
-      evt->function_index = rec.function_index;
-      evt->correlation_id = 0;
-
-      // CUDA 12.4+ / CUPTI v22+ records have correlationId immediately after
-      // the base struct (size > 56 indicates the extended layout).
-      if (rec.size > CUPTI_PC_DATA_BASE_SIZE) {
-        u32 corr = 0;
-        bpf_probe_read_user(&corr, sizeof(corr), (void *)(rec_ptr + CUPTI_PC_DATA_BASE_SIZE));
-        evt->correlation_id = corr;
+        err = PC_SAMPLE_ERR_RINGBUF_FULL;
+        goto err_exit;
       }
 
-      if (rec.function_name_ptr) {
+      // Read the 60-byte cupti_pc_data + correlation_id record directly into
+      // evt — no stack-local intermediate, no field copies.  The 4 trailing
+      // bytes past sizeof(evt->data) (==56) land in evt->correlation_id.
+      if (bpf_probe_read_user(&evt->data, CUPTI_PC_DATA_V22_SIZE, (void *)rec_ptr) != 0) {
+        bpf_ringbuf_discard(evt, 0);
+        err = PC_SAMPLE_ERR_PROBE_READ;
+        goto err_exit;
+      }
+
+      evt->event_type = EVENT_TYPE_PC_SAMPLE;
+      evt->pid        = pid;
+
+      // bpf_probe_read_user_str returns -EFAULT on a NULL ptr without zeroing
+      // the destination, and ringbuf-reserved memory isn't pre-zeroed.  Pre-
+      // write '\0' so the buffer is sane on either path.
+      evt->function_name[0] = '\0';
+      if (
         bpf_probe_read_user_str(
-          evt->function_name, sizeof(evt->function_name), (void *)rec.function_name_ptr);
-      } else {
-        evt->function_name[0] = '\0';
+          evt->function_name, sizeof(evt->function_name), (void *)evt->data.function_name_ptr) <
+        0) {
+        bpf_ringbuf_discard(evt, 0);
+        err = PC_SAMPLE_ERR_PROBE_READ;
+        goto err_exit;
       }
 
-      u32 sr_count = rec.stall_reason_count;
-      if (sr_count > MAX_STALL_REASONS) {
-        sr_count = MAX_STALL_REASONS;
-      }
-      evt->stall_reason_count = sr_count;
-
-      if (rec.stall_reason_ptr && sr_count > 0) {
-        // Fixed-size copy avoids verifier state explosion from the variable-
-        // length sr_count * sizeof(...).  Extra entries beyond sr_count are
-        // harmless (consumer reads only sr_count entries).
+      // No clamp on stall_reason_count — the Go consumer already clamps to
+      // MAX_STALL_REASONS and the fixed-size copy below caps what's actually
+      // readable to MAX_STALL_REASONS entries regardless of the count value.
+      if (
         bpf_probe_read_user(
-          evt->stall_reasons, sizeof(evt->stall_reasons), (void *)rec.stall_reason_ptr);
+          evt->stall_reasons, sizeof(evt->stall_reasons), (void *)evt->data.stall_reason_ptr) !=
+        0) {
+        bpf_ringbuf_discard(evt, 0);
+        err = PC_SAMPLE_ERR_PROBE_READ;
+        goto err_exit;
       }
 
       bpf_ringbuf_submit(evt, 0);
     }
   }
 
+  // Chain to next chunk if more records remain.  bpf_tail_call replaces the
+  // current program; if it returns, it failed (max recursion or empty slot).
+  if (end < count) {
+    u32 zero                     = 0;
+    struct cuda_scratch *scratch = bpf_map_lookup_elem(&cuda_scratch_heap, &zero);
+    if (!scratch) {
+      return 0;
+    }
+    scratch->pc_ptrs_base   = ptrs_base;
+    scratch->pc_count       = count;
+    scratch->pc_next_offset = end;
+    bpf_tail_call(ctx, &cuda_progs, 1);
+    DEBUG_PRINT("cuda_pc_sample_batch: tail_call failed at offset=%u", end);
+  }
+  return 0;
+
+err_exit:
+  DEBUG_PRINT("cuda_pc_sample_batch: bailing out, err=%u offset=%u", err, start_offset);
   return 0;
 }
 
-// Tail-call entry point for cuda_pc_sample_batch.  Reads pre-parsed USDT args
-// from the scratch map (set by cuda_probe before bpf_tail_call).
+// USDT: parcagpu/pc_sample_batch(const void **ptrs, uint32 count).
+// Entry point for single-shot uprobe attachment.  Processes the first chunk
+// and tail-chains to cuda_pc_sample_batch_tail for any remaining chunks.
+SEC("usdt/parcagpu/pc_sample_batch")
+int BPF_USDT(cuda_pc_sample_batch, u64 ptrs_base, u32 count)
+{
+  if (count > BPF_PC_TOTAL_LIMIT) {
+    count = BPF_PC_TOTAL_LIMIT;
+  }
+  return process_pc_sample_chunk(ctx, ptrs_base, count, 0);
+}
+
+// Tail-call entry point for the chunk chain.  Reads continuation state from
+// scratch and processes the next chunk.  Re-entered up to
+// BPF_PC_MAX_TAIL_CALLS times via bpf_tail_call from process_pc_sample_chunk.
 SEC("usdt/cuda_pc_sample_batch_tail")
 int cuda_pc_sample_batch_tail(struct pt_regs *ctx)
 {
@@ -433,7 +506,8 @@ int cuda_pc_sample_batch_tail(struct pt_regs *ctx)
   if (!scratch) {
     return 0;
   }
-  return ____cuda_pc_sample_batch(ctx, scratch->pc_ptrs_base, scratch->pc_count);
+  return process_pc_sample_chunk(
+    ctx, scratch->pc_ptrs_base, scratch->pc_count, scratch->pc_next_offset);
 }
 
 // USDT: parcagpu/error(int32 code, const char *message, const char *component).
@@ -475,20 +549,6 @@ int BPF_USDT(cuda_error, s32 code, u64 message_ptr, u64 component_ptr)
 #define CUDA_PROG_STALL_REASON    5
 #define CUDA_PROG_ERROR           6
 
-// Tail-call prog array for cuda_probe.  Heavy loop bodies (activity_batch and
-// pc_sample_batch) push the inlined dispatcher past BPF_COMPLEXITY_LIMIT_JMP_SEQ
-// (8192), so they live in dedicated tail-called programs.  Other handlers are
-// inlined directly in cuda_probe.
-//
-// Key 0: cuda_activity_batch_tail
-// Key 1: cuda_pc_sample_batch_tail
-struct cuda_progs_t {
-  __uint(type, BPF_MAP_TYPE_PROG_ARRAY);
-  __type(key, u32);
-  __type(value, u32);
-  __uint(max_entries, 2);
-} cuda_progs SEC(".maps");
-
 SEC("usdt/cuda_probe")
 int cuda_probe(struct pt_regs *ctx)
 {
@@ -529,8 +589,13 @@ int cuda_probe(struct pt_regs *ctx)
     if (!scratch) {
       break;
     }
-    scratch->pc_ptrs_base = (u64)bpf_usdt_arg0(ctx);
-    scratch->pc_count     = (u32)bpf_usdt_arg1(ctx);
+    u32 cnt = (u32)bpf_usdt_arg1(ctx);
+    if (cnt > BPF_PC_TOTAL_LIMIT) {
+      cnt = BPF_PC_TOTAL_LIMIT;
+    }
+    scratch->pc_ptrs_base   = (u64)bpf_usdt_arg0(ctx);
+    scratch->pc_count       = cnt;
+    scratch->pc_next_offset = 0;
     bpf_tail_call(ctx, &cuda_progs, 1);
     break;
   }

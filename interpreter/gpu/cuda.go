@@ -16,7 +16,9 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
+	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
+	"go.opentelemetry.io/ebpf-profiler/traceutil"
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
@@ -36,9 +38,12 @@ const (
 
 	// BPF attach cookie values - must match CUDA_PROG_* in cuda.ebpf.c.
 	// Used in the low 32 bits of the BPF attach cookie so cuda_probe can
-	// distinguish probes.  The cuda_progs prog array uses keys 0 (activity_batch)
-	// and 1 (pc_sample_batch) for tail-call dispatch of heavy loops; everything
-	// else is inlined directly in cuda_probe.
+	// distinguish probes.  The cuda_progs prog array uses keys 0
+	// (activity_batch) and 1 (pc_sample_batch) for tail-call dispatch of heavy
+	// loops; everything else is inlined directly in cuda_probe.  The
+	// pc_sample_batch program additionally tail-chains into itself (slot 1) up
+	// to BPF_PC_MAX_TAIL_CALLS times to process batches larger than one chunk
+	// while keeping each program under the 1M-insn verifier complexity cap.
 	CudaProgCorrelation    = 0
 	CudaProgKernelExec     = 1
 	CudaProgActivityBatch  = 2
@@ -69,18 +74,35 @@ type CuptiCubinEvent struct {
 	CubinSize uint64
 }
 
-// CuptiPCSampleEvent matches struct pc_sample_event in cuda.ebpf.c.
+// CuptiPCData mirrors struct cupti_pc_data in cupti_bpf.h (parcagpu).  It is
+// 56 bytes, packed but with all fields naturally aligned so a plain Go struct
+// matches the C byte layout.  Only CubinCRC, PCOffset and StallReasonCount are
+// consumed on the Go side; the rest are anonymous padding placeholders so the
+// single-shot bpf_probe_read_user lands the consumed fields at the right
+// offsets.  The function-name and stall-reason pointers are used by BPF
+// in-kernel before the event is submitted to the ringbuf.
+type CuptiPCData struct {
+	_                uint64 // size
+	CubinCRC         uint64
+	PCOffset         uint64
+	_                uint32 // function_index
+	_                uint32 // _pc_pad
+	_                uint64 // function_name_ptr (used by BPF only)
+	StallReasonCount uint64
+	_                uint64 // stall_reason_ptr (used by BPF only)
+}
+
+// CuptiPCSampleEvent matches struct pc_sample_event in cuda.ebpf.c.  Data +
+// CorrelationID receive the producer's 60-byte CUDA 12.4+ pc-sampling record
+// via a single bpf_probe_read_user.
 type CuptiPCSampleEvent struct {
-	EventType         uint32
-	StallReasonCount  uint32
-	CubinCRC          uint64
-	PCOffset          uint64
-	FunctionIndex     uint32
-	CorrelationID     uint32
-	Pid               uint32
-	_pad              uint32
-	FunctionName      [128]byte
-	StallReasons      [64]CuptiStallReason
+	EventType     uint32
+	Pid           uint32
+	Data          CuptiPCData
+	CorrelationID uint32
+	_             uint32 // align next field to 8
+	FunctionName  [128]byte
+	StallReasons  [64]CuptiStallReason
 }
 
 // CuptiStallReason matches struct cupti_stall_reason in cupti_bpf.h.
@@ -144,6 +166,20 @@ type gpuTraceFixer struct {
 	timesAwaitingTraces map[uint32][]CuptiKernelEvent   // keyed by correlation ID
 	tracesAwaitingTimes map[uint32]*SymbolizedCudaTrace // keyed by correlation ID
 	maxCorrelationId    uint32                          // track highest ID for threshold-based clearing
+
+	// pcTraces keeps recently received traces available for PC sample correlation.
+	// Unlike tracesAwaitingTimes, entries here are not consumed when timing arrives.
+	// Cleaned up by the same threshold-based logic in maybeClear.
+	pcTraces map[uint32]*SymbolizedCudaTrace
+
+	// pendingPCSamples stores PC samples that arrived before their correlation
+	// trace. Resolved when addSingleTrace/addGraphTrace stores the trace.
+	pendingPCSamples map[uint32][]pendingPCSample
+}
+
+type pendingPCSample struct {
+	ev  CuptiPCSampleEvent
+	rep reporter.TraceReporter
 }
 
 type linkEntry struct {
@@ -382,6 +418,8 @@ func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Addre
 	fixer := &gpuTraceFixer{
 		timesAwaitingTraces: make(map[uint32][]CuptiKernelEvent),
 		tracesAwaitingTimes: make(map[uint32]*SymbolizedCudaTrace),
+		pcTraces:            make(map[uint32]*SymbolizedCudaTrace),
+		pendingPCSamples:    make(map[uint32][]pendingPCSample),
 	}
 
 	gpuFixers.Store(pid, fixer)
@@ -446,6 +484,29 @@ func (f *gpuTraceFixer) addSingleTrace(trace *libpf.Trace, meta *samples.TraceEv
 		f.maxCorrelationId = correlationID
 	}
 
+	// Always store for PC sample correlation, even if timing already arrived.
+	st := &SymbolizedCudaTrace{
+		Trace:         trace,
+		Meta:          meta,
+		CUDAFrameIdx:  cudaFrameIdx,
+		CorrelationID: correlationID,
+		CBID:          cbid,
+	}
+	f.pcTraces[correlationID] = st
+
+	// Resolve any PC samples that arrived before this trace.  Emit all of them
+	// from a single goroutine — spawning one per sample would burn scheduler
+	// time when a hot kernel can buffer dozens-to-hundreds of samples.  We
+	// still want a goroutine so we drop f.mu before rep.ReportTraceEvent.
+	if pending, ok := f.pendingPCSamples[correlationID]; ok {
+		delete(f.pendingPCSamples, correlationID)
+		go func(pending []pendingPCSample, st *SymbolizedCudaTrace) {
+			for i := range pending {
+				emitPCSample(&pending[i].ev, pending[i].rep, st)
+			}
+		}(pending, st)
+	}
+
 	evs, ok := f.timesAwaitingTraces[correlationID]
 	if ok && len(evs) > 0 {
 		log.Debugf("[cuda] gpu trace completed id %d cbid %d (0x%x) for pid %d",
@@ -455,14 +516,8 @@ func (f *gpuTraceFixer) addSingleTrace(trace *libpf.Trace, meta *samples.TraceEv
 		return out, true
 	}
 
-	// Store trace for future timing events
-	f.tracesAwaitingTimes[correlationID] = &SymbolizedCudaTrace{
-		Trace:         trace,
-		Meta:          meta,
-		CUDAFrameIdx:  cudaFrameIdx,
-		CorrelationID: correlationID,
-		CBID:          cbid,
-	}
+	// Store trace for future timing events (reuse the pcTraces entry).
+	f.tracesAwaitingTimes[correlationID] = f.pcTraces[correlationID]
 	return CudaTraceOutput{}, false
 }
 
@@ -491,13 +546,15 @@ func (f *gpuTraceFixer) addGraphTrace(trace *libpf.Trace, meta *samples.TraceEve
 	}
 
 	// Always store for future timing events
-	f.tracesAwaitingTimes[correlationID] = &SymbolizedCudaTrace{
+	st := &SymbolizedCudaTrace{
 		Trace:         trace,
 		Meta:          meta,
 		CUDAFrameIdx:  cudaFrameIdx,
 		CorrelationID: correlationID,
 		CBID:          cbid,
 	}
+	f.tracesAwaitingTimes[correlationID] = st
+	f.pcTraces[correlationID] = st
 	return outputs
 }
 
@@ -518,6 +575,85 @@ func (f *gpuTraceFixer) addTime(ev *CuptiKernelEvent) (CudaTraceOutput, bool) {
 	}
 	f.timesAwaitingTraces[ev.Id] = append(f.timesAwaitingTraces[ev.Id], *ev)
 	return CudaTraceOutput{}, false
+}
+
+// lookupTraceForPC returns the symbolized trace for a given correlation ID,
+// if available. Used by PC sample processing to correlate GPU samples with
+// CPU call stacks.
+func (f *gpuTraceFixer) lookupTraceForPC(correlationID uint32) *SymbolizedCudaTrace {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if st, ok := f.pcTraces[correlationID]; ok {
+		return st
+	}
+	if st, ok := f.tracesAwaitingTimes[correlationID]; ok {
+		return st
+	}
+	return nil
+}
+
+// LookupTraceForPCSample finds the CPU trace associated with a given PID and
+// correlation ID for PC sample correlation.
+func LookupTraceForPCSample(pid libpf.PID, correlationID uint32) *SymbolizedCudaTrace {
+	value, ok := gpuFixers.Load(pid)
+	if !ok {
+		return nil
+	}
+	return value.(*gpuTraceFixer).lookupTraceForPC(correlationID)
+}
+
+// StorePendingPCSample buffers a PC sample whose correlation trace hasn't
+// arrived yet. It will be emitted when the trace shows up in addSingleTrace.
+func StorePendingPCSample(pid libpf.PID, ev CuptiPCSampleEvent, rep reporter.TraceReporter) {
+	value, ok := gpuFixers.Load(pid)
+	if !ok {
+		// No fixer for this PID — emit without correlation.
+		go emitPCSample(&ev, rep, nil)
+		return
+	}
+	f := value.(*gpuTraceFixer)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.pendingPCSamples[ev.CorrelationID] = append(
+		f.pendingPCSamples[ev.CorrelationID], pendingPCSample{ev: ev, rep: rep})
+}
+
+// emitPCSample is the deferred version of HandlePCSample, called when the
+// correlation trace becomes available (or immediately if no fixer exists).
+func emitPCSample(ev *CuptiPCSampleEvent, rep reporter.TraceReporter, cpuTrace *SymbolizedCudaTrace) {
+	cubinInfo, ok := LoadCubin(ev.Data.CubinCRC)
+	if !ok {
+		return
+	}
+	kernelName := nullTermBytes(ev.FunctionName[:])
+	mnemonic := decodeInstruction(cubinInfo, ev.Data.PCOffset)
+	cubinName := fmt.Sprintf("cubin-%016x", cubinInfo.CRC)
+	cubinMapping := libpf.NewFrameMapping(libpf.FrameMappingData{
+		File: libpf.NewFrameMappingFile(libpf.FrameMappingFileData{
+			FileID:     cubinInfo.FileID,
+			FileName:   libpf.Intern(cubinName),
+			GnuBuildID: fmt.Sprintf("%016x", cubinInfo.CRC),
+		}),
+	})
+
+	count := ev.Data.StallReasonCount
+	if count > 64 {
+		count = 64
+	}
+	for i := uint64(0); i < count; i++ {
+		sr := ev.StallReasons[i]
+		if sr.Samples == 0 {
+			continue
+		}
+		stallName := LookupStallReason(ev.Pid, sr.Index)
+		trace := buildGpuPCTrace(cpuTrace, cubinMapping, kernelName,
+			ev.Data.PCOffset, mnemonic, stallName, sr.Index)
+		meta := buildGpuPCMeta(cpuTrace, ev.Pid, int64(sr.Samples))
+		trace.Hash = traceutil.HashTrace(trace)
+		if err := rep.ReportTraceEvent(trace, meta); err != nil {
+			log.Errorf("[cuda] failed to report deferred GPU PC sample: %v", err)
+		}
+	}
 }
 
 // fixerStats holds statistics from a single fixer for aggregation.
@@ -542,7 +678,10 @@ func (f *gpuTraceFixer) maybeClear() fixerStats {
 		tracesLen: tracesLen,
 	}
 
-	if timesLen > 10000 || tracesLen > 10000 {
+	pcLen := len(f.pcTraces)
+	pendingLen := len(f.pendingPCSamples)
+
+	if timesLen > 10000 || tracesLen > 10000 || pcLen > 10000 || pendingLen > 10000 {
 		// Keep entries within 5000 of the max correlation ID
 		// Use signed distance to handle wrap-around correctly
 		for k := range f.timesAwaitingTraces {
@@ -553,6 +692,16 @@ func (f *gpuTraceFixer) maybeClear() fixerStats {
 		for k := range f.tracesAwaitingTimes {
 			if int32(f.maxCorrelationId-k) > 5000 {
 				delete(f.tracesAwaitingTimes, k)
+			}
+		}
+		for k := range f.pcTraces {
+			if int32(f.maxCorrelationId-k) > 5000 {
+				delete(f.pcTraces, k)
+			}
+		}
+		for k := range f.pendingPCSamples {
+			if int32(f.maxCorrelationId-k) > 5000 {
+				delete(f.pendingPCSamples, k)
 			}
 		}
 
