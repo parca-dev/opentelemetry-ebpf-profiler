@@ -108,39 +108,104 @@ func (x *x86Extractor) findOffsetsFromLuaClose(b []byte) (glref, curL uint64, er
 //	0x000000000006a737 <+119>:   mov    0x10(%rbx),%rdi
 //	0x000000000006a73b <+123>:   call   0x16cf0
 //
-// Then we load the function 0x16cf0 and look where the rdi register is stashed,
-// usually rdx and then look for the first lea of rdx, ie:
-//
-// libluajit-5.1.so[0x16d4e] <+94>:  leaq   0xfa8(%rdx), %r10
-//
-// 0xfa8 is the g to dispatch offset.
+// Then we load the function 0x16cf0 and look at how it fills the per-G dispatch
+// table.  lj_dispatch_update emits an init loop bounded by two `lea OFS(%greg), %reg`
+// instructions whose displacements are the start and end of the dispatch table.
+// The smaller of the two displacements is normally the value we want.  The
+// compiler is free to emit the bounds in either order, and in some builds the
+// very first slot of the dispatch table is peeled off into a pre-loop
+// `mov %X, OFS(%greg)` store - in that case OFS sits a slot below the loop iter
+// LEA and that store's displacement is the canonical g2dispatch.
 // https://github.com/openresty/luajit2/blob/7952882d/src/lj_dispatch.c#L122
 func (x *x86Extractor) findG2DispatchOffsetFromLjDispatchUpdate(b []byte) (uint64, error) {
 	b, _ = xh.SkipEndBranch(b) //nolint:errcheck
-	var greg x86asm.Reg
+
+	type ref struct {
+		disp int64
+		pos  int
+	}
+	var (
+		greg   x86asm.Reg
+		leas   []ref
+		stores []ref
+		pos    int
+	)
+
 	for len(b) > 0 {
 		i, err := x86asm.Decode(b, 64)
 		if err != nil {
-			return 0, err
+			// Some builds put SSE/AVX instructions the decoder doesn't know
+			// later in lj_dispatch_update; stop scanning and decide from what
+			// we have so far rather than failing the whole load.
+			break
 		}
-		// Early on we stash rdi (g) in a register
+		// The dispatch table init lives in the prologue; once we hit a call
+		// we've left the region we care about.
+		if i.Op == x86asm.CALL {
+			break
+		}
 		if i.Op == x86asm.MOV {
-			a0, ok1 := i.Args[0].(x86asm.Reg)
-			a1, ok2 := i.Args[1].(x86asm.Reg)
-			if ok1 && ok2 && a1 == x86asm.RDI {
-				greg = a0
+			// Early on we stash rdi (g) in a register.
+			if dst, dstOk := i.Args[0].(x86asm.Reg); dstOk {
+				if src, srcOk := i.Args[1].(x86asm.Reg); srcOk && src == x86asm.RDI {
+					greg = dst
+				}
+			}
+			// `mov %src, OFS(%greg)` - a peeled-off pre-loop store. Capture it
+			// so we can spot a dispatch-table first-slot store sitting one slot
+			// below the loop iter LEA.
+			if dst, ok := i.Args[0].(x86asm.Mem); ok && greg != 0 &&
+				dst.Base == greg && dst.Index == 0 && dst.Disp > 0 {
+				stores = append(stores, ref{disp: dst.Disp, pos: pos})
 			}
 		}
-		// Then load dispatch address relative to g
-		if i.Op == x86asm.LEA {
-			a1, ok := i.Args[1].(x86asm.Mem)
-			if ok && a1.Base == greg {
-				return uint64(a1.Disp), nil
+		if i.Op == x86asm.LEA && greg != 0 {
+			if src, ok := i.Args[1].(x86asm.Mem); ok && src.Base == greg &&
+				src.Index == 0 && src.Disp > 0 {
+				leas = append(leas, ref{disp: src.Disp, pos: pos})
 			}
 		}
 		b = b[i.Len:]
+		pos++
 	}
-	return 0, nil
+
+	if len(leas) == 0 {
+		return 0, nil
+	}
+	if len(leas) == 1 {
+		return uint64(leas[0].disp), nil
+	}
+
+	// Look for a pair of LEAs off greg whose displacements differ by no more
+	// than the dispatch table size (a few hundred bytes in every observed
+	// build).  Those are the bounds of the dispatch fill loop; the smaller
+	// disp is the loop iter start.
+	const maxDispatchTable = 1024
+	for i := 0; i < len(leas); i++ {
+		for j := i + 1; j < len(leas); j++ {
+			small := min(leas[i].disp, leas[j].disp)
+			big := max(leas[i].disp, leas[j].disp)
+			if big-small > maxDispatchTable {
+				continue
+			}
+			firstPos := min(leas[i].pos, leas[j].pos)
+			best := small
+			// If a slot just below the loop iter was filled by a peeled-off
+			// pre-loop store, prefer its displacement - that's the slot the
+			// DISPATCH register actually points at in JIT code.
+			for _, s := range stores {
+				if s.pos < firstPos && s.disp < small && small-s.disp <= 16 &&
+					s.disp < best {
+					best = s.disp
+				}
+			}
+			return uint64(best), nil
+		}
+	}
+
+	// No recognizable loop pair - fall back to the first LEA, matching the
+	// historical heuristic.
+	return uint64(leas[0].disp), nil
 }
 
 // Find first or second call address, the one whose first argument is 0x10 off of

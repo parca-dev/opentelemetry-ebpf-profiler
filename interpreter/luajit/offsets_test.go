@@ -33,21 +33,33 @@ const (
 )
 
 func TestOffsets(t *testing.T) {
+	// g2Dispatch is the offset from G to the value the LJ JIT loads into the
+	// DISPATCH register (r14 on x86_64, r22 on aarch64). It's pinned per-build
+	// because a wrong value silently sends bad-G candidates to the userland
+	// triangulator and starves the eBPF JIT bootstrap path; only the rolling
+	// alpine build has ever drifted, but every tag is asserted here so the
+	// next time it does we catch it in CI rather than as flaky integration
+	// tests.
+	type expected struct {
+		amd64G2Dispatch uint16
+		arm64G2Dispatch uint16
+	}
 	for _, tc := range []struct {
 		tag  string
 		suf  string
 		fail bool
+		exp  expected
 	}{
-		{"1.13.6.2-alpine", "0", true},
-		{"1.15.8.3-alpine", "0", false},
-		{"1.17.8.2-alpine", "0", false},
-		{"1.19.9.1-focal", "0", false},
-		{"1.21.4.3-buster-fat", "0", false},
-		{"1.21.4.3-alpine", "0", false},
-		{"1.25.3.2-bullseye-fat", "ROLLING", false},
-		{"1.25.3.2-alpine", "ROLLING", false},
-		{"jammy", "ROLLING", false},
-		{"alpine", "ROLLING", false},
+		{"1.13.6.2-alpine", "0", true, expected{}},
+		{"1.15.8.3-alpine", "0", false, expected{amd64G2Dispatch: 0xf58}},
+		{"1.17.8.2-alpine", "0", false, expected{amd64G2Dispatch: 0xf58, arm64G2Dispatch: 0xf38}},
+		{"1.19.9.1-focal", "0", false, expected{amd64G2Dispatch: 0xfa0, arm64G2Dispatch: 0xf88}},
+		{"1.21.4.3-buster-fat", "0", false, expected{amd64G2Dispatch: 0xfa8, arm64G2Dispatch: 0xf90}},
+		{"1.21.4.3-alpine", "0", false, expected{amd64G2Dispatch: 0xfa8, arm64G2Dispatch: 0xf90}},
+		{"1.25.3.2-bullseye-fat", "ROLLING", false, expected{amd64G2Dispatch: 0xfa8, arm64G2Dispatch: 0xf90}},
+		{"1.25.3.2-alpine", "ROLLING", false, expected{amd64G2Dispatch: 0xfa8, arm64G2Dispatch: 0xf90}},
+		{"jammy", "ROLLING", false, expected{amd64G2Dispatch: 0xfc8, arm64G2Dispatch: 0xfc0}},
+		{"alpine", "ROLLING", false, expected{amd64G2Dispatch: 0xfc8, arm64G2Dispatch: 0xfc0}},
 	} {
 		for _, platform := range []string{"linux/amd64", "linux/arm64"} {
 			tag, suffix := tc.tag, tc.suf
@@ -81,7 +93,14 @@ func TestOffsets(t *testing.T) {
 				require.NoError(t, err)
 				require.NotZero(t, ljd.currentLOffset)
 				require.NotZero(t, ljd.g2Traces)
-				require.NotZero(t, ljd.g2Dispatch)
+				wantG2Dispatch := tc.exp.amd64G2Dispatch
+				if platform == "linux/arm64" {
+					wantG2Dispatch = tc.exp.arm64G2Dispatch
+				}
+				require.Equal(t, wantG2Dispatch, ljd.g2Dispatch,
+					"g2Dispatch mismatch: a wrong value here makes the eBPF JIT "+
+						"bootstrap emit bad-G candidates and starves luajit "+
+						"triangulation in CI")
 
 				od := offsetData{}
 				err = od.init(ef)
