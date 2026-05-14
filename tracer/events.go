@@ -231,9 +231,14 @@ func (t *Tracer) startTraceEventMonitor(ctx context.Context,
 					log.Warnf("skip trace handling: %v", err)
 					continue
 				case errors.Is(err, errRecordTooSmall), errors.Is(err, errRecordUnexpectedSize):
-					log.Errorf("Stop receiving traces: %v", err)
-					t.signalDone()
-					return
+					// Skip the bad record. Previously a single bad record killed
+					// the trace monitor goroutine, leaving the agent unable to
+					// process any further traces. See branch
+					// investigation/trace-handling-experiments for root-cause
+					// investigation (suspected arm64 JIT or perf RB partial
+					// write at high tail-call depth).
+					readErrorCount.Add(1)
+					continue
 				default:
 					log.Warnf("unexpected error handling trace: %v", err)
 					continue
