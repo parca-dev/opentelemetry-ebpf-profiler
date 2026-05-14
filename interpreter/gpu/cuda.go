@@ -658,14 +658,28 @@ func emitPCSample(ev *CuptiPCSampleEvent, rep reporter.TraceReporter, cpuTrace *
 
 // fixerStats holds statistics from a single fixer for aggregation.
 type fixerStats struct {
-	timesLen      int
-	tracesLen     int
-	timesCleared  int
-	tracesCleared int
+	timesLen              int
+	tracesLen             int
+	timesCleared          int
+	tracesCleared         int
+	pendingSamplesEvicted int
 }
 
+// Map-size thresholds for the per-fixer clearing sweep run from
+// MaybeClearAll. Bumped 10x from the original 10000/5000 because the
+// tighter values dropped late-arriving symbolized traces on
+// high-launch-rate workloads (e.g. PyTorch ~5K kernels/sec). At those
+// rates the retention window of 5K correlation IDs corresponds to
+// only ~1 second of history, which is too short for the trace
+// symbolization pipeline.
+const (
+	clearTriggerThreshold = 100000
+	retentionWindow       = 50000
+)
+
 // maybeClear clears the maps if they get too big and returns stats.
-// Uses threshold-based clearing: deletes entries with correlation ID < maxCorrelationId - 5000
+// Uses threshold-based clearing controlled by clearTriggerThreshold +
+// retentionWindow defined above.
 func (f *gpuTraceFixer) maybeClear() fixerStats {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -681,26 +695,28 @@ func (f *gpuTraceFixer) maybeClear() fixerStats {
 	pcLen := len(f.pcTraces)
 	pendingLen := len(f.pendingPCSamples)
 
-	if timesLen > 10000 || tracesLen > 10000 || pcLen > 10000 || pendingLen > 10000 {
-		// Keep entries within 5000 of the max correlation ID
-		// Use signed distance to handle wrap-around correctly
+	if timesLen > clearTriggerThreshold || tracesLen > clearTriggerThreshold ||
+		pcLen > clearTriggerThreshold || pendingLen > clearTriggerThreshold {
+		// Keep entries within retentionWindow of the max correlation ID.
+		// Use signed distance to handle wrap-around correctly.
 		for k := range f.timesAwaitingTraces {
-			if int32(f.maxCorrelationId-k) > 5000 {
+			if int32(f.maxCorrelationId-k) > retentionWindow {
 				delete(f.timesAwaitingTraces, k)
 			}
 		}
 		for k := range f.tracesAwaitingTimes {
-			if int32(f.maxCorrelationId-k) > 5000 {
+			if int32(f.maxCorrelationId-k) > retentionWindow {
 				delete(f.tracesAwaitingTimes, k)
 			}
 		}
 		for k := range f.pcTraces {
-			if int32(f.maxCorrelationId-k) > 5000 {
+			if int32(f.maxCorrelationId-k) > retentionWindow {
 				delete(f.pcTraces, k)
 			}
 		}
-		for k := range f.pendingPCSamples {
-			if int32(f.maxCorrelationId-k) > 5000 {
+		for k, samples := range f.pendingPCSamples {
+			if int32(f.maxCorrelationId-k) > retentionWindow {
+				stats.pendingSamplesEvicted += len(samples)
 				delete(f.pendingPCSamples, k)
 			}
 		}
@@ -882,6 +898,7 @@ func AddTimes(events []CuptiKernelEvent) []CudaTraceOutput {
 // MaybeClearAll periodically clears all fixers and returns metrics for the caller to report.
 func MaybeClearAll() []metrics.Metric {
 	var totalTimes, totalTraces, totalTimesCleared, totalTracesCleared int
+	var totalPendingEvicted int
 
 	gpuFixers.Range(func(key, value any) bool {
 		fixer := value.(*gpuTraceFixer)
@@ -890,6 +907,7 @@ func MaybeClearAll() []metrics.Metric {
 		totalTraces += stats.tracesLen
 		totalTimesCleared += stats.timesCleared
 		totalTracesCleared += stats.tracesCleared
+		totalPendingEvicted += stats.pendingSamplesEvicted
 
 		return true
 	})
@@ -902,6 +920,11 @@ func MaybeClearAll() []metrics.Metric {
 		out = append(out,
 			metrics.Metric{ID: metrics.IDCudaTimesCleared, Value: metrics.MetricValue(totalTimesCleared)},
 			metrics.Metric{ID: metrics.IDCudaTracesCleared, Value: metrics.MetricValue(totalTracesCleared)},
+		)
+	}
+	if totalPendingEvicted > 0 {
+		out = append(out,
+			metrics.Metric{ID: metrics.IDCudaPendingPCSamplesEvicted, Value: metrics.MetricValue(totalPendingEvicted)},
 		)
 	}
 	return out

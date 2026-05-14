@@ -2210,6 +2210,13 @@
     "id": 302
   },
   {
+    "description": "Number of pending PC sample events dropped at retention-window eviction (correlation trace never arrived)",
+    "type": "counter",
+    "name": "CudaPendingPCSamplesEvicted",
+    "field": "cuda.pending_pc_samples_evicted",
+    "id": 307
+  },
+  {
     "description": "Number of failures to read LuaJIT context pointer",
     "type": "counter",
     "name": "UnwindLuaJITErrNoContext",
