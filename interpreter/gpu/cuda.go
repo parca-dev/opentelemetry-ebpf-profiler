@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"sync"
 	"syscall"
+	"time"
 	"unique"
 	"unsafe"
 
@@ -144,6 +145,10 @@ type SymbolizedCudaTrace struct {
 	CUDAFrameIdx  int // index of CUDAKernelFrame in Trace.Frames
 	CorrelationID uint32
 	CBID          int32
+	// StoredAtNs is time.Now().UnixNano() at the moment this trace first entered
+	// pcTraces/tracesAwaitingTimes. Used to measure wait time when the timing
+	// event arrives, or age at eviction. Unset when StoredAtNs is 0.
+	StoredAtNs int64
 }
 
 // CudaTraceOutput is a fully completed CUDA trace ready for reporting.
@@ -167,6 +172,11 @@ type gpuTraceFixer struct {
 	tracesAwaitingTimes map[uint32]*SymbolizedCudaTrace // keyed by correlation ID
 	maxCorrelationId    uint32                          // track highest ID for threshold-based clearing
 
+	// timesStoredAtNs holds the UnixNano timestamp when the FIRST entry for
+	// each correlation ID landed in timesAwaitingTraces. Parallel map, same key.
+	// Used to measure how long the timing event waited for its trace.
+	timesStoredAtNs map[uint32]int64
+
 	// pcTraces keeps recently received traces available for PC sample correlation.
 	// Unlike tracesAwaitingTimes, entries here are not consumed when timing arrives.
 	// Cleaned up by the same threshold-based logic in maybeClear.
@@ -178,8 +188,9 @@ type gpuTraceFixer struct {
 }
 
 type pendingPCSample struct {
-	ev  CuptiPCSampleEvent
-	rep reporter.TraceReporter
+	ev        CuptiPCSampleEvent
+	rep       reporter.TraceReporter
+	arrivalNs int64 // time.Now().UnixNano() when this sample was buffered
 }
 
 type linkEntry struct {
@@ -418,6 +429,7 @@ func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Addre
 	fixer := &gpuTraceFixer{
 		timesAwaitingTraces: make(map[uint32][]CuptiKernelEvent),
 		tracesAwaitingTimes: make(map[uint32]*SymbolizedCudaTrace),
+		timesStoredAtNs:     make(map[uint32]int64),
 		pcTraces:            make(map[uint32]*SymbolizedCudaTrace),
 		pendingPCSamples:    make(map[uint32][]pendingPCSample),
 	}
@@ -485,12 +497,14 @@ func (f *gpuTraceFixer) addSingleTrace(trace *libpf.Trace, meta *samples.TraceEv
 	}
 
 	// Always store for PC sample correlation, even if timing already arrived.
+	nowNs := time.Now().UnixNano()
 	st := &SymbolizedCudaTrace{
 		Trace:         trace,
 		Meta:          meta,
 		CUDAFrameIdx:  cudaFrameIdx,
 		CorrelationID: correlationID,
 		CBID:          cbid,
+		StoredAtNs:    nowNs,
 	}
 	f.pcTraces[correlationID] = st
 
@@ -500,6 +514,12 @@ func (f *gpuTraceFixer) addSingleTrace(trace *libpf.Trace, meta *samples.TraceEv
 	// still want a goroutine so we drop f.mu before rep.ReportTraceEvent.
 	if pending, ok := f.pendingPCSamples[correlationID]; ok {
 		delete(f.pendingPCSamples, correlationID)
+		if waitLogEnabled {
+			for i := range pending {
+				logWait("pc_sample", "matched_deferred",
+					nowNs-pending[i].arrivalNs, correlationID, pending[i].ev.Pid)
+			}
+		}
 		go func(pending []pendingPCSample, st *SymbolizedCudaTrace) {
 			for i := range pending {
 				emitPCSample(&pending[i].ev, pending[i].rep, st)
@@ -511,8 +531,15 @@ func (f *gpuTraceFixer) addSingleTrace(trace *libpf.Trace, meta *samples.TraceEv
 	if ok && len(evs) > 0 {
 		log.Debugf("[cuda] gpu trace completed id %d cbid %d (0x%x) for pid %d",
 			correlationID, int(cbid), uint32(cbid), meta.PID)
+		if waitLogEnabled {
+			if storedAt, ok := f.timesStoredAtNs[correlationID]; ok {
+				logWait("time_to_trace", "matched", nowNs-storedAt,
+					correlationID, uint32(meta.PID))
+			}
+		}
 		out := f.prepTrace(trace, meta, cudaFrameIdx, &evs[0])
 		delete(f.timesAwaitingTraces, correlationID)
+		delete(f.timesStoredAtNs, correlationID)
 		return out, true
 	}
 
@@ -534,15 +561,24 @@ func (f *gpuTraceFixer) addGraphTrace(trace *libpf.Trace, meta *samples.TraceEve
 		f.maxCorrelationId = correlationID
 	}
 
+	nowNs := time.Now().UnixNano()
 	var outputs []CudaTraceOutput
 	evs, ok := f.timesAwaitingTraces[correlationID]
 	if ok && len(evs) > 0 {
+		if waitLogEnabled {
+			if storedAt, ok := f.timesStoredAtNs[correlationID]; ok {
+				logWait("time_to_trace", "matched_graph", nowNs-storedAt,
+					correlationID, uint32(meta.PID),
+					fmt.Sprintf("n_times=%d", len(evs)))
+			}
+		}
 		for idx := range evs {
 			log.Debugf("[cuda] gpu trace completed id %d cbid %d (0x%x) for pid %d",
 				correlationID, int(cbid), uint32(cbid), meta.PID)
 			outputs = append(outputs, f.prepTrace(trace, meta, cudaFrameIdx, &evs[idx]))
 		}
 		delete(f.timesAwaitingTraces, correlationID)
+		delete(f.timesStoredAtNs, correlationID)
 	}
 
 	// Always store for future timing events
@@ -552,6 +588,7 @@ func (f *gpuTraceFixer) addGraphTrace(trace *libpf.Trace, meta *samples.TraceEve
 		CUDAFrameIdx:  cudaFrameIdx,
 		CorrelationID: correlationID,
 		CBID:          cbid,
+		StoredAtNs:    nowNs,
 	}
 	f.tracesAwaitingTimes[correlationID] = st
 	f.pcTraces[correlationID] = st
@@ -568,10 +605,17 @@ func (f *gpuTraceFixer) addTime(ev *CuptiKernelEvent) (CudaTraceOutput, bool) {
 
 	st, ok := f.tracesAwaitingTimes[ev.Id]
 	if ok {
+		if waitLogEnabled {
+			logWait("trace_to_time", "matched", time.Now().UnixNano()-st.StoredAtNs,
+				ev.Id, ev.Pid)
+		}
 		if ev.Graph == 0 {
 			delete(f.tracesAwaitingTimes, ev.Id)
 		}
 		return f.prepTrace(st.Trace, st.Meta, st.CUDAFrameIdx, ev), true
+	}
+	if _, exists := f.timesAwaitingTraces[ev.Id]; !exists {
+		f.timesStoredAtNs[ev.Id] = time.Now().UnixNano()
 	}
 	f.timesAwaitingTraces[ev.Id] = append(f.timesAwaitingTraces[ev.Id], *ev)
 	return CudaTraceOutput{}, false
@@ -615,7 +659,8 @@ func StorePendingPCSample(pid libpf.PID, ev CuptiPCSampleEvent, rep reporter.Tra
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.pendingPCSamples[ev.CorrelationID] = append(
-		f.pendingPCSamples[ev.CorrelationID], pendingPCSample{ev: ev, rep: rep})
+		f.pendingPCSamples[ev.CorrelationID],
+		pendingPCSample{ev: ev, rep: rep, arrivalNs: time.Now().UnixNano()})
 }
 
 // emitPCSample is the deferred version of HandlePCSample, called when the
@@ -677,6 +722,37 @@ const (
 	retentionWindow       = 50000
 )
 
+// waitLogEnabled gates the per-event [cudawait] log lines used to build
+// post-hoc histograms of trace/sample wait times. Off by default (the volume
+// can reach ~5K lines/sec on a heavy CUDA workload). Set PARCA_CUDA_WAIT_LOG=1
+// to enable.
+var waitLogEnabled = os.Getenv("PARCA_CUDA_WAIT_LOG") == "1"
+
+// logWait emits a single fixed-format line consumed by
+// scripts/cuda_wait_histograms.py. All durations are in nanoseconds. Extra
+// key=value tokens may be appended; the parser ignores unknown keys.
+//
+// Format: "[cudawait] kind=<k> outcome=<o> wait_ns=<n> corr=<id> pid=<pid> <extra...>"
+func logWait(kind, outcome string, waitNs int64, corrID uint32, pid uint32, extra ...string) {
+	if !waitLogEnabled {
+		return
+	}
+	if len(extra) == 0 {
+		log.Infof("[cudawait] kind=%s outcome=%s wait_ns=%d corr=%d pid=%d",
+			kind, outcome, waitNs, corrID, pid)
+		return
+	}
+	// Pre-size the join buffer to avoid intermediate allocs.
+	var sb bytes.Buffer
+	fmt.Fprintf(&sb, "[cudawait] kind=%s outcome=%s wait_ns=%d corr=%d pid=%d",
+		kind, outcome, waitNs, corrID, pid)
+	for _, e := range extra {
+		sb.WriteByte(' ')
+		sb.WriteString(e)
+	}
+	log.Info(sb.String())
+}
+
 // maybeClear clears the maps if they get too big and returns stats.
 // Uses threshold-based clearing controlled by clearTriggerThreshold +
 // retentionWindow defined above.
@@ -697,26 +773,60 @@ func (f *gpuTraceFixer) maybeClear() fixerStats {
 
 	if timesLen > clearTriggerThreshold || tracesLen > clearTriggerThreshold ||
 		pcLen > clearTriggerThreshold || pendingLen > clearTriggerThreshold {
+		nowNs := time.Now().UnixNano()
 		// Keep entries within retentionWindow of the max correlation ID.
 		// Use signed distance to handle wrap-around correctly.
-		for k := range f.timesAwaitingTraces {
+		for k, evs := range f.timesAwaitingTraces {
 			if int32(f.maxCorrelationId-k) > retentionWindow {
+				if waitLogEnabled {
+					storedAt := f.timesStoredAtNs[k]
+					pid := uint32(0)
+					if len(evs) > 0 {
+						pid = evs[0].Pid
+					}
+					logWait("time_aw_trace", "evicted", nowNs-storedAt, k, pid,
+						fmt.Sprintf("n_times=%d", len(evs)))
+				}
 				delete(f.timesAwaitingTraces, k)
+				delete(f.timesStoredAtNs, k)
 			}
 		}
-		for k := range f.tracesAwaitingTimes {
+		for k, st := range f.tracesAwaitingTimes {
 			if int32(f.maxCorrelationId-k) > retentionWindow {
+				if waitLogEnabled {
+					logWait("trace_aw_time", "evicted", nowNs-st.StoredAtNs, k,
+						uint32(st.Meta.PID))
+				}
 				delete(f.tracesAwaitingTimes, k)
 			}
 		}
-		for k := range f.pcTraces {
+		for k, st := range f.pcTraces {
 			if int32(f.maxCorrelationId-k) > retentionWindow {
+				if waitLogEnabled {
+					logWait("pc_trace", "evicted", nowNs-st.StoredAtNs, k,
+						uint32(st.Meta.PID))
+				}
 				delete(f.pcTraces, k)
 			}
 		}
 		for k, samples := range f.pendingPCSamples {
 			if int32(f.maxCorrelationId-k) > retentionWindow {
 				stats.pendingSamplesEvicted += len(samples)
+				if waitLogEnabled {
+					pid := uint32(0)
+					if len(samples) > 0 {
+						pid = samples[0].ev.Pid
+					}
+					// Age of the oldest sample in this entry.
+					oldest := samples[0].arrivalNs
+					for i := range samples {
+						if samples[i].arrivalNs < oldest {
+							oldest = samples[i].arrivalNs
+						}
+					}
+					logWait("pc_sample", "evicted", nowNs-oldest, k, pid,
+						fmt.Sprintf("nsamples=%d", len(samples)))
+				}
 				delete(f.pendingPCSamples, k)
 			}
 		}
