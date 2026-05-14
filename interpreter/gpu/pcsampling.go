@@ -41,6 +41,11 @@ func HandlePCSample(ev *CuptiPCSampleEvent, rep reporter.TraceReporter) {
 			StorePendingPCSample(libpf.PID(ev.Pid), *ev, rep)
 			return
 		}
+		if waitLogEnabled && cpuTrace.StoredAtNs != 0 {
+			logWait("pc_sample", "matched_immediate",
+				time.Now().UnixNano()-cpuTrace.StoredAtNs,
+				ev.CorrelationID, ev.Pid)
+		}
 	}
 
 	log.Debugf("[cuda] pc sample: pid=%d kernel=%q offset=0x%x mnemonic=%q corrID=%d stallReasons=%d cpuTrace=%v",
