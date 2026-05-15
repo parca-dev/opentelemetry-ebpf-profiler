@@ -9,7 +9,7 @@
 // The number of Python frames to unwind per frame-unwinding eBPF program. If
 // we start running out of instructions in the walk_python_stack program, one
 // option is to adjust this number downwards.
-#define FRAMES_PER_WALK_PYTHON_STACK 12
+#define FRAMES_PER_WALK_PYTHON_STACK 90
 
 // Forward declaration to avoid warnings like
 // "declaration of 'struct pt_regs' will not be visible outside of this function [-Wvisibility]".

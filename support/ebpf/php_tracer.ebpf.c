@@ -7,7 +7,7 @@
 // The number of PHP frames to unwind per frame-unwinding eBPF program. If
 // we start running out of instructions in the walk_php_stack program, one
 // option is to adjust this number downwards.
-#define FRAMES_PER_WALK_PHP_STACK 19
+#define FRAMES_PER_WALK_PHP_STACK 143
 
 // The type_info flag for executor data to indicate top-of-stack frames
 // as defined in php/Zend/zend_compile.h.

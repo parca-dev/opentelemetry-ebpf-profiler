@@ -3,7 +3,7 @@
 #include "types.h"
 
 // The number of frames to unwind per frame-unwinding eBPF program.
-#define BEAM_FRAMES_PER_PROGRAM 8
+#define BEAM_FRAMES_PER_PROGRAM 60
 
 // The max number of loops to unroll when searching for the correct CodeHeader.
 // Should be log base 2 of a reasonable number of modules to binary-search through.

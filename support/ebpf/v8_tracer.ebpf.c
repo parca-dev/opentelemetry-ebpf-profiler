@@ -14,7 +14,7 @@
 #include "types.h"
 
 // The number of V8 frames to unwind per frame-unwinding eBPF program.
-#define V8_FRAMES_PER_PROGRAM 8
+#define V8_FRAMES_PER_PROGRAM 60
 
 // The maximum V8 frame length used in heuristic to validate FP
 #define V8_MAX_FRAME_LENGTH 8192

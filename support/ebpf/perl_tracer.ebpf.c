@@ -34,7 +34,7 @@
 #include "types.h"
 
 // The number of Perl frames to unwind per frame-unwinding eBPF program.
-#define PERL_FRAMES_PER_PROGRAM 12
+#define PERL_FRAMES_PER_PROGRAM 90
 
 // PERL SI types definitions
 // https://github.com/Perl/perl5/blob/v5.32.0/cop.h#L1017-L1035

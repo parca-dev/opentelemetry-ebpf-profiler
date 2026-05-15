@@ -10,10 +10,10 @@
 #include "types.h"
 
 // The number of dotnet frames to unwind per frame-unwinding eBPF program.
-#define DOTNET_FRAMES_PER_PROGRAM 6
+#define DOTNET_FRAMES_PER_PROGRAM 45
 
 // The number of dotnet10+ frames to unwind per frame-unwinding eBPF program.
-#define DOTNET10_FRAMES_PER_PROGRAM 9
+#define DOTNET10_FRAMES_PER_PROGRAM 68
 
 // The maximum dotnet frame length used in heuristic to validate FP
 #define DOTNET_MAX_FRAME_LENGTH 8192

@@ -69,7 +69,7 @@ typedef enum HotspotUnwindAction {
 } HotspotUnwindAction;
 
 // The number of hotspot frames to unwind per frame-unwinding eBPF program.
-#define HOTSPOT_FRAMES_PER_PROGRAM 4
+#define HOTSPOT_FRAMES_PER_PROGRAM 30
 
 // The maximum number of HotSpot segmap lookup iterations. This is directly proportional
 // to the size of JIT method code size. The longest sequence seen so far is from JDK8,
