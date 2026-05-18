@@ -156,6 +156,25 @@ struct cupti_events_t {
   __uint(max_entries, 1 << 20);
 } cupti_events SEC(".maps");
 
+// Per-(pid, crc) dedup for cubin_loaded USDT fires. The parcagpu library
+// re-emits every loaded cubin whenever the USDT semaphore refcount
+// increases (a tracer joins) and on a periodic refresh, so an attached
+// agent sees the same (pid, crc) repeatedly across a workload's
+// lifetime. Without dedup each duplicate would drive a /proc/<pid>/mem
+// read of up to 256 MB on the Go side. LRU eviction caps the map size
+// and lets re-fires through again if an entry ages out.
+struct cubin_seen_key {
+  u64 crc;
+  u32 pid;
+  u32 _pad;
+};
+struct cubin_seen_t {
+  __uint(type, BPF_MAP_TYPE_LRU_HASH);
+  __type(key, struct cubin_seen_key);
+  __type(value, u8);
+  __uint(max_entries, 1 << 14);
+} cubin_seen SEC(".maps");
+
 SEC("usdt/parcagpu/cuda_kernel")
 int BPF_USDT(
   cuda_kernel_exec,
@@ -306,14 +325,26 @@ int cuda_activity_batch_tail(struct pt_regs *ctx)
 
 // USDT: parcagpu/cubin_loaded(uint64 crc, const char *cubin, uint64 size).
 // Emits a single cubin_event so the Go side can pull bytes via /proc/pid/mem.
+// Deduped per (pid, crc) via cubin_seen — the lib re-fires every loaded cubin
+// on every CUPTI callback, which would otherwise flood user-space.
 SEC("usdt/parcagpu/cubin_loaded")
 int BPF_USDT(cuda_cubin_loaded, u64 cubin_crc, u64 cubin_ptr, u64 cubin_size)
 {
   u64 pid_tgid = bpf_get_current_pid_tgid();
   u32 pid      = pid_tgid >> 32;
 
+  struct cubin_seen_key key = {
+    .crc  = cubin_crc,
+    .pid  = pid,
+    ._pad = 0,
+  };
+  if (bpf_map_lookup_elem(&cubin_seen, &key)) {
+    return 0;
+  }
+
   struct cubin_event *evt = bpf_ringbuf_reserve(&cupti_events, sizeof(*evt), 0);
   if (!evt) {
+    // Ringbuf full — don't mark seen so a later re-fire gets another shot.
     return 0;
   }
   evt->event_type = EVENT_TYPE_CUBIN_LOADED;
@@ -322,6 +353,9 @@ int BPF_USDT(cuda_cubin_loaded, u64 cubin_crc, u64 cubin_ptr, u64 cubin_size)
   evt->cubin_ptr  = cubin_ptr;
   evt->cubin_size = cubin_size;
   bpf_ringbuf_submit(evt, 0);
+
+  u8 one = 1;
+  bpf_map_update_elem(&cubin_seen, &key, &one, BPF_ANY);
 
   DEBUG_PRINT("cuda_cubin_loaded: pid=%u crc=0x%llx size=%llu", pid, cubin_crc, cubin_size);
   return 0;
