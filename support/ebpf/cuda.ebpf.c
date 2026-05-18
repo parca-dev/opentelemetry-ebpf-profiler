@@ -33,6 +33,7 @@ int BPF_USDT(cuda_correlation, u32 correlation_id, s32 cbid)
 #define EVENT_TYPE_PC_SAMPLE        3
 #define EVENT_TYPE_STALL_REASON_MAP 4
 #define EVENT_TYPE_ERROR            5
+#define EVENT_TYPE_GPU_CONFIG       6
 
 #define MAX_KERNEL_NAME_LEN   256
 #define MAX_FUNC_NAME_LEN     128
@@ -59,6 +60,18 @@ struct cubin_event {
   u64 cubin_crc;
   u64 cubin_ptr; // user-space address (Go reads bytes via /proc/pid/mem)
   u64 cubin_size;
+};
+
+// gpu_config_event reports the parcagpu sampling factor + GPU clock so the
+// agent can convert PC sample counts to nanoseconds. Fired once per CUPTI
+// context-init and replayed on USDT semaphore-count increase.
+struct gpu_config_event {
+  u32 event_type; // = EVENT_TYPE_GPU_CONFIG
+  u32 pid;
+  u32 device_id;
+  u32 sampling_factor;
+  u32 clock_khz;
+  u32 sm_count;
 };
 
 // CUDA 12.4+ extends cupti_pc_data with a trailing correlationId (u32) at
@@ -174,6 +187,19 @@ struct cubin_seen_t {
   __type(value, u8);
   __uint(max_entries, 1 << 14);
 } cubin_seen SEC(".maps");
+
+// Per-(pid, dev) dedup for gpu_config USDT fires. Same flooding concern as
+// cubin_seen but the payload is tiny — dedup still keeps the ringbuf clean.
+struct gpu_config_seen_key {
+  u32 pid;
+  u32 device_id;
+};
+struct gpu_config_seen_t {
+  __uint(type, BPF_MAP_TYPE_LRU_HASH);
+  __type(key, struct gpu_config_seen_key);
+  __type(value, u8);
+  __uint(max_entries, 256);
+} gpu_config_seen SEC(".maps");
 
 SEC("usdt/parcagpu/cuda_kernel")
 int BPF_USDT(
@@ -358,6 +384,43 @@ int BPF_USDT(cuda_cubin_loaded, u64 cubin_crc, u64 cubin_ptr, u64 cubin_size)
   bpf_map_update_elem(&cubin_seen, &key, &one, BPF_ANY);
 
   DEBUG_PRINT("cuda_cubin_loaded: pid=%u crc=0x%llx size=%llu", pid, cubin_crc, cubin_size);
+  return 0;
+}
+
+// USDT: parcagpu/gpu_config(uint32 deviceId, uint32 samplingFactor,
+//                            uint32 clockKHz, uint32 smCount).
+// Static per-context config; deduped per (pid, dev) so the parcagpu emit-
+// metadata replay loop doesn't flood the ringbuf.
+SEC("usdt/parcagpu/gpu_config")
+int BPF_USDT(cuda_gpu_config, u32 device_id, u32 sampling_factor, u32 clock_khz, u32 sm_count)
+{
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid      = pid_tgid >> 32;
+
+  struct gpu_config_seen_key key = {
+    .pid       = pid,
+    .device_id = device_id,
+  };
+  if (bpf_map_lookup_elem(&gpu_config_seen, &key)) {
+    return 0;
+  }
+
+  struct gpu_config_event *evt = bpf_ringbuf_reserve(&cupti_events, sizeof(*evt), 0);
+  if (!evt) {
+    return 0;
+  }
+  evt->event_type      = EVENT_TYPE_GPU_CONFIG;
+  evt->pid             = pid;
+  evt->device_id       = device_id;
+  evt->sampling_factor = sampling_factor;
+  evt->clock_khz       = clock_khz;
+  evt->sm_count        = sm_count;
+  bpf_ringbuf_submit(evt, 0);
+
+  u8 one = 1;
+  bpf_map_update_elem(&gpu_config_seen, &key, &one, BPF_ANY);
+
+  DEBUG_PRINT("cuda_gpu_config: pid=%u dev=%u clock_khz=%u", pid, device_id, clock_khz);
   return 0;
 }
 

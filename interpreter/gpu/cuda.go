@@ -64,6 +64,7 @@ const (
 	EventTypePCSample       uint32 = 3
 	EventTypeStallReasonMap uint32 = 4
 	EventTypeError          uint32 = 5
+	EventTypeGpuConfig      uint32 = 6
 )
 
 // CuptiCubinEvent matches struct cubin_event in cuda.ebpf.c.
@@ -129,6 +130,16 @@ type CuptiErrorEvent struct {
 	_pad      uint32
 	Message   [256]byte
 	Component [64]byte
+}
+
+// CuptiGpuConfigEvent matches struct gpu_config_event in cuda.ebpf.c.
+type CuptiGpuConfigEvent struct {
+	EventType      uint32
+	Pid            uint32
+	DeviceID       uint32
+	SamplingFactor uint32
+	ClockKHz       uint32
+	SMCount        uint32
 }
 
 var (
