@@ -8,6 +8,10 @@ case "$(uname -m)" in
 esac
 QEMU_ARCH="${QEMU_ARCH:-$_default_arch}"
 PARCAGPU_DIR="${PARCAGPU_DIR:-parcagpu-lib}"
+# Pin to a specific parcagpu release rather than tracking :latest so this
+# test isn't broken by upstream changes outside our control. Bump when the
+# test is updated to track a newer libparcagpucupti.so behaviour.
+PARCAGPU_TAG="${PARCAGPU_TAG:-0.2.1}"
 
 # Map QEMU arch to Docker platform
 case "$QEMU_ARCH" in
@@ -28,12 +32,12 @@ mkdir -p "${PARCAGPU_DIR}"
 
 # Download libparcagpucupti.so if not already present.
 if [[ ! -f "${PARCAGPU_DIR}/libparcagpucupti.so" ]]; then
-    echo "Downloading libparcagpucupti.so for ${QEMU_ARCH} from ghcr.io/parca-dev/parcagpu:latest..."
+    echo "Downloading libparcagpucupti.so for ${QEMU_ARCH} from ghcr.io/parca-dev/parcagpu:${PARCAGPU_TAG}..."
 
     # Pull and extract .so from Docker image using buildx (supports multi-arch)
     echo "Pulling Docker image for ${DOCKER_PLATFORM}..."
     TMPDIR=$(mktemp -d)
-    echo "FROM ghcr.io/parca-dev/parcagpu:latest" \
+    echo "FROM ghcr.io/parca-dev/parcagpu:${PARCAGPU_TAG}" \
       | docker buildx build --platform "${DOCKER_PLATFORM}" \
         --quiet --pull --output="${TMPDIR}" -
 
