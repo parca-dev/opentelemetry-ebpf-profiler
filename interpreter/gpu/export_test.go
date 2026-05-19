@@ -5,15 +5,11 @@ package gpu
 
 import "go.opentelemetry.io/ebpf-profiler/libpf"
 
-// RegisterTestFixer creates and registers a gpuTraceFixer for the given PID.
+// RegisterTestFixer creates and registers a gpuTraceFixer for the given PID,
+// skipping the BPF probe attachment that the real Attach path performs.
 // For use in tests only.
 func RegisterTestFixer(pid libpf.PID) {
-	fixer := &gpuTraceFixer{
-		timesAwaitingTraces: make(map[uint32][]CuptiKernelEvent),
-		tracesAwaitingTimes: make(map[uint32]*SymbolizedCudaTrace),
-		pcTraces:            make(map[uint32]*SymbolizedCudaTrace),
-	}
-	gpuFixers.Store(pid, fixer)
+	gpuFixers.Store(pid, newGpuTraceFixer())
 }
 
 // UnregisterTestFixer removes the fixer for the given PID.
