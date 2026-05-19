@@ -204,6 +204,16 @@ type pendingPCSample struct {
 	arrivalNs int64 // time.Now().UnixNano() when this sample was buffered
 }
 
+func newGpuTraceFixer() *gpuTraceFixer {
+	return &gpuTraceFixer{
+		timesAwaitingTraces: make(map[uint32][]CuptiKernelEvent),
+		tracesAwaitingTimes: make(map[uint32]*SymbolizedCudaTrace),
+		timesStoredAtNs:     make(map[uint32]int64),
+		pcTraces:            make(map[uint32]*SymbolizedCudaTrace),
+		pendingPCSamples:    make(map[uint32][]pendingPCSample),
+	}
+}
+
 type linkEntry struct {
 	link interpreter.LinkCloser
 	refs int
@@ -436,16 +446,7 @@ func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Addre
 	}
 	le.refs++
 
-	// Create and register fixer for this PID
-	fixer := &gpuTraceFixer{
-		timesAwaitingTraces: make(map[uint32][]CuptiKernelEvent),
-		tracesAwaitingTimes: make(map[uint32]*SymbolizedCudaTrace),
-		timesStoredAtNs:     make(map[uint32]int64),
-		pcTraces:            make(map[uint32]*SymbolizedCudaTrace),
-		pendingPCSamples:    make(map[uint32][]pendingPCSample),
-	}
-
-	gpuFixers.Store(pid, fixer)
+	gpuFixers.Store(pid, newGpuTraceFixer())
 	return &Instance{
 		d:    d,
 		path: d.path,
