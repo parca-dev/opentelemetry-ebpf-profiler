@@ -6,7 +6,7 @@ package config // import "go.opentelemetry.io/ebpf-profiler/collector/config"
 import (
 	"errors"
 	"fmt"
-	"runtime"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/ebpf-profiler/internal/linux"
@@ -17,6 +17,27 @@ const (
 	// 1TB of executable address space
 	MaxArgMapScaleFactor = 8
 )
+
+// ErrorMode controls how the profiler receiver handles startup errors.
+type ErrorMode string
+
+const (
+	// IgnoreError means startup errors are logged but not returned to the collector.
+	IgnoreError ErrorMode = "ignore"
+	// PropagateError means startup errors are returned to the collector (default).
+	PropagateError ErrorMode = "propagate"
+)
+
+func (e *ErrorMode) UnmarshalText(text []byte) error {
+	str := ErrorMode(strings.ToLower(string(text)))
+	switch str {
+	case IgnoreError, PropagateError:
+		*e = str
+		return nil
+	default:
+		return fmt.Errorf("unknown error mode %q", str)
+	}
+}
 
 // Config is the configuration for the collector.
 type Config struct {
@@ -40,11 +61,16 @@ type Config struct {
 	NoKernelVersionCheck   bool          `mapstructure:"no_kernel_version_check"`
 	MaxGRPCRetries         uint32        `mapstructure:"max_grpc_retries"`
 	MaxRPCMsgSize          int           `mapstructure:"max_rpc_msg_size"`
+	ErrorMode              ErrorMode     `mapstructure:"error_mode"`
 }
 
 // Validate validates the config.
 // This is automatically called by the config parser as it implements the xconfmap.Validator interface.
 func (cfg *Config) Validate() error {
+	if cfg.ErrorMode != IgnoreError && cfg.ErrorMode != PropagateError {
+		return fmt.Errorf("unknown error mode %q", cfg.ErrorMode)
+	}
+
 	if cfg.SamplesPerSecond < 1 {
 		return fmt.Errorf("invalid sampling frequency: %d", cfg.SamplesPerSecond)
 	}
@@ -95,17 +121,7 @@ func (cfg *Config) Validate() error {
 		}
 
 		var minMajor, minMinor uint32
-		switch runtime.GOARCH {
-		case "amd64":
-			minMajor, minMinor = 5, 2
-		case "arm64":
-			// Older ARM64 kernel versions have broken bpf_probe_read.
-			// https://github.com/torvalds/linux/commit/6ae08ae3dea2cfa03dd3665a3c8475c2d429ef47
-			minMajor, minMinor = 5, 5
-		default:
-			return fmt.Errorf("unsupported architecture: %s", runtime.GOARCH)
-		}
-
+		minMajor, minMinor = 5, 10
 		if major < minMajor || (major == minMajor && minor < minMinor) {
 			return fmt.Errorf("host Agent requires kernel version "+
 				"%d.%d or newer but got %d.%d.%d", minMajor, minMinor, major, minor, patch)
