@@ -35,6 +35,7 @@ const (
 	USDTProgCudaPCSampleBatchTail = "cuda_pc_sample_batch_tail"
 	USDTProgCudaStallReasonMap    = "cuda_stall_reason_map"
 	USDTProgCudaError             = "cuda_error"
+	USDTProgCudaGpuConfig         = "cuda_gpu_config"
 	USDTProgCudaProbe             = "cuda_probe"
 
 	// BPF attach cookie values - must match CUDA_PROG_* in cuda.ebpf.c.
@@ -52,6 +53,7 @@ const (
 	CudaProgPCSampleBatch  = 4
 	CudaProgStallReasonMap = 5
 	CudaProgError          = 6
+	CudaProgGpuConfig      = 7
 )
 
 const cudaProgsMap = "cuda_progs"
@@ -283,6 +285,7 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		var pcSampleProbe *pfelf.USDTProbe
 		var stallMapProbe *pfelf.USDTProbe
 		var errorProbe *pfelf.USDTProbe
+		var gpuConfigProbe *pfelf.USDTProbe
 		for i := range parcagpuProbes {
 			switch parcagpuProbes[i].Name {
 			case "cuda_correlation":
@@ -299,6 +302,8 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 				stallMapProbe = &parcagpuProbes[i]
 			case "error":
 				errorProbe = &parcagpuProbes[i]
+			case "gpu_config":
+				gpuConfigProbe = &parcagpuProbes[i]
 			}
 		}
 		if correlationProbe == nil {
@@ -329,6 +334,9 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		}
 		if errorProbe != nil {
 			requiredProbes = append(requiredProbes, *errorProbe)
+		}
+		if gpuConfigProbe != nil {
+			requiredProbes = append(requiredProbes, *gpuConfigProbe)
 		}
 		parcagpuProbes = requiredProbes
 
@@ -413,6 +421,9 @@ func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Addre
 		case "error":
 			cookies[i] = CudaProgError
 			progNames[i] = USDTProgCudaError
+		case "gpu_config":
+			cookies[i] = CudaProgGpuConfig
+			progNames[i] = USDTProgCudaGpuConfig
 		default:
 			log.Debugf("unknown parcagpu USDT probe name: %s", probe.Name)
 		}
