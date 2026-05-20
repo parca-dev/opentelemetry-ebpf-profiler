@@ -645,6 +645,7 @@ int BPF_USDT(cuda_error, s32 code, u64 message_ptr, u64 component_ptr)
 #define CUDA_PROG_PC_SAMPLE_BATCH 4
 #define CUDA_PROG_STALL_REASON    5
 #define CUDA_PROG_ERROR           6
+#define CUDA_PROG_GPU_CONFIG      7
 
 SEC("usdt/cuda_probe")
 int cuda_probe(struct pt_regs *ctx)
@@ -698,6 +699,8 @@ int cuda_probe(struct pt_regs *ctx)
   }
   case CUDA_PROG_STALL_REASON: return BPF_USDT_CALL(cuda_stall_reason_map, names_base, count);
   case CUDA_PROG_ERROR: return BPF_USDT_CALL(cuda_error, code, message_ptr, component_ptr);
+  case CUDA_PROG_GPU_CONFIG:
+    return BPF_USDT_CALL(cuda_gpu_config, device_id, sampling_factor, clock_khz, sm_count);
   default: DEBUG_PRINT("cuda_probe: unknown cookie %u", cookie); break;
   }
   return 0;
