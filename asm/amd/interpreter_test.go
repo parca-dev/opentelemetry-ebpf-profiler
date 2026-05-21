@@ -173,6 +173,24 @@ func TestMoveSignExtend(t *testing.T) {
 	require.True(t, i.Regs.Get(RAX).Match(pattern))
 }
 
+func TestSubImmediate(t *testing.T) {
+	// 0000 	48 BA 00 10 00 00 00 00 00 00 	mov rdx, 0x1000
+	// 000a 	48 83 EA 0C 	sub rdx, 0xC
+	// 000e 	48 8B 92 3C 04 00 00 	mov rdx, qword ptr [rdx + 0x43C]
+	//
+	// The CPU effectively executes mov rdx, [0x1000 - 0xc + 0x43c] = [0x1430].
+	// Symbolically we expect: prev + (-0xc) + 0x43c collapses to prev + 0x430,
+	// so RDX after the third instruction is Mem8(Imm(0x1000 + 0x430)) = Mem8(Imm(0x1430)).
+	it := NewInterpreterWithCode([]byte{
+		0x48, 0xba, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x48, 0x83, 0xea, 0x0c,
+		0x48, 0x8b, 0x92, 0x3c, 0x04, 0x00, 0x00,
+	})
+	_, err := it.Loop()
+	require.ErrorIs(t, err, io.EOF)
+	assertEval(t, it.Regs.Get(RDX), expression.Mem8(expression.Imm(0x1430)))
+}
+
 func TestRIPRelativeAddressing(t *testing.T) {
 	// Test case: mov 0x10512121(%rip),%rcx
 	code := []byte{
