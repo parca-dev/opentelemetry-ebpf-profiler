@@ -162,26 +162,17 @@ func buildGpuPCTrace(cpuTrace *SymbolizedCudaTrace, cubinMapping libpf.FrameMapp
 // buildGpuPCMeta constructs TraceEventMeta for a gpupc sample.
 // If a CPU trace is available, metadata is copied from it.
 //
-// OffTime carries the GPU time attributable to this PC in nanoseconds when a
-// GpuConfig has been received for the pid (period_ns × sample_count); otherwise
-// the raw count, with a one-shot warn — the reporter's merged sample_type is
-// nanoseconds, so unconfigured pids render as tiny slivers and the warning
-// surfaces the cause.
+// OffTime carries the raw PC sample count for this (pid, trace). The reporter
+// pairs it with the per-pid GpuConfig (via LoadGpuConfig) to set the profile
+// period to ns_per_sample, so a "count" sample_type stays mathematically
+// convertible to GPU nanoseconds via value × period.
 func buildGpuPCMeta(cpuTrace *SymbolizedCudaTrace, pid uint32,
 	sampleCount int64) *samples.TraceEventMeta {
-	offTime := sampleCount
-	if cfg, ok := LoadGpuConfig(pid); ok {
-		if ns := cfg.NsPerSample(); ns > 0 {
-			offTime = sampleCount * ns
-		}
-	} else {
-		warnMissingGpuConfig(pid)
-	}
 	meta := &samples.TraceEventMeta{
 		Timestamp: libpf.UnixTime64(time.Now().UnixNano()),
 		PID:       libpf.PID(pid),
 		Origin:    support.TraceOriginGpuPC,
-		OffTime:   offTime,
+		OffTime:   sampleCount,
 	}
 	if cpuTrace != nil && cpuTrace.Meta != nil {
 		meta.Timestamp = cpuTrace.Meta.Timestamp
