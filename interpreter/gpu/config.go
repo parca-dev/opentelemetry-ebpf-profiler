@@ -31,11 +31,11 @@ var gpuConfigCache sync.Map // map[uint32]*GpuConfig keyed by pid
 // pid for missing GpuConfig at PC-sample arrival).
 var gpuConfigMissingWarned sync.Map // map[uint32]struct{} keyed by pid
 
-// warnMissingGpuConfig emits a single warning per pid that received PC samples
-// before its GpuConfig probe was received. Caller falls back to raw sample
-// count in the merged-profile path; samples render as tiny slivers until the
-// config event arrives.
-func warnMissingGpuConfig(pid uint32) {
+// WarnMissingGpuConfig emits a single warning per pid that received PC samples
+// before its GpuConfig probe was received. The caller (reporter) decides what
+// to do with raw sample counts that lack a NsPerSample period — typically
+// surface them with a degraded period of 1 until the config event arrives.
+func WarnMissingGpuConfig(pid uint32) {
 	if _, loaded := gpuConfigMissingWarned.LoadOrStore(pid, struct{}{}); loaded {
 		return
 	}
