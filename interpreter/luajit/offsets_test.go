@@ -211,14 +211,57 @@ func TestX86LuaClose(t *testing.T) {
 				0x48, 0x89, 0xb3, 0x58, 0x01, 0x00, 0x00, // movq    %rsi, 0x158(%rbx)
 			},
 		},
+		{
+			// The canonical form per lua_close's source uses `movq $0x0, OFS(reg)`
+			// directly instead of zeroing a register first.
+			name:          "immediate-zero-store",
+			glRefExpected: 0x10,
+			curLExpected:  0x170,
+			code: []byte{
+				0x48, 0x8b, 0x5f, 0x10, //                                     movq $0x10(%rdi), %rbx
+				0x48, 0xc7, 0x83, 0x70, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // movq $0x0, 0x170(%rbx)
+			},
+		},
+		{
+			// endbr64 prefix - the asm/amd interpreter skips it transparently
+			// so we no longer need an explicit SkipEndBranch call.
+			name:          "endbr64-prefix",
+			glRefExpected: 0x10,
+			curLExpected:  0x158,
+			code: []byte{
+				0xf3, 0x0f, 0x1e, 0xfa, //                                     endbr64
+				0x48, 0x8b, 0x5f, 0x10, //                                     movq 0x10(%rdi), %rbx
+				0x48, 0xc7, 0x83, 0x58, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // movq $0x0, 0x158(%rbx)
+			},
+		},
+		{
+			// Resilience case the old extractor would miss on two counts:
+			//   1. R8 was zeroed via `xor %r8d, %r8d`; sameReg() only
+			//      whitelisted EAX/ECX/EDX/EBX/ESI so R8/R8D would not match.
+			//   2. The glref load is *not* directly from %rdi - the compiler
+			//      first parked L in %rax, then loaded G via %rax. The old
+			//      code required a1.Base == x86asm.RDI on the load.
+			// Symbolic tracking handles both for free.
+			name:          "r8-zero-and-rdi-mov-chain",
+			glRefExpected: 0x10,
+			curLExpected:  0x158,
+			code: []byte{
+				0x45, 0x31, 0xc0, //                                     xorl %r8d, %r8d
+				0x48, 0x89, 0xf8, //                                     movq %rdi, %rax
+				0x48, 0x8b, 0x58, 0x10, //                               movq 0x10(%rax), %rbx
+				0x4c, 0x89, 0x83, 0x58, 0x01, 0x00, 0x00, //             movq %r8, 0x158(%rbx)
+			},
+		},
 	}
 
 	for _, test := range testdata {
-		x := x86Extractor{}
-		glref, curL, err := x.findOffsetsFromLuaClose(test.code)
-		require.NoError(t, err)
-		require.Equal(t, test.glRefExpected, glref)
-		require.Equal(t, test.curLExpected, curL)
+		t.Run(test.name, func(t *testing.T) {
+			x := x86Extractor{}
+			glref, curL, err := x.findOffsetsFromLuaClose(test.code)
+			require.NoError(t, err)
+			require.Equal(t, test.glRefExpected, glref)
+			require.Equal(t, test.curLExpected, curL)
+		})
 	}
 }
 
