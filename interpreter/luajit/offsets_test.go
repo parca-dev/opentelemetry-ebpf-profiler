@@ -211,14 +211,125 @@ func TestX86LuaClose(t *testing.T) {
 				0x48, 0x89, 0xb3, 0x58, 0x01, 0x00, 0x00, // movq    %rsi, 0x158(%rbx)
 			},
 		},
+		{
+			// The canonical form per lua_close's source uses `movq $0x0, OFS(reg)`
+			// directly instead of zeroing a register first.
+			name:          "immediate-zero-store",
+			glRefExpected: 0x10,
+			curLExpected:  0x170,
+			code: []byte{
+				0x48, 0x8b, 0x5f, 0x10, //                                     movq $0x10(%rdi), %rbx
+				0x48, 0xc7, 0x83, 0x70, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // movq $0x0, 0x170(%rbx)
+			},
+		},
+		{
+			// endbr64 prefix - the asm/amd interpreter skips it transparently
+			// so we no longer need an explicit SkipEndBranch call.
+			name:          "endbr64-prefix",
+			glRefExpected: 0x10,
+			curLExpected:  0x158,
+			code: []byte{
+				0xf3, 0x0f, 0x1e, 0xfa, //                                     endbr64
+				0x48, 0x8b, 0x5f, 0x10, //                                     movq 0x10(%rdi), %rbx
+				0x48, 0xc7, 0x83, 0x58, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // movq $0x0, 0x158(%rbx)
+			},
+		},
+		{
+			// Resilience case the old extractor would miss on two counts:
+			//   1. R8 was zeroed via `xor %r8d, %r8d`; sameReg() only
+			//      whitelisted EAX/ECX/EDX/EBX/ESI so R8/R8D would not match.
+			//   2. The glref load is *not* directly from %rdi - the compiler
+			//      first parked L in %rax, then loaded G via %rax. The old
+			//      code required a1.Base == x86asm.RDI on the load.
+			// Symbolic tracking handles both for free.
+			name:          "r8-zero-and-rdi-mov-chain",
+			glRefExpected: 0x10,
+			curLExpected:  0x158,
+			code: []byte{
+				0x45, 0x31, 0xc0, //                                     xorl %r8d, %r8d
+				0x48, 0x89, 0xf8, //                                     movq %rdi, %rax
+				0x48, 0x8b, 0x58, 0x10, //                               movq 0x10(%rax), %rbx
+				0x4c, 0x89, 0x83, 0x58, 0x01, 0x00, 0x00, //             movq %r8, 0x158(%rbx)
+			},
+		},
 	}
 
 	for _, test := range testdata {
-		x := x86Extractor{}
-		glref, curL, err := x.findOffsetsFromLuaClose(test.code)
-		require.NoError(t, err)
-		require.Equal(t, test.glRefExpected, glref)
-		require.Equal(t, test.curLExpected, curL)
+		t.Run(test.name, func(t *testing.T) {
+			x := x86Extractor{}
+			glref, curL, err := x.findOffsetsFromLuaClose(test.code)
+			require.NoError(t, err)
+			require.Equal(t, test.glRefExpected, glref)
+			require.Equal(t, test.curLExpected, curL)
+		})
+	}
+}
+
+func TestX86Checktrace(t *testing.T) {
+	testdata := []struct {
+		name     string
+		expected uint64
+		code     []byte
+	}{
+		{
+			// Canonical jit_checktrace per the disasm comment in
+			// extractor_x86.go: L (%rdi) is parked in %rbx, G is loaded as
+			// L->glref via 0x10(%rbx), then the J->traces load is at
+			// 0x430(%rdx).
+			name:     "canonical",
+			expected: 0x430,
+			code: []byte{
+				0x48, 0x89, 0xfb, //                         mov  %rdi, %rbx
+				0x48, 0x8b, 0x53, 0x10, //                   mov  0x10(%rbx), %rdx
+				0x48, 0x8b, 0x92, 0x30, 0x04, 0x00, 0x00, // mov  0x430(%rdx), %rdx
+			},
+		},
+		{
+			// SUB-shifted register: some builds apply a constant adjustment to
+			// G's register before the final load. Old extractor accumulated
+			// this manually; symbolic interpreter folds (-0xc + 0x43c) into
+			// 0x430 via Add canonicalization. Recently broke in the wild
+			// (#99ec409).
+			name:     "sub-adjusted",
+			expected: 0x430,
+			code: []byte{
+				0x48, 0x8b, 0x57, 0x10, //                   mov  0x10(%rdi), %rdx
+				0x48, 0x83, 0xea, 0x0c, //                   sub  $0xc, %rdx
+				0x48, 0x8b, 0x92, 0x3c, 0x04, 0x00, 0x00, // mov  0x43c(%rdx), %rdx
+			},
+		},
+		{
+			// ADD-shifted register: symmetric to the SUB case. (0xc + 0x424) = 0x430.
+			name:     "add-adjusted",
+			expected: 0x430,
+			code: []byte{
+				0x48, 0x8b, 0x57, 0x10, //                   mov  0x10(%rdi), %rdx
+				0x48, 0x83, 0xc2, 0x0c, //                   add  $0xc, %rdx
+				0x48, 0x8b, 0x92, 0x24, 0x04, 0x00, 0x00, // mov  0x424(%rdx), %rdx
+			},
+		},
+		{
+			// Resilience case: G is moved to an intermediate register before
+			// the final load. Old extractor required the load's base to be
+			// the same register that received the 0x10(L) load directly;
+			// symbolic tracking propagates the value through the chain.
+			name:     "mov-chain-through-intermediate-reg",
+			expected: 0x430,
+			code: []byte{
+				0x48, 0x8b, 0x57, 0x10, //                   mov  0x10(%rdi), %rdx
+				0x48, 0x89, 0xd6, //                         mov  %rdx, %rsi
+				0x48, 0x8b, 0x8e, 0x30, 0x04, 0x00, 0x00, // mov  0x430(%rsi), %rcx
+			},
+		},
+	}
+
+	for _, tc := range testdata {
+		t.Run(tc.name, func(t *testing.T) {
+			x := x86Extractor{}
+			got, err := x.findG2TracesOffsetFromChecktrace(tc.code)
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, got)
+		})
 	}
 }
 

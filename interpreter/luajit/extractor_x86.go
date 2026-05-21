@@ -14,6 +14,8 @@ package luajit // import "go.opentelemetry.io/ebpf-profiler/interpreter/luajit"
 import (
 	"errors"
 
+	"go.opentelemetry.io/ebpf-profiler/asm/amd"
+	"go.opentelemetry.io/ebpf-profiler/asm/expression"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	xh "go.opentelemetry.io/ebpf-profiler/x86helpers"
 	"golang.org/x/arch/x86/x86asm"
@@ -48,56 +50,68 @@ which is a dynamic public symbol that should be in all binaries of LuaJIT includ
 	0x0000000000016dae <+46>:    mov    %rbx,%rdi
 	0x0000000000016db1 <+49>:    movq   $0x0,0x170(%rbp)  ; 0x170 is curLOffset
 */
+// findOffsetsFromLuaClose recovers glref (offset of G in L) and curL (offset of
+// cur_L in G) from lua_close. The prologue looks like:
+//
+//	mov 0x10(%rdi), %rbx       ; %rbx = L->glref  (i.e. G)
+//	...
+//	mov %rsi, 0x158(%rbx)      ; G->cur_L = 0  (%rsi previously zeroed via XOR)
+//
+// We drive the asm/amd symbolic interpreter so that whichever register ends up
+// holding G keeps its provenance (Mem8([L + glref])) regardless of MOV chains,
+// 32/64-bit register aliasing, or which register the compiler picks. We then
+// stop at the first memory store of zero whose base register matches that
+// expression and read both offsets off it.
+//
 //nolint:nonamedreturns
 func (x *x86Extractor) findOffsetsFromLuaClose(b []byte) (glref, curL uint64, err error) {
-	b, _ = xh.SkipEndBranch(b) //nolint:errcheck
-	var greg x86asm.Reg
-	var zeroReg x86asm.Reg
-	for len(b) > 0 {
-		var i x86asm.Inst
-		i, err = x86asm.Decode(b, 64)
-		if err != nil {
-			return 0, 0, err
+	it := amd.NewInterpreterWithCode(b)
+	// SysV ABI passes lua_State *L in RDI. The interpreter initializes every
+	// register to a fresh Named expression, so RDI's initial value IS our L.
+	// expression.Match uses pointer equality for *named, so this same instance
+	// is what we'll match against.
+	L := it.Regs.GetX86(x86asm.RDI)
+
+	for {
+		inst, stepErr := it.Step()
+		if stepErr != nil {
+			break
 		}
-		if i.Op == x86asm.XOR {
-			a0, ok1 := i.Args[0].(x86asm.Reg)
-			a1, ok2 := i.Args[1].(x86asm.Reg)
-			if ok1 && ok2 && a0 == a1 {
-				zeroReg = a0
-			}
+		if inst.Op != x86asm.MOV {
+			continue
 		}
-		if i.Op == x86asm.MOV {
-			if greg == 0 {
-				a0, ok1 := i.Args[0].(x86asm.Reg)
-				a1, ok2 := i.Args[1].(x86asm.Mem)
-				if ok1 && ok2 && a1.Base == x86asm.RDI {
-					greg = a0
-					glref = uint64(a1.Disp)
-				}
-			} else {
-				a0, ok1 := i.Args[0].(x86asm.Mem)
-				if ok1 && sameReg(a0.Base, greg) {
-					imm, ok2 := i.Args[1].(x86asm.Imm)
-					if ok2 && imm == 0 {
-						curL = uint64(a0.Disp)
-						return glref, curL, nil
-					}
-					r1, ok2 := i.Args[1].(x86asm.Reg)
-					if ok2 && sameReg(r1, zeroReg) {
-						curL = uint64(a0.Disp)
-						return glref, curL, nil
-					}
-				}
-				// If Greg is dest error
-				if r0, ok := i.Args[0].(x86asm.Reg); ok && sameReg(r0, greg) {
-					err = errors.New("parse error, register holding G was clobbered")
-					return 0, 0, err
-				}
-			}
+		dst, isMem := inst.Args[0].(x86asm.Mem)
+		if !isMem || dst.Base == 0 {
+			continue
 		}
-		b = b[i.Len:]
+		if !isZeroOperand(inst.Args[1], &it.Regs) {
+			continue
+		}
+		// The interpreter doesn't model memory stores, so the symbolic value of
+		// the destination's base register is its value as of just before the
+		// store - exactly what we want. We expect G = Mem8([L + glref]).
+		glrefCap := expression.NewImmediateCapture("glref")
+		if it.Regs.GetX86(dst.Base).Match(
+			expression.Mem8(expression.Add(L, glrefCap)),
+		) {
+			return glrefCap.CapturedValue(), uint64(dst.Disp), nil
+		}
 	}
 	return 0, 0, errors.New("find offsets from lua_close failed")
+}
+
+// isZeroOperand reports whether arg currently evaluates to zero - either as a
+// literal immediate or as a register the symbolic interpreter has determined
+// holds zero (typically from xor reg, reg).
+func isZeroOperand(arg x86asm.Arg, regs *amd.Registers) bool {
+	switch v := arg.(type) {
+	case x86asm.Imm:
+		return v == 0
+	case x86asm.Reg:
+		cap := expression.NewImmediateCapture("zero")
+		return regs.GetX86(v).Match(cap) && cap.CapturedValue() == 0
+	}
+	return false
 }
 
 // This is different in most builds and we need to get it from stripped binaries.
@@ -291,41 +305,40 @@ func (x *x86Extractor) findLjDispatchUpdateAddr(b []byte, addr uint64) (uint64, 
 // libluajit-5.1.so[0x6379f] <+31>: jbe    0x637ae        ; <+46> at lib_jit.c:304:1
 // ----------- 0x430 is the G to J->traces offset
 // libluajit-5.1.so[0x637a1] <+33>: movq   0x430(%rdx), %rdx
+//
+// Some builds apply an ADD/SUB constant to the register holding G before the
+// final load; the symbolic interpreter folds those into the address expression
+// for free, so the captured displacement is the true G->traces offset.
 func (x *x86Extractor) findG2TracesOffsetFromChecktrace(b []byte) (uint64, error) {
-	b, _ = xh.SkipEndBranch(b) //nolint:errcheck
-	var Greg x86asm.Reg
-	var offset int64
-	for len(b) > 0 {
-		i, err := x86asm.Decode(b, 64)
-		if err != nil {
-			return 0, err
-		}
-		switch i.Op {
-		case x86asm.MOV:
-			a1, ok := i.Args[1].(x86asm.Mem)
-			if ok {
-				// glref offset is 0x10
-				if a1.Disp == 0x10 {
-					Greg = i.Args[0].(x86asm.Reg)
-				} else if a1.Base == Greg {
-					return uint64(a1.Disp + offset), nil
-				}
-			}
-		case x86asm.SUB, x86asm.ADD:
-			r, ok := i.Args[0].(x86asm.Reg)
-			if ok && r == Greg {
-				delta, ok := i.Args[1].(x86asm.Imm)
-				if ok {
-					if i.Op == x86asm.SUB {
-						offset -= int64(delta)
-					} else {
-						offset += int64(delta)
-					}
-				}
-			}
+	it := amd.NewInterpreterWithCode(b)
+	// L is initial RDI; G is L->glref. glref is hard-wired at 0x10 in the
+	// LJ_GC64 layout (findOffsetsFromLuaClose enforces this assumption
+	// before extractOffsets gets here).
+	L := it.Regs.GetX86(x86asm.RDI)
+	G := expression.Mem8(expression.Add(L, expression.Imm(0x10)))
+	tracesCap := expression.NewImmediateCapture("g2traces")
+	pattern := expression.Mem8(expression.Add(G, tracesCap))
 
+	for {
+		inst, err := it.Step()
+		if err != nil {
+			break
 		}
-		b = b[i.Len:]
+		// We're looking for a load from [G + disp] into a register; the
+		// destination's new symbolic value is what we match against.
+		if inst.Op != x86asm.MOV {
+			continue
+		}
+		dstReg, dstIsReg := inst.Args[0].(x86asm.Reg)
+		if !dstIsReg {
+			continue
+		}
+		if _, srcIsMem := inst.Args[1].(x86asm.Mem); !srcIsMem {
+			continue
+		}
+		if it.Regs.GetX86(dstReg).Match(pattern) {
+			return tracesCap.CapturedValue(), nil
+		}
 	}
 	return 0, errors.New("offset not found")
 }
@@ -572,29 +585,4 @@ func calcRipRelativeAddr(a1 x86asm.Mem, baseAddr, ip int64) int64 {
 	// are 32 bit.  TODO: This is a bug that should be created/looked up.
 	disp := int32(a1.Disp)
 	return baseAddr + ip + int64(disp)
-}
-
-// If we're dealing with 32bit values compilers will use R or E prefix
-// interchangeably (E refs are just zero padded).
-func sameReg(r1, r2 x86asm.Reg) bool {
-	if r1 == r2 {
-		return true
-	}
-	f := func(r1, r2 x86asm.Reg) bool {
-		switch r1 {
-		case x86asm.EAX:
-			return r2 == x86asm.RAX
-		case x86asm.ECX:
-			return r2 == x86asm.RCX
-		case x86asm.EDX:
-			return r2 == x86asm.RDX
-		case x86asm.EBX:
-			return r2 == x86asm.RBX
-		case x86asm.ESI:
-			return r2 == x86asm.RSI
-		default:
-			return false
-		}
-	}
-	return f(r1, r2) || f(r2, r1)
 }

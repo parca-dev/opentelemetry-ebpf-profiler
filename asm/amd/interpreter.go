@@ -98,6 +98,20 @@ func (i *Interpreter) Step() (x86asm.Inst, error) {
 				i.Regs.setX86asm(dst, expression.Add(left, right))
 			}
 		}
+	case x86asm.SUB:
+		// Only the immediate form is modeled: the expression algebra has Add
+		// but no Subtract, and Reg/Reg or Reg/Mem subtraction would need a
+		// negate primitive. SUB reg, imm is enough for the cases we care
+		// about (e.g. luajit's jit_checktrace applies SUB reg, imm to G).
+		if dst, ok := inst.Args[0].(x86asm.Reg); ok {
+			if src, imm := inst.Args[1].(x86asm.Imm); imm {
+				left := i.Regs.GetX86(dst)
+				// Two's-complement: Add() folds immediates with uint64
+				// wraparound, so an outer + imm cancels (prev + (-imm) + outer).
+				neg := expression.Imm(uint64(-int64(src)))
+				i.Regs.setX86asm(dst, expression.Add(left, neg))
+			}
+		}
 	case x86asm.SHL:
 		if dst, ok := inst.Args[0].(x86asm.Reg); ok {
 			if src, imm := inst.Args[1].(x86asm.Imm); imm {
