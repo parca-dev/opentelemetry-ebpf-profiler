@@ -698,6 +698,9 @@ const (
 	// Number of GPU trace entries cleared due to threshold
 	IDCudaTracesCleared = 302
 
+	// Number of pending PC sample events dropped at retention-window eviction (correlation trace never arrived)
+	IDCudaPendingPCSamplesEvicted = 305
+
 	// Number of failures to read LuaJIT context pointer
 	IDUnwindLuaJITErrNoContext = 303
 
@@ -705,5 +708,5 @@ const (
 	IDUnwindLuaJITErrLMismatch = 304
 
 	// max number of ID values, keep this as *last entry*
-	IDMax = 305
+	IDMax = 306
 )

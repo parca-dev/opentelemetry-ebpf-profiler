@@ -5,13 +5,14 @@ package cudaverify
 import (
 	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"os"
 	"testing"
 	"time"
 	"unsafe"
 
-	"github.com/cilium/ebpf/perf"
+	"github.com/cilium/ebpf/ringbuf"
 	"github.com/stretchr/testify/require"
 
 	"go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
@@ -87,12 +88,13 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 		return false
 	}, 30*time.Second, 200*time.Millisecond, "process manager never synced our PID")
 
-	// Set up perf reader on the cuda_timing_events map before simulation.
-	timingMap := trc.GetEbpfMaps()["cuda_timing_events"]
-	require.NotNil(t, timingMap, "cuda_timing_events map not found")
+	// Set up ringbuf reader on the cupti_events map BEFORE the dlopen so we
+	// don't miss any events.
+	cuptiEventsMap := trc.GetEbpfMaps()["cupti_events"]
+	require.NotNil(t, cuptiEventsMap, "cupti_events map not found")
 
-	reader, err := perf.NewReader(timingMap, 1024*1024)
-	require.NoError(t, err, "perf.NewReader failed")
+	reader, err := ringbuf.NewReader(cuptiEventsMap)
+	require.NoError(t, err, "ringbuf.NewReader failed")
 	defer reader.Close()
 
 	// libparcagpucupti.so was loaded in TestMain — ForceProcessPID will
@@ -117,8 +119,8 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 	// Simulate kernel launches and wait for timing events.  Retry the
 	// simulation several times — on slow CI the uprobes may not be fully
 	// active in the kernel immediately after the interpreter is detected.
-	var events []gpu.CuptiTimingEvent
-	var rec perf.Record
+	var events []gpu.CuptiKernelEvent
+	var rec ringbuf.Record
 
 	const (
 		maxAttempts  = 10
@@ -135,12 +137,17 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 		// Simulate buffer completion (fires kernel_executed + activity_batch USDTs).
 		cSimulateBufferCompletion(42, 0, 7, "testKernel")
 
-		// Poll perf reader for timing events.
+		// Poll ringbuf reader for events. Filter to EVENT_TYPE_KERNEL — the
+		// same ringbuf carries cubin/pc_sample/error events too in production,
+		// but those don't fire in this simulation.
 		deadline := time.After(pollTimeout)
 		for {
 			reader.SetDeadline(time.Now().Add(pollInterval))
 			err := reader.ReadInto(&rec)
 			if err != nil {
+				if errors.Is(err, ringbuf.ErrClosed) {
+					goto nextAttempt
+				}
 				select {
 				case <-deadline:
 					goto nextAttempt
@@ -148,12 +155,15 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 					continue
 				}
 			}
-			if rec.LostSamples != 0 || len(rec.RawSample) == 0 {
+			if len(rec.RawSample) < int(unsafe.Sizeof(gpu.CuptiKernelEvent{})) {
 				continue
 			}
-			ev := (*gpu.CuptiTimingEvent)(unsafe.Pointer(&rec.RawSample[0]))
+			ev := (*gpu.CuptiKernelEvent)(unsafe.Pointer(&rec.RawSample[0]))
+			if ev.EventType != gpu.EventTypeKernel {
+				continue
+			}
 			events = append(events, *ev)
-			t.Logf("Received timing event: pid=%d id=%d dev=%d stream=%d kernel=%s",
+			t.Logf("Received kernel event: pid=%d id=%d dev=%d stream=%d kernel=%s",
 				ev.Pid, ev.Id, ev.Dev, ev.Stream,
 				string(ev.KernelName[:bytes.IndexByte(ev.KernelName[:], 0)]))
 		}
@@ -164,7 +174,7 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 		t.Logf("no events after attempt %d, retrying...", attempt)
 	}
 
-	require.NotEmpty(t, events, "no timing events received from cuda_timing_events perf buffer after %d attempts", maxAttempts)
+	require.NotEmpty(t, events, "no kernel events received from cupti_events ringbuf after %d attempts", maxAttempts)
 
 	// Verify at least one event matches our simulated kernel.
 	found := false

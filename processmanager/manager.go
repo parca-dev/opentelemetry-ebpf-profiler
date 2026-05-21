@@ -341,8 +341,26 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace) {
 	cacheMiss := uint64(0)
 	cacheHit := uint64(0)
 
-	for frames := libpf.EbpfFrame(bpfTrace.FrameData); len(frames) > 0; frames = frames[frames.Length():] {
-		frame := frames[:frames.Length()]
+	for frames := libpf.EbpfFrame(bpfTrace.FrameData); len(frames) > 0; {
+		fl := int(frames.Length())
+		if fl == 0 || fl > len(frames) {
+			// Malformed frame header: length bits are 0, or the encoded length
+			// claims more uint64s than remain in the buffer. The latter only
+			// surfaces because FrameData is a slice into a larger FrameDataBuf
+			// (cap > len) — so frames[:fl] succeeds silently with stale bytes
+			// from the prior trace, and the panic only fires on frames[fl:].
+			// Without this guard the loop would spin forever (fl==0), or panic
+			// reading garbage frame data (fl>len). Bail out and let the caller
+			// report whatever partial trace we built. See branch
+			// investigation/trace-handling-experiments for the root-cause
+			// investigation.
+			log.Errorf("bogus trace: malformed frame header for PID %d: "+
+				"fl=%d remaining=%d total_framedata=%d num_frames=%d frames_decoded=%d",
+				pid, fl, len(frames), len(bpfTrace.FrameData),
+				bpfTrace.NumFrames, len(trace.Frames)-kernelFramesLen)
+			break
+		}
+		frame := frames[:fl]
 		if frame.Flags().Error() {
 			if !pm.filterErrorFrames {
 				trace.Frames.Append(&libpf.Frame{
@@ -350,6 +368,7 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace) {
 					AddressOrLineno: libpf.AddressOrLineno(frame.Data()),
 				})
 			}
+			frames = frames[fl:]
 			continue
 		}
 
@@ -370,6 +389,7 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace) {
 				pm.frameCache.Add(key, slices.Clone(trace.Frames[oldLen:len(trace.Frames)]))
 			}
 		}
+		frames = frames[fl:]
 	}
 	if cacheMiss != 0 {
 		pm.frameCacheMiss.Add(cacheMiss)
