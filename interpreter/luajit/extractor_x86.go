@@ -13,6 +13,8 @@ package luajit // import "go.opentelemetry.io/ebpf-profiler/interpreter/luajit"
 
 import (
 	"errors"
+	"fmt"
+	"io"
 
 	"go.opentelemetry.io/ebpf-profiler/asm/amd"
 	"go.opentelemetry.io/ebpf-profiler/asm/expression"
@@ -75,7 +77,10 @@ func (x *x86Extractor) findOffsetsFromLuaClose(b []byte) (glref, curL uint64, er
 	for {
 		inst, stepErr := it.Step()
 		if stepErr != nil {
-			break
+			if errors.Is(stepErr, io.EOF) {
+				break
+			}
+			return 0, 0, fmt.Errorf("scanning lua_close for glref store: %w", stepErr)
 		}
 		if inst.Op != x86asm.MOV {
 			continue
@@ -305,41 +310,43 @@ func (x *x86Extractor) findLjDispatchUpdateAddr(b []byte, addr uint64) (uint64, 
 // libluajit-5.1.so[0x6379f] <+31>: jbe    0x637ae        ; <+46> at lib_jit.c:304:1
 // ----------- 0x430 is the G to J->traces offset
 // libluajit-5.1.so[0x637a1] <+33>: movq   0x430(%rdx), %rdx
+//
+// Some builds apply an ADD/SUB constant to the register holding G before the
+// final load; the symbolic interpreter folds those into the address expression
+// for free, so the captured displacement is the true G->traces offset.
 func (x *x86Extractor) findG2TracesOffsetFromChecktrace(b []byte) (uint64, error) {
-	b, _ = xh.SkipEndBranch(b) //nolint:errcheck
-	var Greg x86asm.Reg
-	var offset int64
-	for len(b) > 0 {
-		i, err := x86asm.Decode(b, 64)
-		if err != nil {
-			return 0, err
-		}
-		switch i.Op {
-		case x86asm.MOV:
-			a1, ok := i.Args[1].(x86asm.Mem)
-			if ok {
-				// glref offset is 0x10
-				if a1.Disp == 0x10 {
-					Greg = i.Args[0].(x86asm.Reg)
-				} else if a1.Base == Greg {
-					return uint64(a1.Disp + offset), nil
-				}
-			}
-		case x86asm.SUB, x86asm.ADD:
-			r, ok := i.Args[0].(x86asm.Reg)
-			if ok && r == Greg {
-				delta, ok := i.Args[1].(x86asm.Imm)
-				if ok {
-					if i.Op == x86asm.SUB {
-						offset -= int64(delta)
-					} else {
-						offset += int64(delta)
-					}
-				}
-			}
+	it := amd.NewInterpreterWithCode(b)
+	// L is initial RDI; G is L->glref. glref is hard-wired at 0x10 in the
+	// LJ_GC64 layout (findOffsetsFromLuaClose enforces this assumption
+	// before extractOffsets gets here).
+	L := it.Regs.GetX86(x86asm.RDI)
+	G := expression.Mem8(expression.Add(L, expression.Imm(0x10)))
+	tracesCap := expression.NewImmediateCapture("g2traces")
+	pattern := expression.Mem8(expression.Add(G, tracesCap))
 
+	for {
+		inst, err := it.Step()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return 0, fmt.Errorf("scanning jit_checktrace for G->traces load: %w", err)
 		}
-		b = b[i.Len:]
+		// We're looking for a load from [G + disp] into a register; the
+		// destination's new symbolic value is what we match against.
+		if inst.Op != x86asm.MOV {
+			continue
+		}
+		dstReg, dstIsReg := inst.Args[0].(x86asm.Reg)
+		if !dstIsReg {
+			continue
+		}
+		if _, srcIsMem := inst.Args[1].(x86asm.Mem); !srcIsMem {
+			continue
+		}
+		if it.Regs.GetX86(dstReg).Match(pattern) {
+			return tracesCap.CapturedValue(), nil
+		}
 	}
 	return 0, errors.New("offset not found")
 }

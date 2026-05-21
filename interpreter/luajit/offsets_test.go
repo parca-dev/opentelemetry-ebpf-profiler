@@ -265,6 +265,74 @@ func TestX86LuaClose(t *testing.T) {
 	}
 }
 
+func TestX86Checktrace(t *testing.T) {
+	testdata := []struct {
+		name     string
+		expected uint64
+		code     []byte
+	}{
+		{
+			// Canonical jit_checktrace per the disasm comment in
+			// extractor_x86.go: L (%rdi) is parked in %rbx, G is loaded as
+			// L->glref via 0x10(%rbx), then the J->traces load is at
+			// 0x430(%rdx).
+			name:     "canonical",
+			expected: 0x430,
+			code: []byte{
+				0x48, 0x89, 0xfb, //                         mov  %rdi, %rbx
+				0x48, 0x8b, 0x53, 0x10, //                   mov  0x10(%rbx), %rdx
+				0x48, 0x8b, 0x92, 0x30, 0x04, 0x00, 0x00, // mov  0x430(%rdx), %rdx
+			},
+		},
+		{
+			// SUB-shifted register: some builds apply a constant adjustment to
+			// G's register before the final load. Old extractor accumulated
+			// this manually; symbolic interpreter folds (-0xc + 0x43c) into
+			// 0x430 via Add canonicalization. Recently broke in the wild
+			// (#99ec409).
+			name:     "sub-adjusted",
+			expected: 0x430,
+			code: []byte{
+				0x48, 0x8b, 0x57, 0x10, //                   mov  0x10(%rdi), %rdx
+				0x48, 0x83, 0xea, 0x0c, //                   sub  $0xc, %rdx
+				0x48, 0x8b, 0x92, 0x3c, 0x04, 0x00, 0x00, // mov  0x43c(%rdx), %rdx
+			},
+		},
+		{
+			// ADD-shifted register: symmetric to the SUB case. (0xc + 0x424) = 0x430.
+			name:     "add-adjusted",
+			expected: 0x430,
+			code: []byte{
+				0x48, 0x8b, 0x57, 0x10, //                   mov  0x10(%rdi), %rdx
+				0x48, 0x83, 0xc2, 0x0c, //                   add  $0xc, %rdx
+				0x48, 0x8b, 0x92, 0x24, 0x04, 0x00, 0x00, // mov  0x424(%rdx), %rdx
+			},
+		},
+		{
+			// Resilience case: G is moved to an intermediate register before
+			// the final load. Old extractor required the load's base to be
+			// the same register that received the 0x10(L) load directly;
+			// symbolic tracking propagates the value through the chain.
+			name:     "mov-chain-through-intermediate-reg",
+			expected: 0x430,
+			code: []byte{
+				0x48, 0x8b, 0x57, 0x10, //                   mov  0x10(%rdi), %rdx
+				0x48, 0x89, 0xd6, //                         mov  %rdx, %rsi
+				0x48, 0x8b, 0x8e, 0x30, 0x04, 0x00, 0x00, // mov  0x430(%rsi), %rcx
+			},
+		},
+	}
+
+	for _, tc := range testdata {
+		t.Run(tc.name, func(t *testing.T) {
+			x := x86Extractor{}
+			got, err := x.findG2TracesOffsetFromChecktrace(tc.code)
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, got)
+		})
+	}
+}
+
 // spot testing
 func TestFiles(t *testing.T) {
 	files, err := os.ReadDir("./testdata")
