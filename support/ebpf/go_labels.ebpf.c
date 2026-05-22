@@ -38,19 +38,27 @@ get_go_custom_labels_from_slice(PerCPURecord *record, void *labels_slice_ptr)
     if (i >= labels_slice.len)
       break;
     CustomLabel *lbl = &out->labels[i];
+    // The PerCPURecord is reused across traces and bpf_probe_read_user() only
+    // writes the bytes it reads, so a shorter key/value would otherwise inherit
+    // trailing bytes from a previous trace. Userspace scans for the first NUL,
+    // so a single terminator after the bytes we read is sufficient. The key/val
+    // buffers are CUSTOM_LABEL_MAX_*_LEN + 1, so position klen/vlen is always
+    // in-bounds for the terminator.
     u8 klen          = MIN(record->labels[i * 2].len, CUSTOM_LABEL_MAX_KEY_LEN);
     if (bpf_probe_read_user(lbl->key, klen, record->labels[i * 2].str)) {
       DEBUG_PRINT(
         "cl: failed to read key for custom label (%lx)", (unsigned long)record->labels[i * 2].str);
       return false;
     }
-    u8 vlen = MIN(record->labels[i * 2 + 1].len, CUSTOM_LABEL_MAX_VAL_LEN);
+    lbl->key[klen] = 0;
+    u8 vlen        = MIN(record->labels[i * 2 + 1].len, CUSTOM_LABEL_MAX_VAL_LEN);
     if (bpf_probe_read_user(lbl->val, vlen, record->labels[i * 2 + 1].str)) {
       DEBUG_PRINT(
         "cl: failed to read key for custom label (%lx)",
         (unsigned long)record->labels[i * 2 + 1].str);
       return false;
     }
+    lbl->val[vlen] = 0;
   }
   out->len = num_to_read;
 
@@ -118,14 +126,20 @@ get_go_custom_labels_from_map(PerCPURecord *record, void *labels_map_ptr_ptr, Go
       char *vstr       = map_value->values[i].str;
       unsigned vlen    = map_value->values[i].len;
       if (tophash != 0 && kstr != NULL) {
-        if (bpf_probe_read_user(lbl->key, MIN(klen, CUSTOM_LABEL_MAX_KEY_LEN), kstr)) {
+        // Terminate the bytes we read with a NUL; see get_go_custom_labels_from_slice
+        // for why this is required (the PerCPURecord is reused across traces).
+        u8 klen_clamped = MIN(klen, CUSTOM_LABEL_MAX_KEY_LEN);
+        if (bpf_probe_read_user(lbl->key, klen_clamped, kstr)) {
           DEBUG_PRINT("cl: failed to read key for custom label (%lx)", (unsigned long)kstr);
           return false;
         }
-        if (bpf_probe_read_user(lbl->val, MIN(vlen, CUSTOM_LABEL_MAX_VAL_LEN), vstr)) {
+        lbl->key[klen_clamped] = 0;
+        u8 vlen_clamped        = MIN(vlen, CUSTOM_LABEL_MAX_VAL_LEN);
+        if (bpf_probe_read_user(lbl->val, vlen_clamped, vstr)) {
           DEBUG_PRINT("cl: failed to read value for custom label");
           return false;
         }
+        lbl->val[vlen_clamped] = 0;
         out->len++;
       }
     }
