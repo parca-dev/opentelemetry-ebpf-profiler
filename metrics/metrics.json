@@ -2091,151 +2091,158 @@
     "id": 285
   },
   {
+    "description": "Number of failures to read TLS variables via the DTV",
+    "type": "counter",
+    "name": "UnwindErrBadDTVRead",
+    "field": "bpf.errors.bad_dtv_read",
+    "id": 286
+  },
+  {
     "description": "Number of failures to get TSD base for native custom labels",
     "type": "counter",
     "name": "UnwindNativeCustomLabelsErrReadTsdBase",
     "field": "bpf.native_custom_labels.errors.read_tsd_base",
-    "id": 286
+    "id": 287
   },
   {
     "description": "Number of failures to read native custom labels thread-local object",
     "type": "counter",
     "name": "UnwindNativeCustomLabelsErrReadData",
     "field": "bpf.native_custom_labels.errors.read_data",
-    "id": 287
+    "id": 288
   },
   {
     "description": "Number of failures to read native custom labels key buffer",
     "type": "counter",
     "name": "UnwindNativeCustomLabelsErrReadKey",
     "field": "bpf.native_custom_labels.errors.read_key",
-    "id": 288
+    "id": 289
   },
   {
     "description": "Number of failures to read native custom labels value buffer",
     "type": "counter",
     "name": "UnwindNativeCustomLabelsErrReadValue",
     "field": "bpf.native_custom_labels.errors.read_value",
-    "id": 289
+    "id": 290
   },
   {
     "description": "Number of successful reads of native custom labels",
     "type": "counter",
     "name": "UnwindNativeCustomLabelsReadSuccesses",
     "field": "bpf.native_custom_labels.read.successes",
-    "id": 290
+    "id": 291
   },
   {
     "description": "Total number of failures to add native custom labels",
     "type": "counter",
     "name": "UnwindNativeCustomLabelsAddErrors",
     "field": "bpf.native_custom_labels.add.errors",
-    "id": 291
+    "id": 292
   },
   {
     "description": "Number of successes adding native custom labels",
     "type": "counter",
     "name": "UnwindNativeCustomLabelsAddSuccesses",
     "field": "bpf.native_custom_labels.add.successes",
-    "id": 292
+    "id": 293
   },
   {
     "description": "Number of attempted LuaJIT unwinds",
     "type": "counter",
     "name": "UnwindLuaJITAttempts",
     "field": "bpf.luajit.attempts",
-    "id": 293
+    "id": 294
   },
   {
     "description": "Number of times we didn't find an entry for this process in the LuaJIT process info array",
     "type": "counter",
     "name": "UnwindLuaJITErrNoProcInfo",
     "field": "bpf.luajit.errors.no_proc_info",
-    "id": 294
+    "id": 295
   },
   {
     "description": "Number of attempts to read Node.js custom labels",
     "type": "counter",
     "name": "UnwindNodeCustomLabelsAttempts",
     "field": "bpf.node_custom_labels.attempts",
-    "id": 295
+    "id": 296
   },
   {
     "description": "Number of successful reads of Node.js custom labels",
     "type": "counter",
     "name": "UnwindNodeCustomLabelsSuccesses",
     "field": "bpf.node_custom_labels.successes",
-    "id": 296
+    "id": 297
   },
   {
     "description": "Number of failed attempts to read Node.js custom labels",
     "type": "counter",
     "name": "UnwindNodeCustomLabelsFailures",
     "field": "bpf.node_custom_labels.failures",
-    "id": 297
+    "id": 298
   },
   {
     "description": "Number of times dlopen uprobe was fired",
     "type": "counter",
     "name": "DlopenUprobeHits",
     "field": "bpf.dlopen.uprobe_hits",
-    "id": 298
+    "id": 299
   },
   {
     "description": "Number of GPU timing events waiting for matching traces",
     "type": "gauge",
     "name": "CudaTimesAwaitingTraces",
     "field": "cuda.times_awaiting_traces",
-    "id": 299
+    "id": 300
   },
   {
     "description": "Number of GPU traces waiting for matching timing events",
     "type": "gauge",
     "name": "CudaTracesAwaitingTimes",
     "field": "cuda.traces_awaiting_times",
-    "id": 300
+    "id": 301
   },
   {
     "description": "Number of GPU timing entries cleared due to threshold",
     "type": "counter",
     "name": "CudaTimesCleared",
     "field": "cuda.times_cleared",
-    "id": 301
+    "id": 302
   },
   {
     "description": "Number of GPU trace entries cleared due to threshold",
     "type": "counter",
     "name": "CudaTracesCleared",
     "field": "cuda.traces_cleared",
-    "id": 302
+    "id": 303
   },
   {
     "description": "Number of failures to read LuaJIT context pointer",
     "type": "counter",
     "name": "UnwindLuaJITErrNoContext",
     "field": "bpf.luajit.errors.no_context",
-    "id": 303
+    "id": 304
   },
   {
     "description": "Number of failures in context pointer validity check",
     "type": "counter",
     "name": "UnwindLuaJITErrLMismatch",
     "field": "bpf.luajit.errors.l_mismatch",
-    "id": 304
+    "id": 305
   },
   {
     "description": "Number of Go custom labels dropped because the label name was empty or not valid UTF-8",
     "type": "counter",
     "name": "GoLabelsDroppedInvalidName",
     "field": "agent.golabels.dropped.invalid_name",
-    "id": 305
+    "id": 306
   },
   {
     "description": "Number of Go custom labels dropped because the label value was not valid UTF-8",
     "type": "counter",
     "name": "GoLabelsDroppedInvalidValue",
     "field": "agent.golabels.dropped.invalid_value",
-    "id": 306
+    "id": 307
   }
 
 ]
