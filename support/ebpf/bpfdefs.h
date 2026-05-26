@@ -195,7 +195,7 @@ static long (*bpf_get_attach_cookie)(void *ctx) = (void *)BPF_FUNC_get_attach_co
   // 5.4 kernels.
   #define printt(fmt, ...)                                                                         \
     ({                                                                                             \
-      const char ____fmt[] = fmt;                                                                  \
+      static const char ____fmt[] = fmt;                                                           \
       bpf_trace_printk(____fmt, sizeof(____fmt), ##__VA_ARGS__);                                   \
     })
 
