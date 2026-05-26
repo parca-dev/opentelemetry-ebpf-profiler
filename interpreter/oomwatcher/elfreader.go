@@ -45,17 +45,44 @@ func (f *pfelfFile) GoVersion() (string, error) {
 }
 
 // LookupSymbol looks up a symbol by name and returns its address.
+//
+// pfelf.LookupSymbol relies on a DT_GNU_HASH or DT_HASH section being
+// present. Fully static Go binaries (e.g. parca-agent built with
+// `-tags osusergo,netgo -ldflags='-extldflags=-static'`) have neither —
+// only .symtab. When LookupSymbol bails with ErrNoSymbolHash, fall back
+// to a linear scan over .symtab via VisitSymbols, which is exactly what
+// oomwatcher.Loader already does for its own mbuckets probe.
 func (f *pfelfFile) LookupSymbol(name string) (oomprof.SymbolInfo, error) {
 	sym, err := f.file.LookupSymbol(libpf.SymbolName(name))
-	if err != nil {
-		if errors.Is(err, libpf.ErrSymbolNotFound) {
-			return oomprof.SymbolInfo{}, fmt.Errorf("symbol %s not found", name)
-		}
+	if err == nil {
+		return oomprof.SymbolInfo{
+			Name:    string(sym.Name),
+			Address: uint64(sym.Address),
+		}, nil
+	}
+	if errors.Is(err, libpf.ErrSymbolNotFound) {
+		return oomprof.SymbolInfo{}, fmt.Errorf("symbol %s not found", name)
+	}
+	if !errors.Is(err, libpf.ErrNoSymbolHash) {
 		return oomprof.SymbolInfo{}, err
 	}
 
+	var found *libpf.Symbol
+	if errVisit := f.file.VisitSymbols(func(s libpf.Symbol) bool {
+		if string(s.Name) == name {
+			s := s
+			found = &s
+			return false
+		}
+		return true
+	}); errVisit != nil {
+		return oomprof.SymbolInfo{}, fmt.Errorf("visit symbols: %w", errVisit)
+	}
+	if found == nil {
+		return oomprof.SymbolInfo{}, fmt.Errorf("symbol %s not found", name)
+	}
 	return oomprof.SymbolInfo{
-		Name:    string(sym.Name),
-		Address: uint64(sym.Address),
+		Name:    string(found.Name),
+		Address: uint64(found.Address),
 	}, nil
 }
