@@ -15,7 +15,9 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+	"unicode/utf8"
 	"unsafe"
 
 	cebpf "github.com/cilium/ebpf"
@@ -130,6 +132,14 @@ type Tracer struct {
 	// probabilisticThreshold holds the threshold for probabilistic profiling.
 	probabilisticThreshold uint
 
+	// goLabelsDroppedInvalidName counts Go custom labels dropped since the last
+	// metrics report because their name was empty or not valid UTF-8.
+	goLabelsDroppedInvalidName atomic.Int64
+
+	// goLabelsDroppedInvalidValue counts Go custom labels dropped since the last
+	// metrics report because their value was not valid UTF-8.
+	goLabelsDroppedInvalidValue atomic.Int64
+
 	// done is closed when the tracer encounters an unrecoverable error.
 	// Use Done() to obtain a read-only channel for use in select statements.
 	done     chan libpf.Void
@@ -210,13 +220,60 @@ type progLoaderHelper struct {
 	noTailCallTarget bool
 }
 
-// Convert a C-string to Go string.
+// goString converts a fixed-size NUL-terminated buffer into an interned string,
+// ignoring everything from the first NUL byte onward.
 func goString(cstr []byte) libpf.String {
 	index := bytes.IndexByte(cstr, byte(0))
 	if index < 0 {
 		index = len(cstr)
 	}
 	return libpf.Intern(pfunsafe.ToString(cstr[:index]))
+}
+
+// goLabelKey enforces strict UTF-8 validity on a Go custom label key. Any
+// invalid byte drops the whole label, since a corrupted key would group
+// unrelated samples under a garbage name. ok=false means the caller should
+// drop the label (and also fires for an empty key).
+func goLabelKey(cstr []byte) (libpf.String, bool) {
+	index := bytes.IndexByte(cstr, byte(0))
+	if index < 0 {
+		index = len(cstr)
+	}
+	b := cstr[:index]
+	if len(b) == 0 || !utf8.Valid(b) {
+		return libpf.NullString, false
+	}
+	return libpf.Intern(pfunsafe.ToString(b)), true
+}
+
+// goLabelValue is lenient on a Go custom label value: fixed-width eBPF buffers
+// can clip a multi-byte rune in half, so on invalid trailing bytes we salvage
+// the longest valid UTF-8 prefix rather than discard the whole label. ok=false
+// only when the salvage is empty (the input was non-empty garbage).
+func goLabelValue(cstr []byte) (libpf.String, bool) {
+	index := bytes.IndexByte(cstr, byte(0))
+	if index < 0 {
+		index = len(cstr)
+	}
+	b := cstr[:index]
+	// Fast path: already valid.
+	if utf8.Valid(b) {
+		return libpf.Intern(pfunsafe.ToString(b)), true
+	}
+	// Walk forward; stop at the first invalid byte. This recovers the entire
+	// valid prefix of a mid-rune truncation in one pass.
+	var pos int
+	for pos < len(b) {
+		r, size := utf8.DecodeRune(b[pos:])
+		if r == utf8.RuneError && size == 1 {
+			break
+		}
+		pos += size
+	}
+	if pos == 0 {
+		return libpf.NullString, false
+	}
+	return libpf.Intern(pfunsafe.ToString(b[:pos])), true
 }
 
 // schedProcessFreeHookName returns the name of the tracepoint hook to use.
@@ -1090,8 +1147,18 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) (*libpf.EbpfTrace, error) {
 		trace.CustomLabels = make(map[libpf.String]libpf.String, int(ptr.Custom_labels.Len))
 		for i := 0; i < int(ptr.Custom_labels.Len); i++ {
 			lbl := ptr.Custom_labels.Labels[i]
-			key := goString(lbl.Key[:])
-			val := goString(lbl.Val[:])
+			key, ok := goLabelKey(lbl.Key[:])
+			if !ok {
+				t.goLabelsDroppedInvalidName.Add(1)
+				log.Debugf("Dropping Go custom label with empty or invalid UTF-8 name")
+				continue
+			}
+			val, ok := goLabelValue(lbl.Val[:])
+			if !ok {
+				t.goLabelsDroppedInvalidValue.Add(1)
+				log.Debugf("Dropping Go custom label %s with invalid UTF-8 value", key)
+				continue
+			}
 			trace.CustomLabels[key] = val
 		}
 	}
@@ -1110,6 +1177,21 @@ func (t *Tracer) loadBpfTrace(raw []byte, cpu int) (*libpf.EbpfTrace, error) {
 	copy(trace.FrameData, ptr.Frame_data[numKernelFrames:ptr.Frame_data_len])
 
 	return trace, nil
+}
+
+// goLabelsMetricCollector reports and resets the counters of Go custom labels
+// dropped due to an invalid name or value since the previous call.
+func (t *Tracer) goLabelsMetricCollector() []metrics.Metric {
+	return []metrics.Metric{
+		{
+			ID:    metrics.IDGoLabelsDroppedInvalidName,
+			Value: metrics.MetricValue(t.goLabelsDroppedInvalidName.Swap(0)),
+		},
+		{
+			ID:    metrics.IDGoLabelsDroppedInvalidValue,
+			Value: metrics.MetricValue(t.goLabelsDroppedInvalidValue.Swap(0)),
+		},
+	}
 }
 
 // StartMapMonitors starts goroutines for collecting metrics and monitoring eBPF
@@ -1160,6 +1242,7 @@ func (t *Tracer) StartMapMonitors(ctx context.Context, traceOutChan chan<- *libp
 		metrics.AddSlice(eventMetricCollector())
 		metrics.AddSlice(traceEventMetricCollector())
 		metrics.AddSlice(t.eBPFMetricsCollector(translateIDs, previousMetricValue))
+		metrics.AddSlice(t.goLabelsMetricCollector())
 	})
 
 	return nil
