@@ -119,17 +119,9 @@ struct error_event {
 // Also stashes pre-parsed USDT args for the activity_batch and pc_sample_batch
 // tail calls — bpf_get_attach_cookie does not return the correct cookie after
 // bpf_tail_call, so we parse args in cuda_probe and pass them via this map.
-#define MAX_BATCH_SIZE        128
-#define PTR_BATCH             16
-// Per-chunk limit for pc_sample_batch.  Verified independently per program;
-// BPF_PC_BATCH_LIMIT is what the verifier walks in a single load.  Using
-// MAX_PC_BATCH_SIZE (512) directly blows past the 1M-insn complexity cap on
-// older kernels (e.g. 6.1) because each iteration has stall-reason +
-// function-name reads.  We chain up to BPF_PC_MAX_TAIL_CALLS chunks via
-// bpf_tail_call to handle batches up to BPF_PC_TOTAL_LIMIT records.
-#define BPF_PC_BATCH_LIMIT    128
-#define BPF_PC_MAX_TAIL_CALLS 8
-#define BPF_PC_TOTAL_LIMIT    (BPF_PC_BATCH_LIMIT * BPF_PC_MAX_TAIL_CALLS)
+#define MAX_BATCH_SIZE 128
+#define PTR_BATCH      16
+
 struct cuda_scratch {
   struct cupti_activity_kernel5 rec;
   u64 ab_ptrs_base;
@@ -145,6 +137,16 @@ struct cuda_scratch_heap_t {
   __type(value, struct cuda_scratch);
   __uint(max_entries, 1);
 } cuda_scratch_heap SEC(".maps");
+
+// Per-chunk limit for pc_sample_batch.  Verified independently per program;
+// BPF_PC_BATCH_LIMIT is what the verifier walks in a single load.  Using
+// MAX_PC_BATCH_SIZE (512) directly blows past the 1M-insn complexity cap on
+// older kernels (e.g. 6.1) because each iteration has stall-reason +
+// function-name reads.  We chain up to BPF_PC_MAX_TAIL_CALLS chunks via
+// bpf_tail_call to handle batches up to BPF_PC_TOTAL_LIMIT records.
+#define BPF_PC_BATCH_LIMIT    128
+#define BPF_PC_MAX_TAIL_CALLS 8
+#define BPF_PC_TOTAL_LIMIT    (BPF_PC_BATCH_LIMIT * BPF_PC_MAX_TAIL_CALLS)
 
 // Tail-call prog array for cuda_probe and the pc_sample_batch chunk chain.
 // Heavy loop bodies (activity_batch, pc_sample_batch) push the inlined

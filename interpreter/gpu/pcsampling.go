@@ -8,6 +8,7 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/support"
@@ -15,6 +16,9 @@ import (
 
 	sasstable "github.com/gnurizen/sass-table"
 )
+
+// Comes from cupti_bpf.h from parcagpu
+const maxStallReasons = 64
 
 // HandlePCSample processes a single PC sample event. It correlates the sample
 // with a CPU trace (if correlation ID is available), decodes the instruction
@@ -27,7 +31,8 @@ func HandlePCSample(ev *CuptiPCSampleEvent, rep reporter.TraceReporter) {
 		return
 	}
 
-	kernelName := nullTermBytes(ev.FunctionName[:])
+	// Transient: kernelName is interned (copied) before ev goes out of scope.
+	kernelName := pfunsafe.ToString(nullTerm(ev.FunctionName[:]))
 
 	// Decode instruction mnemonic from cubin .text section.
 	mnemonic := decodeInstruction(cubinInfo, ev.Data.PCOffset)
@@ -60,12 +65,9 @@ func HandlePCSample(ev *CuptiPCSampleEvent, rep reporter.TraceReporter) {
 		}),
 	})
 
-	count := ev.Data.StallReasonCount
-	if count > 64 {
-		count = 64
-	}
+	count := min(ev.Data.StallReasonCount, maxStallReasons)
 
-	for i := uint64(0); i < count; i++ {
+	for i := range count {
 		sr := ev.StallReasons[i]
 		if sr.Samples == 0 {
 			continue
@@ -98,7 +100,8 @@ func HandlePCSample(ev *CuptiPCSampleEvent, rep reporter.TraceReporter) {
 //	[3] kernel_name   — CUDAKernelFrame
 //	[4..N] CPU frames — from correlated trace (if available)
 func buildGpuPCTrace(cpuTrace *SymbolizedCudaTrace, cubinMapping libpf.FrameMapping,
-	kernelName string, pcOffset uint64, mnemonic, stallName string, stallIndex uint32) *libpf.Trace {
+	kernelName string, pcOffset uint64, mnemonic string, stallName libpf.String,
+	stallIndex uint32) *libpf.Trace {
 
 	// Count GPU frames: kernel + offset + stall_reason, plus instruction if available.
 	gpuFrameCount := 3
@@ -124,7 +127,7 @@ func buildGpuPCTrace(cpuTrace *SymbolizedCudaTrace, cubinMapping libpf.FrameMapp
 	// distinct hashes per stall reason (the hash only covers FileID + AddressOrLineno).
 	trace.Frames = append(trace.Frames, unique.Make(libpf.Frame{
 		Type:            libpf.CUDAKernelFrame,
-		FunctionName:    libpf.Intern(stallName),
+		FunctionName:    stallName,
 		AddressOrLineno: libpf.AddressOrLineno(stallIndex),
 	}))
 
@@ -219,13 +222,4 @@ func decodeInstruction(info *CubinInfo, pcOffset uint64) string {
 	}
 
 	return ""
-}
-
-func nullTermBytes(b []byte) string {
-	for i, c := range b {
-		if c == 0 {
-			return string(b[:i])
-		}
-	}
-	return string(b)
 }

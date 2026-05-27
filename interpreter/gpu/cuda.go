@@ -9,12 +9,12 @@ import (
 	"syscall"
 	"time"
 	"unique"
-	"unsafe"
 
 	log "github.com/sirupsen/logrus"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
@@ -70,6 +70,7 @@ const (
 )
 
 // CuptiCubinEvent matches struct cubin_event in cuda.ebpf.c.
+// TODO: get rid of these definitions and generate them from C.
 type CuptiCubinEvent struct {
 	EventType uint32
 	Pid       uint32
@@ -693,7 +694,8 @@ func emitPCSample(ev *CuptiPCSampleEvent, rep reporter.TraceReporter, cpuTrace *
 	if !ok {
 		return
 	}
-	kernelName := nullTermBytes(ev.FunctionName[:])
+	// Transient: kernelName is interned (copied) before ev goes out of scope.
+	kernelName := pfunsafe.ToString(nullTerm(ev.FunctionName[:]))
 	mnemonic := decodeInstruction(cubinInfo, ev.Data.PCOffset)
 	cubinName := fmt.Sprintf("cubin-%016x", cubinInfo.CRC)
 	cubinMapping := libpf.NewFrameMapping(libpf.FrameMappingData{
@@ -875,6 +877,17 @@ func init() {
 	cudaId = libpf.Intern("cuda_id")
 }
 
+// nullTerm returns b truncated at the first NUL byte, or all of b if there is
+// none. The returned slice aliases b's backing array, so callers that retain
+// the result beyond the lifetime of b must copy it (e.g. via string()); callers
+// that only use it transiently can avoid the copy with pfunsafe.ToString.
+func nullTerm(b []byte) []byte {
+	if i := bytes.IndexByte(b, 0); i >= 0 {
+		return b[:i]
+	}
+	return b
+}
+
 // prepTrace attaches timing information and the demangled kernel name to a symbolized
 // CUDA trace, producing a CudaTraceOutput ready for reporting.
 func (f *gpuTraceFixer) prepTrace(trace *libpf.Trace, meta *samples.TraceEventMeta,
@@ -913,12 +926,10 @@ func (f *gpuTraceFixer) prepTrace(trace *libpf.Trace, meta *samples.TraceEventMe
 	}
 
 	// Extract kernel name from timing event and update the CUDA frame.
-	nameBytes := ev.KernelName[:]
-	if idx := bytes.IndexByte(nameBytes, 0); idx >= 0 {
-		nameBytes = nameBytes[:idx]
-	}
+	// libpf.Intern copies, so sharing ev's backing array via ToString is safe.
+	nameBytes := nullTerm(ev.KernelName[:])
 	if len(nameBytes) > 0 {
-		funcName := libpf.Intern(unsafe.String(unsafe.SliceData(nameBytes), len(nameBytes)))
+		funcName := libpf.Intern(pfunsafe.ToString(nameBytes))
 		out.Trace.Frames[cudaFrameIdx] = unique.Make(libpf.Frame{
 			Type:         out.Trace.Frames[cudaFrameIdx].Value().Type,
 			FunctionName: funcName,

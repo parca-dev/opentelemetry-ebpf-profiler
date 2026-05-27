@@ -138,6 +138,7 @@ func ParseCubinELF(data []byte) (int, []TextSection, error) {
 			strings.HasPrefix(s.Name, ".text") {
 			sdata, err := s.Data()
 			if err != nil {
+				log.Warnf("[cuda] error reading cubin elf section data: %v", err)
 				continue
 			}
 			texts = append(texts, TextSection{
