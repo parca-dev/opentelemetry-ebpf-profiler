@@ -4,19 +4,32 @@
 package main
 
 import (
-	"fmt"
-	"io"
-	"path/filepath"
-	"strings"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
-	"go.opentelemetry.io/ebpf-profiler/process"
-	"go.opentelemetry.io/ebpf-profiler/remotememory"
 	"go.opentelemetry.io/ebpf-profiler/tools/coredump/cloudstore"
 	"go.opentelemetry.io/ebpf-profiler/tools/coredump/modulestore"
 )
+
+// parseFaultAddresses converts the hex/decimal address strings from a test
+// case JSON into the uintptr-keyed map consumed by the ebpfContext. The int
+// values are hit counters initialized to 0; ExtractTraces will fail the test
+// if any remain 0 after the unwind. ParseUint with base=0 honors a "0x"
+// prefix, so both "0x7f12..." and decimal forms work.
+func parseFaultAddresses(t *testing.T, raw []string) map[uintptr]int {
+	t.Helper()
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make(map[uintptr]int, len(raw))
+	for _, s := range raw {
+		v, err := strconv.ParseUint(s, 0, 64)
+		require.NoErrorf(t, err, "invalid fault-address %q", s)
+		out[uintptr(v)] = 0
+	}
+	return out
+}
 
 func TestCoreDumps(t *testing.T) {
 	cases, err := findTestCases(true)
@@ -41,110 +54,23 @@ func TestCoreDumps(t *testing.T) {
 			require.NoError(t, err)
 			defer core.Close()
 
-			data, err := ExtractTraces(t.Context(), core, false, nil)
+			faults := parseFaultAddresses(t, testCase.FaultAddresses)
+			data, err := ExtractTraces(t.Context(), core, false, nil, faults)
 
 			require.NoError(t, err)
 			require.Equal(t, testCase.Threads, data)
-		})
-	}
-}
 
-// faultingReaderAt wraps an io.ReaderAt and returns an error for reads
-// matching a predicate. This simulates bpf_probe_read_user failures where
-// the kernel cannot read a page that is swapped out.
-type faultingReaderAt struct {
-	inner       io.ReaderAt
-	shouldFault func(off int64, size int) bool
-}
-
-func (f *faultingReaderAt) ReadAt(p []byte, off int64) (int, error) {
-	if f.shouldFault != nil && f.shouldFault(off, len(p)) {
-		return 0, fmt.Errorf("injected fault at offset 0x%x (size %d)", off, len(p))
-	}
-	return f.inner.ReadAt(p, off)
-}
-
-// faultingProcess wraps a process.Process and overrides GetRemoteMemory to
-// return a RemoteMemory backed by a faultingReaderAt. This is passed as the
-// eBPF process to ExtractTraces so that bpf_probe_read_user hits injected
-// faults, while the interpreter manager uses the real process and can still
-// read the code objects successfully.
-type faultingProcess struct {
-	process.Process
-	faultingRM remotememory.RemoteMemory
-}
-
-func newFaultingProcess(pr process.Process, shouldFault func(off int64, size int) bool) *faultingProcess {
-	rm := pr.GetRemoteMemory()
-	return &faultingProcess{
-		Process: pr,
-		faultingRM: remotememory.RemoteMemory{
-			ReaderAt: &faultingReaderAt{
-				inner:       rm.ReaderAt,
-				shouldFault: shouldFault,
-			},
-			Bias: rm.Bias,
-		},
-	}
-}
-
-func (fp *faultingProcess) GetRemoteMemory() remotememory.RemoteMemory {
-	return fp.faultingRM
-}
-
-func (fp *faultingProcess) OpenELF(path string) (*pfelf.File, error) {
-	return fp.Process.(pfelf.ELFOpener).OpenELF(path)
-}
-
-// TestPythonRecoverCodeObject tests that Python frames are recovered correctly
-// when the eBPF bpf_probe_read_user fails to read a PyCodeObject (e.g. because
-// the page was swapped out). The agent-side code should still read the code
-// object via the coredump memory (simulating process_vm_readv which supports
-// page faults) and produce the same symbolized output.
-func TestPythonRecoverCodeObject(t *testing.T) {
-	cases, err := findTestCases(true)
-	require.NoError(t, err)
-
-	var pythonCases []string
-	for _, c := range cases {
-		base := filepath.Base(c)
-		if !strings.HasPrefix(base, "python") {
-			continue
-		}
-		tc, err := readTestCase(c)
-		if err != nil || tc.Skip != "" {
-			continue
-		}
-		pythonCases = append(pythonCases, c)
-	}
-	require.NotEmpty(t, pythonCases, "no Python test cases found")
-
-	cloudClient, err := cloudstore.Client()
-	require.NoError(t, err)
-	store, err := modulestore.New(cloudClient,
-		cloudstore.PublicReadURL(), cloudstore.ModulestoreS3Bucket(), "modulecache")
-	require.NoError(t, err)
-
-	for _, filename := range pythonCases {
-		t.Run(filename+"/recover", func(t *testing.T) {
-			testCase, err := readTestCase(filename)
-			require.NoError(t, err)
-
-			core, err := OpenStoreCoredump(store, testCase.CoredumpRef, testCase.Modules)
-			require.NoError(t, err)
-			defer core.Close()
-
-			// Wrap the process with a faulting reader that fails all
-			// PyCodeObject-sized reads. Pass it as the eBPF process
-			// so bpf_probe_read_user faults, while the real process
-			// is used by the interpreter manager for recovery reads.
-			faulting := newFaultingProcess(core, func(_ int64, size int) bool {
-				return size == pyCodeObjectBPFReadSize
-			})
-
-			data, err := ExtractTraces(t.Context(), core, false, nil, faulting)
-			require.NoError(t, err)
-			require.Equal(t, testCase.Threads, data)
+			// Every fault address listed in the test case must have been
+			// visited at least once by bpf_probe_read_user_with_test_fault;
+			// otherwise the test isn't actually exercising the recovery path
+			// it claims to (e.g. a stale address that the unwinder no longer
+			// reads). The map is mutated in place by the helper, so we can
+			// just iterate the post-run state.
+			for addr, hits := range faults {
+				require.Greaterf(t, hits, 0,
+					"fault address 0x%x was never visited by "+
+						"bpf_probe_read_user_with_test_fault", addr)
+			}
 		})
 	}
 }
