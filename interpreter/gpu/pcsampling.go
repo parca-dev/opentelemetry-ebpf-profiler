@@ -35,7 +35,7 @@ func HandlePCSample(ev *CuptiPCSampleEvent, rep reporter.TraceReporter) {
 	kernelName := pfunsafe.ToString(nullTerm(ev.FunctionName[:]))
 
 	// Decode instruction mnemonic from cubin .text section.
-	mnemonic := decodeInstruction(cubinInfo, ev.Data.PCOffset)
+	mnemonic := decodeInstruction(cubinInfo, kernelName, ev.Data.PCOffset)
 
 	// Look up CPU trace for correlation. If found, emit immediately.
 	// If not, store for deferred resolution when the trace arrives.
@@ -53,8 +53,9 @@ func HandlePCSample(ev *CuptiPCSampleEvent, rep reporter.TraceReporter) {
 		}
 	}
 
-	log.Debugf("[cuda] pc sample: pid=%d kernel=%q offset=0x%x mnemonic=%q corrID=%d stallReasons=%d cpuTrace=%v",
-		ev.Pid, kernelName, ev.Data.PCOffset, mnemonic, ev.CorrelationID, ev.Data.StallReasonCount, cpuTrace != nil)
+	log.Debugf("[cuda] pc sample: pid=%d kernel=%q funcIdx=%d offset=0x%x mnemonic=%q corrID=%d stallReasons=%d cpuTrace=%v",
+		ev.Pid, kernelName, ev.Data.FunctionIndex, ev.Data.PCOffset, mnemonic, ev.CorrelationID,
+		ev.Data.StallReasonCount, cpuTrace != nil)
 
 	// Build cubin file mapping for the offset frame.
 	cubinName := fmt.Sprintf("cubin-%016x", cubinInfo.CRC)
@@ -191,31 +192,53 @@ func buildGpuPCMeta(cpuTrace *SymbolizedCudaTrace, pid uint32,
 	return meta
 }
 
-// decodeInstruction finds the .text section containing pcOffset and decodes
-// the SASS instruction mnemonic using sasstable.
-func decodeInstruction(info *CubinInfo, pcOffset uint64) string {
+// decodeInstruction decodes the SASS mnemonic of the instruction at pcOffset in
+// the cubin. CUPTI reports pcOffset relative to the start of functionName, and
+// ptxas emits one ".text.<mangled-name>" section per function starting at the
+// function base, so when functionName names such a section we can index it
+// directly — an exact, layout-independent lookup.
+//
+// If the name doesn't resolve (empty name, or an unconventional cubin layout
+// where functions share a .text section), we fall back to guessing: first
+// treating pcOffset as a section-absolute address, then as a function-relative
+// offset into each section.
+func decodeInstruction(info *CubinInfo, functionName string, pcOffset uint64) string {
 	if info.SMVersion == 0 || len(info.Texts) == 0 {
 		return ""
 	}
 
-	// Try each .text section — find the one whose address range contains pcOffset.
+	// Deterministic path: decode at pcOffset within the function's own section.
+	if functionName != "" {
+		want := ".text." + functionName
+		for _, ts := range info.Texts {
+			if ts.Name != want {
+				continue
+			}
+			if pcOffset+16 > uint64(len(ts.Data)) {
+				break // right section, but offset is out of range; fall back
+			}
+			// Authoritative: this is the function's section, so return whatever
+			// it decodes to rather than guessing against other sections.
+			return sasstable.DecodeMnemonicFromSlice(info.SMVersion, ts.Data[pcOffset:])
+		}
+	}
+
+	// Fallback: pcOffset as a section-absolute address.
 	for _, ts := range info.Texts {
 		if pcOffset >= ts.Addr && pcOffset < ts.Addr+uint64(len(ts.Data)) {
 			off := pcOffset - ts.Addr
 			if off+16 <= uint64(len(ts.Data)) {
-				m := sasstable.DecodeMnemonicFromSlice(info.SMVersion, ts.Data[off:])
-				if m != "" {
+				if m := sasstable.DecodeMnemonicFromSlice(info.SMVersion, ts.Data[off:]); m != "" {
 					return m
 				}
 			}
 		}
 	}
 
-	// Fallback: pcOffset might be function-relative. Try each section from offset 0.
+	// Fallback: pcOffset as a function-relative offset into each section.
 	for _, ts := range info.Texts {
 		if pcOffset+16 <= uint64(len(ts.Data)) {
-			m := sasstable.DecodeMnemonicFromSlice(info.SMVersion, ts.Data[pcOffset:])
-			if m != "" {
+			if m := sasstable.DecodeMnemonicFromSlice(info.SMVersion, ts.Data[pcOffset:]); m != "" {
 				return m
 			}
 		}

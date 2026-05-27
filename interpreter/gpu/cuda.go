@@ -81,16 +81,16 @@ type CuptiCubinEvent struct {
 
 // CuptiPCData mirrors struct cupti_pc_data in cupti_bpf.h (parcagpu).  It is
 // 56 bytes, packed but with all fields naturally aligned so a plain Go struct
-// matches the C byte layout.  Only CubinCRC, PCOffset and StallReasonCount are
-// consumed on the Go side; the rest are anonymous padding placeholders so the
-// single-shot bpf_probe_read_user lands the consumed fields at the right
-// offsets.  The function-name and stall-reason pointers are used by BPF
-// in-kernel before the event is submitted to the ringbuf.
+// matches the C byte layout.  Only CubinCRC, PCOffset, FunctionIndex and
+// StallReasonCount are consumed on the Go side; the rest are anonymous padding
+// placeholders so the single-shot bpf_probe_read_user lands the consumed fields
+// at the right offsets.  The function-name and stall-reason pointers are used
+// by BPF in-kernel before the event is submitted to the ringbuf.
 type CuptiPCData struct {
 	_                uint64 // size
 	CubinCRC         uint64
 	PCOffset         uint64
-	_                uint32 // function_index
+	FunctionIndex    uint32 // CUPTI's per-module function id; logged for correlation
 	_                uint32 // _pc_pad
 	_                uint64 // function_name_ptr (used by BPF only)
 	StallReasonCount uint64
@@ -696,7 +696,7 @@ func emitPCSample(ev *CuptiPCSampleEvent, rep reporter.TraceReporter, cpuTrace *
 	}
 	// Transient: kernelName is interned (copied) before ev goes out of scope.
 	kernelName := pfunsafe.ToString(nullTerm(ev.FunctionName[:]))
-	mnemonic := decodeInstruction(cubinInfo, ev.Data.PCOffset)
+	mnemonic := decodeInstruction(cubinInfo, kernelName, ev.Data.PCOffset)
 	cubinName := fmt.Sprintf("cubin-%016x", cubinInfo.CRC)
 	cubinMapping := libpf.NewFrameMapping(libpf.FrameMappingData{
 		File: libpf.NewFrameMappingFile(libpf.FrameMappingFileData{

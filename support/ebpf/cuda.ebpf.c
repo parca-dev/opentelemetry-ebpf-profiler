@@ -85,8 +85,9 @@ struct gpu_config_event {
 // naturally aligned, so the layout matches a plain Go struct with the same
 // fields.
 //
-// The data.size, data.function_index, data._pc_pad, data.function_name_ptr,
-// data.stall_reason_ptr fields are unused by the Go consumer but ride along.
+// The data.size, data._pc_pad, data.function_name_ptr, data.stall_reason_ptr
+// fields are unused by the Go consumer but ride along.  data.function_index is
+// surfaced for logging/correlation only.
 struct pc_sample_event {
   u32 event_type; // = EVENT_TYPE_PC_SAMPLE
   u32 pid;
