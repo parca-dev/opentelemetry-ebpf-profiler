@@ -172,7 +172,7 @@ func NewCubinProcess(pid uint32, data []byte) process.Process {
 	return &cubinProcess{pid: pid, data: data}
 }
 
-func (p *cubinProcess) OpenMappingFile(_ *process.Mapping) (process.ReadAtCloser, error) {
+func (p *cubinProcess) OpenMappingFile(_ *process.RawMapping) (process.ReadAtCloser, error) {
 	return cubinReadAtCloser{bytes.NewReader(p.data)}, nil
 }
 
@@ -182,15 +182,15 @@ func (p *cubinProcess) GetProcessMeta(process.MetaConfig) process.ProcessMeta {
 	return process.ProcessMeta{}
 }
 func (p *cubinProcess) GetExe() (libpf.String, error) { return libpf.NullString, nil }
-func (p *cubinProcess) GetMappings() ([]process.Mapping, uint32, error) {
-	return nil, 0, nil
+func (p *cubinProcess) IterateMappings(_ func(m process.RawMapping) bool) (uint32, error) {
+	return 0, nil
 }
 func (p *cubinProcess) GetThreads() ([]process.ThreadInfo, error) { return nil, nil }
 func (p *cubinProcess) GetRemoteMemory() remotememory.RemoteMemory {
 	return remotememory.RemoteMemory{}
 }
-func (p *cubinProcess) GetMappingFileLastModified(_ *process.Mapping) int64 { return 0 }
-func (p *cubinProcess) CalculateMappingFileID(_ *process.Mapping) (libpf.FileID, error) {
+func (p *cubinProcess) GetMappingFileLastModified(_ *process.RawMapping) int64 { return 0 }
+func (p *cubinProcess) CalculateMappingFileID(_ *process.RawMapping) (libpf.FileID, error) {
 	return libpf.FileID{}, nil
 }
 func (p *cubinProcess) Close() error { return nil }
