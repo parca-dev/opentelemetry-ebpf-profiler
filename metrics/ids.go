@@ -710,6 +710,9 @@ const (
 	// Number of Go custom labels dropped because the label value was not valid UTF-8
 	IDGoLabelsDroppedInvalidValue = 306
 
+	// Number of pending PC sample events dropped at retention-window eviction (correlation trace never arrived)
+	IDCudaPendingPCSamplesEvicted = 307
+
 	// max number of ID values, keep this as *last entry*
-	IDMax = 307
+	IDMax = 308
 )

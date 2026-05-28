@@ -119,6 +119,10 @@ static int (*bpf_perf_event_output)(
 static long (*bpf_get_stack)(void *ctx, void *buf, u32 size, u64 flags) = (void *)
   BPF_FUNC_get_stack;
 static unsigned long long (*bpf_get_prandom_u32)(void) = (void *)BPF_FUNC_get_prandom_u32;
+static void *(*bpf_ringbuf_reserve)(void *ringbuf, u64 size, u64 flags) = (void *)
+  BPF_FUNC_ringbuf_reserve;
+static void (*bpf_ringbuf_submit)(void *data, u64 flags)  = (void *)BPF_FUNC_ringbuf_submit;
+static void (*bpf_ringbuf_discard)(void *data, u64 flags) = (void *)BPF_FUNC_ringbuf_discard;
 
 __attribute__((format(printf, 1, 3))) static int (*bpf_trace_printk)(
   const char *fmt, int fmt_size, ...) = (void *)BPF_FUNC_trace_printk;
