@@ -430,15 +430,18 @@ func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Addre
 		}
 	}
 
-	// Stat the path to get the current inode. Uprobe attachments are
-	// inode-based, so we need a separate attachment per inode.
-	st, err := os.Stat(d.path)
+	// Stat the path via /proc/<pid>/root so this works when parca-agent runs
+	// in a container that doesn't share the target's mount namespace. The
+	// subsequent AttachUSDTProbes call already opens the file via the same
+	// /proc/<pid>/root prefix.
+	containerPath := "/proc/" + strconv.Itoa(int(pid)) + "/root/" + d.path
+	st, err := os.Stat(containerPath)
 	if err != nil {
-		return nil, fmt.Errorf("[cuda] stat %s: %w", d.path, err)
+		return nil, fmt.Errorf("[cuda] stat %s: %w", containerPath, err)
 	}
 	sys, ok := st.Sys().(*syscall.Stat_t)
 	if !ok || sys == nil {
-		return nil, fmt.Errorf("[cuda] failed to get stat_t for %s", d.path)
+		return nil, fmt.Errorf("[cuda] failed to get stat_t for %s", containerPath)
 	}
 	key := util.OnDiskFileIdentifier{DeviceID: uint64(sys.Dev), InodeNum: uint64(sys.Ino)}
 
