@@ -570,7 +570,7 @@ typedef struct V8ProcInfo {
   u8 code_instructions_is_pointer;
   u8 off_Code_instruction_start, off_Code_instruction_size, off_Code_flags;
   u8 fp_marker, fp_function, fp_bytecode_offset;
-  u8 codekind_shift, codekind_mask, codekind_baseline;
+  u8 codekind_shift, codekind_mask, codekind_baseline, codekind_interpreted;
   u64 isolate_sym;
   u32 cped_offset;
   u32 wrapped_object_offset;
