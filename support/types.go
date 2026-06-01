@@ -327,6 +327,7 @@ type V8ProcInfo struct {
 	Codekind_shift               uint8
 	Codekind_mask                uint8
 	Codekind_baseline            uint8
+	Codekind_interpreted         uint8
 	Isolate_sym                  uint64
 	Cped_offset                  uint32
 	Wrapped_object_offset        uint32

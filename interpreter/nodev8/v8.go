@@ -299,7 +299,8 @@ type v8Data struct {
 			FieldShift uint8  `name:"CodeKindFieldShift" zero:""`
 			// https://chromium.googlesource.com/v8/v8.git/+/refs/tags/9.2.230.1/src/objects/code-kind.h#18
 			// https://chromium.googlesource.com/v8/v8.git/+/refs/tags/9.5.2/tools/gen-postmortem-metadata.py#101
-			Baseline uint8 `name:"CodeKindBaseline"`
+			Baseline            uint8 `name:"CodeKindBaseline"`
+			InterpretedFunction uint8 `name:"CodeKindInterpretedFunction" zero:""`
 		} `name:""`
 
 		// https://chromium.googlesource.com/v8/v8.git/+/refs/tags/9.2.230.1/tools/gen-postmortem-metadata.py#341
@@ -1890,6 +1891,7 @@ func (d *v8Data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Add
 		Codekind_shift:        vms.CodeKind.FieldShift,
 		Codekind_mask:         uint8(vms.CodeKind.FieldMask),
 		Codekind_baseline:     vms.CodeKind.Baseline,
+		Codekind_interpreted:  vms.CodeKind.InterpretedFunction,
 		Isolate_sym:           uint64(d.isolateSym),
 		Cped_offset:           d.cpedOffset,
 		Wrapped_object_offset: d.wrappedObjectOffset,
@@ -2151,6 +2153,10 @@ func (d *v8Data) readIntrospectionData(ef *pfelf.File) error {
 			// so that the Baseline code is never triggered.
 			vms.CodeKind.Baseline = 0xff
 		}
+	}
+	if vms.CodeKind.InterpretedFunction == 0 && vms.CodeKind.Baseline != 0 && vms.CodeKind.Baseline != 0xff {
+		// INTERPRETED_FUNCTION is always immediately before BASELINE in the CodeKind enum.
+		vms.CodeKind.InterpretedFunction = vms.CodeKind.Baseline - 1
 	}
 	if vms.BaselineData.Data == 0 && vms.CodeKind.FieldMask != 0 {
 		// Unfortunately no metadata currently. Has been static.
