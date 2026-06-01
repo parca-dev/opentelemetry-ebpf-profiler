@@ -119,10 +119,6 @@ static int (*bpf_perf_event_output)(
 static long (*bpf_get_stack)(void *ctx, void *buf, u32 size, u64 flags) = (void *)
   BPF_FUNC_get_stack;
 static unsigned long long (*bpf_get_prandom_u32)(void) = (void *)BPF_FUNC_get_prandom_u32;
-static void *(*bpf_ringbuf_reserve)(void *ringbuf, u64 size, u64 flags) = (void *)
-  BPF_FUNC_ringbuf_reserve;
-static void (*bpf_ringbuf_submit)(void *data, u64 flags)  = (void *)BPF_FUNC_ringbuf_submit;
-static void (*bpf_ringbuf_discard)(void *data, u64 flags) = (void *)BPF_FUNC_ringbuf_discard;
 
 __attribute__((format(printf, 1, 3))) static int (*bpf_trace_printk)(
   const char *fmt, int fmt_size, ...) = (void *)BPF_FUNC_trace_printk;
@@ -134,77 +130,6 @@ static long (*bpf_probe_read_kernel)(void *dst, int size, const void *unsafe_ptr
 
   #define bpf_probe_read_user_with_test_fault bpf_probe_read_user
 
-/*
- * bpf_probe_read_user_str
- *
- * 	Copy a NUL terminated string from an unsafe user address
- * 	*unsafe_ptr* to *dst*. The *size* should include the
- * 	terminating NUL byte. In case the string length is smaller than
- * 	*size*, the target is not padded with further NUL bytes. If the
- * 	string length is larger than *size*, just *size*-1 bytes are
- * 	copied and the last byte is set to NUL.
- *
- * 	On success, returns the number of bytes that were written,
- * 	including the terminal NUL. This makes this helper useful in
- * 	tracing programs for reading strings, and more importantly to
- * 	get its length at runtime. See the following snippet:
- *
- * 	::
- *
- * 		SEC("kprobe/sys_open")
- * 		void bpf_sys_open(struct pt_regs *ctx)
- * 		{
- * 		        char buf[PATHLEN]; // PATHLEN is defined to 256
- * 		        int res = bpf_probe_read_user_str(buf, sizeof(buf),
- * 			                                  ctx->di);
- *
- * 			// Consume buf, for example push it to
- * 			// userspace via bpf_perf_event_output(); we
- * 			// can use res (the string length) as event
- * 			// size, after checking its boundaries.
- * 		}
- *
- * 	In comparison, using **bpf_probe_read_user**\ () helper here
- * 	instead to read the string would require to estimate the length
- * 	at compile time, and would often result in copying more memory
- * 	than necessary.
- *
- * 	Another useful use case is when parsing individual process
- * 	arguments or individual environment variables navigating
- * 	*current*\ **->mm->arg_start** and *current*\
- * 	**->mm->env_start**: using this helper and the return value,
- * 	one can quickly iterate at the right offset of the memory area.
- *
- * Returns
- * 	On success, the strictly positive length of the output string,
- * 	including the trailing NUL character. On error, a negative
- * 	value.
- */
-static long (*bpf_probe_read_user_str)(void *dst, int size, const void *unsafe_ptr) = (void *)
-  BPF_FUNC_probe_read_user_str;
-
-/*
- * bpf_get_attach_cookie
- *
- * 	Get bpf_cookie value provided (optionally) during the program
- * 	attachment. It might be different for each individual
- * 	attachment, even if BPF program itself is the same.
- * 	Expects BPF program context *ctx* as a first argument.
- *
- * 	Supported for the following program types:
- * 		- kprobe/uprobe;
- * 		- tracepoint;
- * 		- perf_event.
- *
- * Returns
- * 	Value specified by user at BPF link creation/attachment time
- * 	or 0, if it was not specified.
- */
-static long (*bpf_get_attach_cookie)(void *ctx) = (void *)BPF_FUNC_get_attach_cookie;
-
-  // The sizeof in bpf_trace_printk() must include \0, else no output
-  // is generated. The \n is not needed on 5.8+ kernels, but definitely on
-  // 5.4 kernels.
   #define printt(fmt, ...)                                                                         \
     ({                                                                                             \
       static const char ____fmt[] = fmt;                                                           \
@@ -253,6 +178,27 @@ static long (*bpf_get_attach_cookie)(void *ctx) = (void *)BPF_FUNC_get_attach_co
     _Pragma("GCC diagnostic push") _Pragma("GCC diagnostic ignored \"-Wignored-attributes\"")      \
       __attribute__((section(name), used)) _Pragma("GCC diagnostic pop")
   #define EBPF_INLINE __attribute__((__always_inline__))
+
+// ────────────────────────────────────────────────────────────────────────────
+// parca-specific helpers — kept at the bottom of bpfdefs.h to minimize
+// textual collisions with upstream merges. Upstream adds new helpers in the
+// `static <type> (*<name>)(...) = (void *)BPF_FUNC_<name>;` block above; any
+// parca additions there end up as 3-way merge conflicts whenever upstream
+// touches a nearby line.
+//
+// Only included by parca-specific eBPF programs (cuda.ebpf.c, usdt_test.ebpf.c).
+// Not currently used by upstream code.
+// ────────────────────────────────────────────────────────────────────────────
+
+static void *(*bpf_ringbuf_reserve)(void *ringbuf, u64 size, u64 flags) = (void *)
+  BPF_FUNC_ringbuf_reserve;
+static void (*bpf_ringbuf_submit)(void *data, u64 flags)  = (void *)BPF_FUNC_ringbuf_submit;
+static void (*bpf_ringbuf_discard)(void *data, u64 flags) = (void *)BPF_FUNC_ringbuf_discard;
+
+static long (*bpf_probe_read_user_str)(void *dst, int size, const void *unsafe_ptr) = (void *)
+  BPF_FUNC_probe_read_user_str;
+
+static long (*bpf_get_attach_cookie)(void *ctx) = (void *)BPF_FUNC_get_attach_cookie;
 
 #endif // !TESTING_COREDUMP
 
