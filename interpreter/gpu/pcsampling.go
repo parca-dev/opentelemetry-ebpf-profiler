@@ -2,6 +2,7 @@ package gpu // import "go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 
 import (
 	"fmt"
+	"hash/fnv"
 	"time"
 	"unique"
 
@@ -58,10 +59,18 @@ func HandlePCSample(ev *CuptiPCSampleEvent, rep reporter.TraceReporter) {
 		ev.Data.StallReasonCount, cpuTrace != nil)
 
 	// Build cubin file mapping for the offset frame.
-	cubinName := fmt.Sprintf("cubin-%016x", cubinInfo.CRC)
+	//
+	// The frame is keyed by a PER-FUNCTION FileID, not the per-cubin FileID:
+	// CUPTI reports pcOffset relative to the start of the kernel, and ptxas
+	// lays every kernel 0-based, so within one cubin offset 0x10 exists in
+	// every kernel. Keying on (cubinFileID, offset) alone would alias them.
+	// funcFileID folds the kernel name into the key so each kernel resolves to
+	// its own debuginfo (the backend partitions the cubin the same way via
+	// PerFunctionCubinPCs). The offset itself stays 0-based — unchanged.
+	cubinName := fmt.Sprintf("cubin-%016x:%s", cubinInfo.CRC, kernelName)
 	cubinMapping := libpf.NewFrameMapping(libpf.FrameMappingData{
 		File: libpf.NewFrameMappingFile(libpf.FrameMappingFileData{
-			FileID:   cubinInfo.FileID,
+			FileID:   funcFileID(cubinInfo.CRC, cubinInfo.FileID, kernelName),
 			FileName: libpf.Intern(cubinName),
 		}),
 	})
@@ -88,6 +97,25 @@ func HandlePCSample(ev *CuptiPCSampleEvent, rep reporter.TraceReporter) {
 				kernelName, ev.Data.PCOffset, mnemonic, stallName, sr.Index, sr.Samples)
 		}
 	}
+}
+
+// funcFileID derives the per-function FileID for a GPU PC sample frame.
+//
+// The high word carries the cubin CRC (so the backend can recover which cubin
+// this is) and the low word is a stable FNV-1a hash of the mangled kernel name,
+// which the backend reproduces from the cubin's symbol table when it partitions
+// the cubin in PerFunctionCubinPCs. Keep this hashing in sync with the backend.
+//
+// When the kernel name is unavailable we fall back to the per-cubin FileID
+// (low word 0) so symbolization degrades to the old behavior rather than
+// keying on a hash of the empty string.
+func funcFileID(cubinCRC uint64, cubinFileID libpf.FileID, functionName string) libpf.FileID {
+	if functionName == "" {
+		return cubinFileID
+	}
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(functionName))
+	return libpf.NewFileID(cubinCRC, h.Sum64())
 }
 
 // buildGpuPCTrace constructs a trace with GPU PC sampling frames, optionally

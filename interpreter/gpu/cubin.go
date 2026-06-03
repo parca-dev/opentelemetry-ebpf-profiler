@@ -92,6 +92,27 @@ func HandleCubinEvent(ev *CuptiCubinEvent, rep reporter.ExecutableReporter) {
 		Process: NewCubinProcess(ev.Pid, data),
 		IsElf:   true,
 	})
+
+	// Register a metadata-only executable for each kernel under its
+	// per-function FileID. PC sample frames are keyed by funcFileID (see
+	// pcsampling.go); without these entries the reporter can't resolve the
+	// frame's executable and emits a null build ID, so the per-function
+	// debuginfo the backend wrote (optimizer's PerFunctionCubinPCs fan-out)
+	// would never be looked up. IsElf=false records metadata without
+	// triggering a second upload of the cubin bytes.
+	for _, ts := range texts {
+		fnName := strings.TrimPrefix(ts.Name, ".text.")
+		if fnName == ts.Name || fnName == "" {
+			continue // section without a ".text.<mangled>" name
+		}
+		rep.ReportExecutable(&reporter.ExecutableMetadata{
+			MappingFile: libpf.NewFrameMappingFile(libpf.FrameMappingFileData{
+				FileID:   funcFileID(ev.CubinCRC, fileID, fnName),
+				FileName: libpf.Intern(fmt.Sprintf("%s:%s", cubinName, fnName)),
+			}),
+			IsElf: false,
+		})
+	}
 }
 
 // ReadCubinFromProcess reads cubin bytes from a process's memory via /proc/pid/mem.
