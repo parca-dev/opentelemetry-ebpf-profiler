@@ -18,7 +18,6 @@ import (
 	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpfapi"
 	eim "go.opentelemetry.io/ebpf-profiler/processmanager/execinfomanager"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
-	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/times"
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
@@ -40,14 +39,6 @@ type frameCacheKey struct {
 	// data is the frame data: frame header and the two first variable fields
 	data [3]uint64
 }
-
-// TraceInterceptor is called after symbolization with the symbolized trace
-// and metadata. Return true to consume the trace, in which case HandleTrace
-// skips its default reporting path; return false to let HandleTrace report
-// the trace normally. Consumers that need to report intercepted traces are
-// expected to do so via their own TraceReporter — the hook is intentionally
-// a one-way handoff, not a passthrough callback.
-type TraceInterceptor func(trace *libpf.Trace, meta *samples.TraceEventMeta) bool
 
 // ProcessManager is responsible for managing the events happening throughout the lifespan of a
 // process.
@@ -106,10 +97,6 @@ type ProcessManager struct {
 
 	// traceReporter is the interface to report traces
 	traceReporter reporter.TraceReporter
-
-	// interceptor, if set, is called after symbolization.
-	// If it returns true the trace is consumed and not reported.
-	interceptor TraceInterceptor
 
 	// exeReporter is the interface to report executables
 	exeReporter reporter.ExecutableReporter
@@ -178,9 +165,4 @@ type processInfo struct {
 // GetEbpfHandler returns the EbpfHandler interface for direct access to eBPF operations.
 func (pm *ProcessManager) GetEbpfHandler() pmebpf.EbpfHandler {
 	return pm.ebpf
-}
-
-// SetInterceptor sets an interceptor to be used for traces
-func (pm *ProcessManager) SetInterceptor(interceptor TraceInterceptor) {
-	pm.interceptor = interceptor
 }
