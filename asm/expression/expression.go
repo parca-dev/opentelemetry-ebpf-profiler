@@ -70,3 +70,19 @@ func cmpOrder(u Expression) int {
 		return 0
 	}
 }
+
+// MemOffset extracts the offset of a load.  This is useful for
+// applications in which we don't care how a pointer was computed; we
+// just want to know at what offset in it a given field is located.
+func MemOffset(e Expression) (uint64, bool) {
+	if m, ok := e.(*mem); ok {
+		if op, ok := m.at.(*op); ok && op.typ == opAdd {
+			for _, operand := range op.operands {
+				if imm, ok := operand.(*immediate); ok {
+					return imm.Value, true
+				}
+			}
+		}
+	}
+	return 0, false
+}
