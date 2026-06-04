@@ -13,6 +13,7 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
+	"go.opentelemetry.io/ebpf-profiler/tools/coredump/cloudstore"
 	"go.opentelemetry.io/ebpf-profiler/tools/coredump/modulestore"
 )
 
@@ -22,6 +23,7 @@ type uploadCmd struct {
 	// User-specified command line arguments.
 	path string
 	all  bool
+	gcs  bool
 }
 
 func newUploadCmd(store *modulestore.Store) *ffcli.Command {
@@ -29,6 +31,8 @@ func newUploadCmd(store *modulestore.Store) *ffcli.Command {
 	set := flag.NewFlagSet("upload", flag.ExitOnError)
 	set.StringVar(&cmd.path, "path", "", "The path to a specific test case JSON")
 	set.BoolVar(&cmd.all, "all", false, "Upload all referenced modules for all test cases")
+	set.BoolVar(&cmd.gcs, "gcs", false,
+		"Upload to the public GCS bucket instead of the default remote storage")
 	return &ffcli.Command{
 		Name:       "upload",
 		ShortUsage: "upload [flags]",
@@ -41,6 +45,18 @@ func newUploadCmd(store *modulestore.Store) *ffcli.Command {
 func (cmd *uploadCmd) exec(context.Context, []string) (err error) {
 	if (cmd.all && cmd.path != "") || (!cmd.all && cmd.path == "") {
 		return errors.New("please pass either `-path` or `-all` (but not both)")
+	}
+
+	if cmd.gcs {
+		gcsClient, gerr := cloudstore.GCSClient()
+		if gerr != nil {
+			return fmt.Errorf("failed to create GCS client: %w", gerr)
+		}
+		cmd.store, err = modulestore.New(gcsClient,
+			cloudstore.GCSPublicReadURL(), cloudstore.GCSBucket(), "modulecache")
+		if err != nil {
+			return fmt.Errorf("failed to create GCS module store: %w", err)
+		}
 	}
 
 	var paths []string

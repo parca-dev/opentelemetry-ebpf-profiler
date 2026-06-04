@@ -42,6 +42,9 @@ const (
 	s3ResultsPerPage = 1000
 	// s3MaxPages defines the maximum number of pages to ever retrieve when listing objects.
 	s3MaxPages = 16
+	// gcsFallbackURL is the public read URL of the GCS bucket used as a fallback
+	// source for artifacts that are not available from the primary remote storage.
+	gcsFallbackURL = "https://storage.googleapis.com/parca-coredump-artifacts/"
 	// zstpakChunkSize determines the chunk size to use when compressing files.
 	zstpakChunkSize = 64 * 1024
 )
@@ -471,31 +474,44 @@ func (store *Store) ensurePresentLocally(id ID) (string, error) {
 	}
 
 	moduleKey := makeS3Key(id)
-	resp, err := http.Get(store.publicReadURL + moduleKey)
+	err = store.downloadTo(store.publicReadURL+moduleKey, localPath)
 	if err != nil {
-		return "", fmt.Errorf("failed to request file: %w", err)
+		// Fall back to the public GCS bucket before giving up.
+		log.Debugf("failed to fetch %s from primary storage (%v), trying GCS fallback",
+			id.String(), err)
+		fallbackErr := store.downloadTo(gcsFallbackURL+moduleKey, localPath)
+		if fallbackErr != nil {
+			return "", fmt.Errorf("failed to fetch from primary storage (%w) "+
+				"and GCS fallback (%w)", err, fallbackErr)
+		}
+	}
+
+	return localPath, nil
+}
+
+// downloadTo fetches the file at the given URL and atomically writes it to localPath.
+func (store *Store) downloadTo(url, localPath string) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return fmt.Errorf("failed to request file: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		errorResponse, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("store returned %d %s", resp.StatusCode, errorResponse)
+		return fmt.Errorf("store returned %d %s", resp.StatusCode, errorResponse)
 	}
 
 	// Download the file to a temporary location to prevent half-complete modules on crashes.
 	file, err := os.CreateTemp(store.localCachePath, localTempPrefix)
 	if err != nil {
-		return "", fmt.Errorf("failed to create local file: %w", err)
+		return fmt.Errorf("failed to create local file: %w", err)
 	}
 	defer file.Close()
 	if _, err = io.Copy(file, resp.Body); err != nil {
-		return "", fmt.Errorf("failed to receive file: %w", err)
+		return fmt.Errorf("failed to receive file: %w", err)
 	}
 
-	if err = commitTempFile(file, localPath); err != nil {
-		return "", err
-	}
-
-	return localPath, nil
+	return commitTempFile(file, localPath)
 }
 
 // makeLocalPath creates the local cache path for the given ID.
