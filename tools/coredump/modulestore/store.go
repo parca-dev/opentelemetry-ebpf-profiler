@@ -29,6 +29,7 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/readatbuf"
+	"go.opentelemetry.io/ebpf-profiler/tools/coredump/cloudstore"
 	zstpak "go.opentelemetry.io/ebpf-profiler/tools/zstpak/lib"
 )
 
@@ -42,9 +43,6 @@ const (
 	s3ResultsPerPage = 1000
 	// s3MaxPages defines the maximum number of pages to ever retrieve when listing objects.
 	s3MaxPages = 16
-	// gcsFallbackURL is the public read URL of the GCS bucket used as a fallback
-	// source for artifacts that are not available from the primary remote storage.
-	gcsFallbackURL = "https://storage.googleapis.com/parca-coredump-artifacts/"
 	// zstpakChunkSize determines the chunk size to use when compressing files.
 	zstpakChunkSize = 64 * 1024
 )
@@ -61,6 +59,7 @@ type Store struct {
 	s3client       *s3.Client
 	httpClient     *http.Client
 	publicReadURL  string
+	gcsFallbackURL string
 	bucket         string
 	localCachePath string
 }
@@ -80,6 +79,7 @@ func New(s3client *s3.Client, publicReadURL, s3Bucket, localCachePath string) (*
 		s3client:       s3client,
 		httpClient:     &http.Client{Transport: tr},
 		publicReadURL:  publicReadURL,
+		gcsFallbackURL: cloudstore.GCSPublicReadURL(),
 		bucket:         s3Bucket,
 		localCachePath: localCachePath,
 	}, nil
@@ -476,10 +476,13 @@ func (store *Store) ensurePresentLocally(id ID) (string, error) {
 	moduleKey := makeS3Key(id)
 	err = store.downloadTo(store.publicReadURL+moduleKey, localPath)
 	if err != nil {
-		// Fall back to the public GCS bucket before giving up.
+		// If a GCS fallback bucket is configured, try it before giving up.
+		if store.gcsFallbackURL == "" {
+			return "", err
+		}
 		log.Debugf("failed to fetch %s from primary storage (%v), trying GCS fallback",
 			id.String(), err)
-		fallbackErr := store.downloadTo(gcsFallbackURL+moduleKey, localPath)
+		fallbackErr := store.downloadTo(store.gcsFallbackURL+moduleKey, localPath)
 		if fallbackErr != nil {
 			return "", fmt.Errorf("failed to fetch from primary storage (%w) "+
 				"and GCS fallback (%w)", err, fallbackErr)

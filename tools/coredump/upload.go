@@ -48,6 +48,10 @@ func (cmd *uploadCmd) exec(context.Context, []string) (err error) {
 	}
 
 	if cmd.gcs {
+		if cloudstore.GCSBucket() == "" {
+			return fmt.Errorf("the -gcs flag requires the %s environment variable to be set",
+				cloudstore.GCSBucketEnvVar)
+		}
 		gcsClient, gerr := cloudstore.GCSClient()
 		if gerr != nil {
 			return fmt.Errorf("failed to create GCS client: %w", gerr)

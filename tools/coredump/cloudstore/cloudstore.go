@@ -7,6 +7,7 @@ package cloudstore // import "go.opentelemetry.io/ebpf-profiler/tools/coredump/c
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -29,21 +30,29 @@ const modulePublicReadURL = "sm-wftyyzHJkBghWeexmK1o5ArimNwZC-5eBej5Lx4e46sLVHtO
 // moduleStoreS3Bucket defines the S3 bucket used for the module store.
 const moduleStoreS3Bucket = "ebpf-profiling-coredumps"
 
-// gcsBucket defines the public GCS bucket used as an alternative module store.
-const gcsBucket = "parca-coredump-artifacts"
+// GCSBucketEnvVar names the environment variable that selects the GCS bucket
+// used as an alternative module store. When it is unset, GCS support (both the
+// read fallback and the `upload -gcs` target) is disabled.
+const GCSBucketEnvVar = "COREDUMP_GCS_BUCKET"
 
 // gcsEndpoint is the GCS S3-compatible XML API endpoint.
 const gcsEndpoint = "https://storage.googleapis.com"
 
-// GCSBucket returns the name of the public GCS module store bucket.
+// GCSBucket returns the GCS module store bucket configured via the
+// COREDUMP_GCS_BUCKET environment variable, or an empty string if it is unset.
 func GCSBucket() string {
-	return gcsBucket
+	return os.Getenv(GCSBucketEnvVar)
 }
 
 // GCSPublicReadURL returns the base URL used to anonymously read objects from
-// the public GCS module store bucket.
+// the configured public GCS module store bucket, or an empty string if no
+// bucket is configured.
 func GCSPublicReadURL() string {
-	return fmt.Sprintf("%s/%s/", gcsEndpoint, gcsBucket)
+	bucket := GCSBucket()
+	if bucket == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s/%s/", gcsEndpoint, bucket)
 }
 
 // GCSClient returns an S3 client configured to talk to GCS via its
