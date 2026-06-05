@@ -17,6 +17,9 @@ permissions:
   contents: read
   issues: write
 
+env:
+  COREDUMP_GCS_BUCKET: parca-coredump-artifacts
+
 jobs:
   test:
     runs-on: ubuntu-latest

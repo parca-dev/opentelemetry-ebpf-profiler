@@ -9,6 +9,12 @@ on:
 permissions:
   contents: read
 
+# Let coredump tests fall back to the public GCS bucket for artifacts that
+# haven't been uploaded to the primary storage yet (e.g. tests added on a fork
+# branch). The fallback read is anonymous, so no credentials are required.
+env:
+  COREDUMP_GCS_BUCKET: parca-coredump-artifacts
+
 jobs:
   legal:
     name: Check licenses of dependencies
