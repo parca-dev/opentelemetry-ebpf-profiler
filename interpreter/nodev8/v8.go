@@ -2357,7 +2357,7 @@ func findJsDispatchTableOffset(ef *pfelf.File, syms relevantSymbols) (uint64, er
 	}
 	// the most I've observed mattering is 80 bytes
 	// and that was in debug mode; allow up to 256 just to be safe.
-	sz := max(sym.Size, 256)
+	sz := min(sym.Size, 256)
 	code := make([]byte, sz)
 	if _, err := ef.ReadVirtualMemory(code, int64(sym.Address)); err != nil {
 		return 0, fmt.Errorf("failed to read js_dispatch_table_address code: %w", err)
