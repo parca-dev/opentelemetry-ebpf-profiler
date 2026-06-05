@@ -12,7 +12,7 @@ import (
 // by analyzing v8::internal::ExternalReference::js_dispatch_table_address().
 //
 // We are interested in the offset of the field that ends up being returned,
-// so we run until `ret` and then see what offset x0 (the return value) was loaded from.
+// so we run until `ret` and then see what offset rax (the return value) was loaded from.
 // We don't care how the base pointer was computed, and in fact, this can vary in debug vs. release builds
 //
 // v8::internal::ExternalReference::js_dispatch_table_address().
