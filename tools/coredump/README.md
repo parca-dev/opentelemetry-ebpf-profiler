@@ -296,3 +296,39 @@ add references to this map manually to this package. This is because we do not
 currently support adding maps in an  automated fashion. The best way to do this
 is to look through existing code in this package and to see where existing code 
 refers to particular BPF maps.
+
+## Parca extension: fallback GCS bucket
+
+Currently, we have a GCS bucket called `parca-coredump-artifacts` that we can fall back to
+if artifacts are not available in the main storage.
+
+The purpose of this is to allow us to create coredump tests in our fork that haven't yet landed upstream.
+
+To use it, ensure that the environment setting `COREDUMP_GCS_BUCKET=parca-coredump-artifacts` is applied
+when running tests.
+
+We also have a `-gcs` flag to `coredump upload` for the same purpose. To use it, Parca maintainers
+should download `parca-coredump-artifacts-uploader` from our Bitbucket, save it as key.json, and execute the following commands to create
+an HMAC key:
+
+```bash
+# Create an HMAC key for the service account.
+gcloud auth activate-service-account --key-file=key.json
+gcloud storage hmac create "$(jq -r .client_email key.json)"
+```
+
+This prints an `accessId` and `secret`. (Note: these keys are long-running and only 5 are allowed per service account,
+so don't create a new one every time you use it).
+
+Once you have an accessId and a secret, you can upload coredumps like so:
+
+```bash
+export AWS_ACCESS_KEY_ID=<accessId>
+export AWS_SECRET_ACCESS_KEY=<secret>
+export COREDUMP_GCS_BUCKET=parca-coredump-artifacts
+./coredump upload -gcs -all
+```
+
+(If we ever run into the 5 key limit, we will have to delete some old ones with `gcloud storage hmac list`,
+followed by `gcloud storage hmac update <accessId> --deactivate` and
+`gcloud storage hmac delete <accessId>`.)
