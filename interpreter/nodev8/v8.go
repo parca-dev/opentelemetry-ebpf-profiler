@@ -2478,7 +2478,7 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 	if d.leaptiering {
 		offset, err := findJsDispatchTableOffset(ef, syms)
 		if err != nil {
-			log.Warnf("leaptiering on, but failed to find js_dispatch_table_ offset: %w. Proceeding as though leaptiering were off; line numbers will likely be wrong.", err)
+			log.Warnf("leaptiering on, but failed to find js_dispatch_table_ offset: %v. Proceeding as though leaptiering were off; line numbers will likely be wrong.", err)
 			d.leaptiering = false
 		}
 		d.jsDispatchTableOffset = uint32(offset)
