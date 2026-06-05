@@ -15,11 +15,6 @@ import (
 // so we run until `ret` and then see what offset rax (the return value) was loaded from.
 // We don't care how the base pointer was computed, and in fact, this can vary in debug vs. release builds
 //
-// v8::internal::ExternalReference::js_dispatch_table_address().
-//
-// We are interested in the offset of the field that ends up being returned,
-// so we run until `ret` and then see what offset rax (the return value) was loaded from.
-//
 // 0xc736d0: mov rax, qword ptr [rip + 0x5a2d231]
 // 0xc736d7: mov rax, qword ptr [rax + 0x3268]
 // 0xc736de: lea rdx, [rax - 1]
