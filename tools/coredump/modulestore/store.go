@@ -29,6 +29,7 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/readatbuf"
+	"go.opentelemetry.io/ebpf-profiler/tools/coredump/cloudstore"
 	zstpak "go.opentelemetry.io/ebpf-profiler/tools/zstpak/lib"
 )
 
@@ -58,6 +59,7 @@ type Store struct {
 	s3client       *s3.Client
 	httpClient     *http.Client
 	publicReadURL  string
+	gcsFallbackURL string
 	bucket         string
 	localCachePath string
 }
@@ -77,6 +79,7 @@ func New(s3client *s3.Client, publicReadURL, s3Bucket, localCachePath string) (*
 		s3client:       s3client,
 		httpClient:     &http.Client{Transport: tr},
 		publicReadURL:  publicReadURL,
+		gcsFallbackURL: cloudstore.GCSPublicReadURL(),
 		bucket:         s3Bucket,
 		localCachePath: localCachePath,
 	}, nil
@@ -471,31 +474,47 @@ func (store *Store) ensurePresentLocally(id ID) (string, error) {
 	}
 
 	moduleKey := makeS3Key(id)
-	resp, err := http.Get(store.publicReadURL + moduleKey)
+	err = store.downloadTo(store.publicReadURL+moduleKey, localPath)
 	if err != nil {
-		return "", fmt.Errorf("failed to request file: %w", err)
+		// If a GCS fallback bucket is configured, try it before giving up.
+		if store.gcsFallbackURL == "" {
+			return "", err
+		}
+		log.Debugf("failed to fetch %s from primary storage (%v), trying GCS fallback",
+			id.String(), err)
+		fallbackErr := store.downloadTo(store.gcsFallbackURL+moduleKey, localPath)
+		if fallbackErr != nil {
+			return "", fmt.Errorf("failed to fetch from primary storage (%w) "+
+				"and GCS fallback (%w)", err, fallbackErr)
+		}
+	}
+
+	return localPath, nil
+}
+
+// downloadTo fetches the file at the given URL and atomically writes it to localPath.
+func (store *Store) downloadTo(url, localPath string) error {
+	resp, err := http.Get(url)
+	if err != nil {
+		return fmt.Errorf("failed to request file: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		errorResponse, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("store returned %d %s", resp.StatusCode, errorResponse)
+		return fmt.Errorf("store returned %d %s", resp.StatusCode, errorResponse)
 	}
 
 	// Download the file to a temporary location to prevent half-complete modules on crashes.
 	file, err := os.CreateTemp(store.localCachePath, localTempPrefix)
 	if err != nil {
-		return "", fmt.Errorf("failed to create local file: %w", err)
+		return fmt.Errorf("failed to create local file: %w", err)
 	}
 	defer file.Close()
 	if _, err = io.Copy(file, resp.Body); err != nil {
-		return "", fmt.Errorf("failed to receive file: %w", err)
+		return fmt.Errorf("failed to receive file: %w", err)
 	}
 
-	if err = commitTempFile(file, localPath); err != nil {
-		return "", err
-	}
-
-	return localPath, nil
+	return commitTempFile(file, localPath)
 }
 
 // makeLocalPath creates the local cache path for the given ID.
