@@ -154,6 +154,7 @@ package nodev8 // import "go.opentelemetry.io/ebpf-profiler/interpreter/nodev8"
 
 import (
 	"bytes"
+	"debug/elf"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -288,6 +289,7 @@ type v8Data struct {
 			LiteralArray              uint8 `name:"DeoptimizationDataLiteralArrayIndex"`
 			SharedFunctionInfo        uint8 `name:"DeoptimizationDataSharedFunctionInfoIndex" zero:""`
 			SharedFunctionInfoWrapper uint8 `name:"DeoptimizationDataSharedFunctionInfoWrapperIndex" zero:""`
+			WrappedSharedFunctionInfo uint8 `name:"DeoptimizationDataWrappedSharedFunctionInfoIndex" zero:""`
 			InliningPositions         uint8 `name:"DeoptimizationDataInliningPositionsIndex"`
 		} `name:""`
 
@@ -503,6 +505,17 @@ type v8Data struct {
 	// wrappedObjectOffset is the offset of a wrapped (via ObjectWrap) C++ object
 	// in the corresponding JS object.
 	wrappedObjectOffset uint32
+
+	// leaptiering is true if V8 was built with V8_ENABLE_LEAPTIERING.
+	leaptiering bool
+
+	// jsDispatchTableOffset is the offset of js_dispatch_table_ in IsolateGroup.
+	// Only valid if leaptiering = true.
+	jsDispatchTableOffset uint32
+
+	// defaultIsolateGroupAddr is the address of the
+	// IsolateGroup::default_isolate_group_ pointer variable.
+	defaultIsolateGroupAddr libpf.Address
 }
 
 type v8Instance struct {
@@ -1854,7 +1867,7 @@ func mapFramePointerOffset(relBytes uint8) uint8 {
 	return uint8(slotOffset)
 }
 
-func (d *v8Data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Address,
+func (d *v8Data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, bias libpf.Address,
 	rm remotememory.RemoteMemory,
 ) (interpreter.Instance, error) {
 	vms := &d.vmStructs
@@ -1895,6 +1908,11 @@ func (d *v8Data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Add
 		Isolate_sym:           uint64(d.isolateSym),
 		Cped_offset:           d.cpedOffset,
 		Wrapped_object_offset: d.wrappedObjectOffset,
+	}
+	if d.leaptiering {
+		data.Leaptiering = 1
+		data.Default_isolate_group = uint64(rm.Ptr(d.defaultIsolateGroupAddr + bias))
+		data.Js_dispatch_table_offset = d.jsDispatchTableOffset
 	}
 	if err := ebpf.UpdateProcData(libpf.V8, pid, unsafe.Pointer(&data)); err != nil {
 		return nil, err
@@ -2134,6 +2152,11 @@ func (d *v8Data) readIntrospectionData(ef *pfelf.File) error {
 		val := vms.DeoptimizationDataIndex.InlinedFunctionCount + 1
 		vms.DeoptimizationDataIndex.LiteralArray = val
 	}
+	if vms.DeoptimizationDataIndex.WrappedSharedFunctionInfo != 0 {
+		// these mean the same thing, it just got renamed at some point:
+		// see https://chromium-review.googlesource.com/c/v8/v8/+/5939362.
+		vms.DeoptimizationDataIndex.SharedFunctionInfoWrapper = vms.DeoptimizationDataIndex.WrappedSharedFunctionInfo
+	}
 	if vms.DeoptimizationDataIndex.SharedFunctionInfo == 0 &&
 		vms.DeoptimizationDataIndex.SharedFunctionInfoWrapper == 0 {
 		vms.DeoptimizationDataIndex.SharedFunctionInfo = 6
@@ -2262,6 +2285,9 @@ type relevantSymbols struct {
 	BytecodeSizes       *libpf.Symbol `sym:"_ZN2v88internal11interpreter9Bytecodes14kBytecodeSizesE"`
 	NodeVersion         *libpf.Symbol `sym:"_ZZ21napi_get_node_versionE7version"`
 	CurrentIsolate      *libpf.Symbol `sym:"_ZN2v88internal18g_current_isolate_E"`
+
+	JSDispatchTableAddress *libpf.Symbol `sym:"_ZN2v88internal17ExternalReference25js_dispatch_table_addressEv"`
+	DefaultIsolateGroup    *libpf.Symbol `sym:"_ZN2v88internal12IsolateGroup22default_isolate_group_E"`
 }
 
 // scan gets the symbols needed for Node unwinding
@@ -2321,6 +2347,32 @@ func lookupRelevantSymbols(ef *pfelf.File) (relevantSymbols, error) {
 		return rv, err
 	} else {
 		return rv, nil
+	}
+}
+
+func findJsDispatchTableOffset(ef *pfelf.File, syms relevantSymbols) (uint64, error) {
+	sym := syms.JSDispatchTableAddress
+	if sym == nil {
+		return 0, errors.New("js_dispatch_table_address not found; can't analyze it to find js_dispatch_table_ offset")
+	}
+	// the most I've observed mattering is 80 bytes
+	// and that was in debug mode; allow up to 256 just to be safe.
+	sz := min(sym.Size, 256)
+	code := make([]byte, sz)
+	if _, err := ef.ReadVirtualMemory(code, int64(sym.Address)); err != nil {
+		return 0, fmt.Errorf("failed to read js_dispatch_table_address code: %w", err)
+	}
+
+	switch ef.Machine {
+	case elf.EM_AARCH64:
+		if offset, ok := GetJsDispatchTableOffsetAarch64(code); ok {
+			return offset, nil
+		}
+		return 0, errors.New("Failed to find js_dispatch_table_ field offset")
+	case elf.EM_X86_64:
+		return GetJsDispatchTableOffsetX64(code)
+	default:
+		return 0, fmt.Errorf("unsupported arch %s", ef.Machine.String())
 	}
 }
 
@@ -2421,6 +2473,18 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 	d := &v8Data{
 		version:       version,
 		snapshotRange: locateSnapshotArea(ef, syms),
+		leaptiering:   syms.JSDispatchTableAddress != nil,
+	}
+	if d.leaptiering {
+		offset, err := findJsDispatchTableOffset(ef, syms)
+		if err != nil {
+			log.Warnf("leaptiering on, but failed to find js_dispatch_table_ offset: %v. Proceeding as though leaptiering were off; line numbers will likely be wrong.", err)
+			d.leaptiering = false
+		}
+		d.jsDispatchTableOffset = uint32(offset)
+	}
+	if syms.DefaultIsolateGroup != nil {
+		d.defaultIsolateGroupAddr = libpf.Address(syms.DefaultIsolateGroup.Address)
 	}
 
 	sym := syms.BytecodeSizes

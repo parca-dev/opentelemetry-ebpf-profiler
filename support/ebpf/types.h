@@ -583,6 +583,9 @@ typedef struct V8ProcInfo {
   u64 isolate_sym;
   u32 cped_offset;
   u32 wrapped_object_offset;
+  u64 default_isolate_group;
+  u8 leaptiering;
+  u32 js_dispatch_table_offset;
 } V8ProcInfo;
 
 // BEAMProcInfo is a container for the data needed to build a stack trace for a BEAM process.

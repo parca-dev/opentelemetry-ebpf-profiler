@@ -334,6 +334,9 @@ type V8ProcInfo struct {
 	Isolate_sym                  uint64
 	Cped_offset                  uint32
 	Wrapped_object_offset        uint32
+	Default_isolate_group        uint64
+	Leaptiering                  uint8
+	Js_dispatch_table_offset     uint32
 }
 type NativeCustomLabelsProcInfo struct {
 	Current_set_tls_offset       uint64

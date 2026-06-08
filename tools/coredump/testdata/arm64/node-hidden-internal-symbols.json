@@ -4,7 +4,10 @@
     {
       "lwp": 27330,
       "frames": [
+        "writeOrBuffer+0 in node:internal/streams/writable:0",
         "_write+0 in node:internal/streams/writable:0",
+        "Writable.write+0 in node:internal/streams/writable:0",
+        "value+0 in node:internal/console/constructor:0",
         "log+0 in node:internal/console/constructor:0",
         "V8::InternalFrame+0 in :0",
         "V8::EntryFrame+0 in :0",
