@@ -37,6 +37,10 @@
 #define FRAME_MARKER_LUAJIT      0xD
 // Indicates a CUDA kernel frame
 #define FRAME_MARKER_CUDA_KERNEL 0xE
+// Indicates a CUDA PC-sample frame (a function-relative kernel offset that the
+// backend resolves per-function). Synthesized in user space, never emitted by
+// eBPF, but defined here to keep the marker space shared and consistent.
+#define FRAME_MARKER_CUDA_PC     0xF
 
 // Frame flags
 // Indicates that this frame is an error frame.

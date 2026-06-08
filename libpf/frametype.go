@@ -57,6 +57,11 @@ const (
 	LuaJITFrame FrameType = support.FrameMarkerLuaJIT
 	// CUDAKernelFrame identifies CUDA kernel frames.
 	CUDAKernelFrame FrameType = support.FrameMarkerCUDAKernel
+	// CUDAPCFrame identifies a CUDA PC-sample frame: a function-relative kernel
+	// offset that the backend resolves per-function. The kernel's mangled name
+	// rides in the frame's system name so the backend can key the per-function
+	// debuginfo lookup off it.
+	CUDAPCFrame FrameType = support.FrameMarkerCUDAPC
 )
 
 const (

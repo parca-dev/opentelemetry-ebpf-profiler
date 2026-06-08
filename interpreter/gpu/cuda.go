@@ -699,32 +699,38 @@ func emitPCSample(ev *CuptiPCSampleEvent, rep reporter.TraceReporter, cpuTrace *
 	}
 	// Transient: kernelName is interned (copied) before ev goes out of scope.
 	kernelName := pfunsafe.ToString(nullTerm(ev.FunctionName[:]))
+
+	// Decode the SASS instruction at this offset, surfaced as the
+	// "cuda_sass_instruction" sample label.
 	mnemonic := decodeInstruction(cubinInfo, kernelName, ev.Data.PCOffset)
+
+	// One mapping per cubin: the build ID is the cubin CRC (FileID with lo=0).
+	// The kernel's mangled name rides on the frame as its system name so the
+	// backend can resolve it per function.
 	cubinName := fmt.Sprintf("cubin-%016x", cubinInfo.CRC)
 	cubinMapping := libpf.NewFrameMapping(libpf.FrameMappingData{
 		File: libpf.NewFrameMappingFile(libpf.FrameMappingFileData{
-			FileID:     cubinInfo.FileID,
-			FileName:   libpf.Intern(cubinName),
-			GnuBuildID: fmt.Sprintf("%016x", cubinInfo.CRC),
+			FileID:   cubinInfo.FileID,
+			FileName: libpf.Intern(cubinName),
 		}),
 	})
 
-	count := ev.Data.StallReasonCount
-	if count > 64 {
-		count = 64
-	}
-	for i := uint64(0); i < count; i++ {
+	// One sample per stall reason: the same single CUDAPCFrame, distinguished by
+	// the "cuda_stall_reason" label and weighted by that reason's sample count.
+	count := min(ev.Data.StallReasonCount, maxStallReasons)
+	for i := range count {
 		sr := ev.StallReasons[i]
 		if sr.Samples == 0 {
 			continue
 		}
-		stallName := LookupStallReason(ev.Pid, sr.Index)
-		trace := buildGpuPCTrace(cpuTrace, cubinMapping, kernelName,
-			ev.Data.PCOffset, mnemonic, stallName, sr.Index)
+
+		trace := buildGpuPCTrace(cpuTrace, cubinMapping, kernelName, ev.Data.PCOffset)
+		trace.CustomLabels = gpuPCLabels(LookupStallReason(ev.Pid, sr.Index), mnemonic)
+
 		meta := buildGpuPCMeta(cpuTrace, ev.Pid, int64(sr.Samples))
 		trace.Hash = traceutil.HashTrace(trace)
 		if err := rep.ReportTraceEvent(trace, meta); err != nil {
-			log.Errorf("[cuda] failed to report deferred GPU PC sample: %v", err)
+			log.Errorf("[cuda] failed to report GPU PC sample: %v", err)
 		}
 	}
 }
@@ -867,10 +873,12 @@ func (f *gpuTraceFixer) maybeClear() fixerStats {
 }
 
 var (
-	cudaDevice libpf.String
-	cudaStream libpf.String
-	cudaGraph  libpf.String
-	cudaId     libpf.String
+	cudaDevice          libpf.String
+	cudaStream          libpf.String
+	cudaGraph           libpf.String
+	cudaId              libpf.String
+	cudaStallReason     libpf.String
+	cudaSassInstruction libpf.String
 )
 
 func init() {
@@ -878,6 +886,8 @@ func init() {
 	cudaStream = libpf.Intern("cuda_stream")
 	cudaGraph = libpf.Intern("cuda_graph")
 	cudaId = libpf.Intern("cuda_id")
+	cudaStallReason = libpf.Intern("cuda_stall_reason")
+	cudaSassInstruction = libpf.Intern("cuda_sass_instruction")
 }
 
 // nullTerm returns b truncated at the first NUL byte, or all of b if there is

@@ -32,6 +32,7 @@ const (
 	FrameMarkerLuaJIT     = C.FRAME_MARKER_LUAJIT
 	FrameMarkerBEAM       = C.FRAME_MARKER_BEAM
 	FrameMarkerCUDAKernel = C.FRAME_MARKER_CUDA_KERNEL
+	FrameMarkerCUDAPC     = C.FRAME_MARKER_CUDA_PC
 	FrameMarkerGo         = C.FRAME_MARKER_GO
 )
 
