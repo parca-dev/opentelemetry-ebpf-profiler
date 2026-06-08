@@ -25,6 +25,7 @@ const (
 	FrameMarkerLuaJIT     = 0xd
 	FrameMarkerBEAM       = 0xc
 	FrameMarkerCUDAKernel = 0xe
+	FrameMarkerCUDAPC     = 0xf
 	FrameMarkerGo         = 0xb
 )
 

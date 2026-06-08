@@ -1,18 +1,15 @@
 package gpu // import "go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 
 import (
-	"fmt"
 	"time"
 	"unique"
 
 	log "github.com/sirupsen/logrus"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
-	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/support"
-	"go.opentelemetry.io/ebpf-profiler/traceutil"
 
 	sasstable "github.com/gnurizen/sass-table"
 )
@@ -25,20 +22,14 @@ const maxStallReasons = 64
 // mnemonic from the cubin's SASS code, and reports one gpupc trace per
 // non-zero stall reason.
 func HandlePCSample(ev *CuptiPCSampleEvent, rep reporter.TraceReporter) {
-	cubinInfo, ok := LoadCubin(ev.Data.CubinCRC)
-	if !ok {
+	if _, ok := LoadCubin(ev.Data.CubinCRC); !ok {
 		log.Debugf("[cuda] pc sample: cubin 0x%x not in cache, dropping", ev.Data.CubinCRC)
 		return
 	}
 
-	// Transient: kernelName is interned (copied) before ev goes out of scope.
-	kernelName := pfunsafe.ToString(nullTerm(ev.FunctionName[:]))
-
-	// Decode instruction mnemonic from cubin .text section.
-	mnemonic := decodeInstruction(cubinInfo, kernelName, ev.Data.PCOffset)
-
-	// Look up CPU trace for correlation. If found, emit immediately.
-	// If not, store for deferred resolution when the trace arrives.
+	// Correlate with a CPU trace. If the correlation trace hasn't arrived yet,
+	// stash this sample; it is emitted later via emitPCSample when the trace
+	// shows up.
 	var cpuTrace *SymbolizedCudaTrace
 	if ev.CorrelationID != 0 {
 		cpuTrace = LookupTraceForPCSample(libpf.PID(ev.Pid), ev.CorrelationID)
@@ -53,104 +44,40 @@ func HandlePCSample(ev *CuptiPCSampleEvent, rep reporter.TraceReporter) {
 		}
 	}
 
-	log.Debugf("[cuda] pc sample: pid=%d kernel=%q funcIdx=%d offset=0x%x mnemonic=%q corrID=%d stallReasons=%d cpuTrace=%v",
-		ev.Pid, kernelName, ev.Data.FunctionIndex, ev.Data.PCOffset, mnemonic, ev.CorrelationID,
-		ev.Data.StallReasonCount, cpuTrace != nil)
-
-	// Build cubin file mapping for the offset frame.
-	cubinName := fmt.Sprintf("cubin-%016x", cubinInfo.CRC)
-	cubinMapping := libpf.NewFrameMapping(libpf.FrameMappingData{
-		File: libpf.NewFrameMappingFile(libpf.FrameMappingFileData{
-			FileID:   cubinInfo.FileID,
-			FileName: libpf.Intern(cubinName),
-		}),
-	})
-
-	count := min(ev.Data.StallReasonCount, maxStallReasons)
-
-	for i := range count {
-		sr := ev.StallReasons[i]
-		if sr.Samples == 0 {
-			continue
-		}
-
-		stallName := LookupStallReason(ev.Pid, sr.Index)
-		trace := buildGpuPCTrace(cpuTrace, cubinMapping, kernelName,
-			ev.Data.PCOffset, mnemonic, stallName, sr.Index)
-
-		meta := buildGpuPCMeta(cpuTrace, ev.Pid, int64(sr.Samples))
-
-		trace.Hash = traceutil.HashTrace(trace)
-		if err := rep.ReportTraceEvent(trace, meta); err != nil {
-			log.Errorf("[cuda] failed to report GPU PC sample: %v", err)
-		} else {
-			log.Debugf("[cuda] reported gpupc: kernel=%q offset=0x%x mnemonic=%q stall=%q stallIdx=%d samples=%d",
-				kernelName, ev.Data.PCOffset, mnemonic, stallName, sr.Index, sr.Samples)
-		}
-	}
+	emitPCSample(ev, rep, cpuTrace)
 }
 
-// buildGpuPCTrace constructs a trace with GPU PC sampling frames, optionally
-// prepended with CPU frames from the correlated trace.
+// buildGpuPCTrace constructs a trace for one GPU PC sample: a single
+// CUDAPCFrame carrying the function-relative offset, optionally followed by the
+// CPU frames from the correlated trace.
 //
-// Frame order (leaf to root):
-//
-//	[0] stall_reason  — CUDAKernelFrame
-//	[1] instruction   — CUDAKernelFrame (omitted if mnemonic is empty)
-//	[2] offset        — NativeFrame with cubin Mapping
-//	[3] kernel_name   — CUDAKernelFrame
-//	[4..N] CPU frames — from correlated trace (if available)
+// The GPU frame's mapping build ID is the cubin CRC (one mapping per cubin) and
+// the kernel's mangled name rides on it as the system name (in FunctionName),
+// so the backend resolves it per function to (kernel, file, line).
 func buildGpuPCTrace(cpuTrace *SymbolizedCudaTrace, cubinMapping libpf.FrameMapping,
-	kernelName string, pcOffset uint64, mnemonic string, stallName libpf.String,
-	stallIndex uint32) *libpf.Trace {
-
-	// Count GPU frames: kernel + offset + stall_reason, plus instruction if available.
-	gpuFrameCount := 3
-	if mnemonic != "" {
-		gpuFrameCount = 4
-	}
+	kernelName string, pcOffset uint64) *libpf.Trace {
 
 	// Count CPU frames (exclude the original CUDAKernelFrame).
 	cpuFrameCount := 0
 	if cpuTrace != nil {
-		cpuFrameCount = len(cpuTrace.Trace.Frames) - 1 // exclude CUDAKernelFrame
+		cpuFrameCount = len(cpuTrace.Trace.Frames) - 1
 		if cpuFrameCount < 0 {
 			cpuFrameCount = 0
 		}
 	}
 
 	trace := &libpf.Trace{
-		Frames: make(libpf.Frames, 0, gpuFrameCount+cpuFrameCount),
-	}
-
-	// GPU frames (leaf to root order).
-	// AddressOrLineno on the stall reason frame ensures HashTrace produces
-	// distinct hashes per stall reason (the hash only covers FileID + AddressOrLineno).
-	trace.Frames = append(trace.Frames, unique.Make(libpf.Frame{
-		Type:            libpf.CUDAKernelFrame,
-		FunctionName:    stallName,
-		AddressOrLineno: libpf.AddressOrLineno(stallIndex),
-	}))
-
-	if mnemonic != "" {
-		trace.Frames = append(trace.Frames, unique.Make(libpf.Frame{
-			Type:         libpf.CUDAKernelFrame,
-			FunctionName: libpf.Intern(mnemonic),
-		}))
+		Frames: make(libpf.Frames, 0, 1+cpuFrameCount),
 	}
 
 	trace.Frames = append(trace.Frames, unique.Make(libpf.Frame{
-		Type:            libpf.NativeFrame,
+		Type:            libpf.CUDAPCFrame,
+		FunctionName:    libpf.Intern(kernelName),
 		AddressOrLineno: libpf.AddressOrLineno(pcOffset),
 		Mapping:         cubinMapping,
 	}))
 
-	trace.Frames = append(trace.Frames, unique.Make(libpf.Frame{
-		Type:         libpf.CUDAKernelFrame,
-		FunctionName: libpf.Intern(kernelName),
-	}))
-
-	// CPU frames from correlated trace (skip the CUDAKernelFrame).
+	// CPU frames from the correlated trace (skip its CUDAKernelFrame).
 	if cpuTrace != nil {
 		for i, f := range cpuTrace.Trace.Frames {
 			if i == cpuTrace.CUDAFrameIdx {
@@ -161,6 +88,18 @@ func buildGpuPCTrace(cpuTrace *SymbolizedCudaTrace, cubinMapping libpf.FrameMapp
 	}
 
 	return trace
+}
+
+// gpuPCLabels builds the per-sample custom labels for a GPU PC sample: the CUPTI
+// stall reason and, when decoded, the SASS instruction mnemonic at the offset.
+func gpuPCLabels(stallName libpf.String, mnemonic string) map[libpf.String]libpf.String {
+	labels := map[libpf.String]libpf.String{
+		cudaStallReason: stallName,
+	}
+	if mnemonic != "" {
+		labels[cudaSassInstruction] = libpf.Intern(mnemonic)
+	}
+	return labels
 }
 
 // buildGpuPCMeta constructs TraceEventMeta for a gpupc sample.

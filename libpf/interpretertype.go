@@ -39,6 +39,8 @@ const (
 	BEAM InterpreterType = support.FrameMarkerBEAM
 	// CUDA interpreter type for CUDA kernels.
 	CUDA InterpreterType = support.FrameMarkerCUDAKernel
+	// CUDAPC interpreter type for CUDA PC-sample frames.
+	CUDAPC InterpreterType = support.FrameMarkerCUDAPC
 )
 
 // Pseudo-interpreters without a corresponding frame type.
@@ -80,6 +82,7 @@ var interpreterTypeToString = map[InterpreterType]string{
 	Dotnet:       "dotnet",
 	BEAM:         "beam",
 	CUDA:         "cuda",
+	CUDAPC:       "cuda-pc",
 	APMInt:       "apm-integration",
 	LuaJIT:       "luajit",
 	Go:           "go",
