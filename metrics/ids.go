@@ -716,6 +716,18 @@ const (
 	// Number of pending PC sample events dropped at retention-window eviction (correlation trace never arrived)
 	IDCudaPendingPCSamplesEvicted = 308
 
+	// Number of cache hits for dotnet PE information
+	IDDotnetPEInfoCacheHit = 309
+
+	// Number of cache misses for dotnet PE information
+	IDDotnetPEInfoCacheMiss = 310
+
+	// Number of cache hits for dotnet #Strings heap lookups
+	IDDotnetStringsCacheHit = 311
+
+	// Number of cache misses for dotnet #Strings heap lookups
+	IDDotnetStringsCacheMiss = 312
+
 	// max number of ID values, keep this as *last entry*
-	IDMax = 309
+	IDMax = 313
 )

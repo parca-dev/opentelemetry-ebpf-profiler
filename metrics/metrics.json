@@ -2250,5 +2250,33 @@
     "name": "CudaPendingPCSamplesEvicted",
     "field": "cuda.pending_pc_samples_evicted",
     "id": 308
+  },
+  {
+    "description": "Number of cache hits for dotnet PE information",
+    "type": "counter",
+    "name": "DotnetPEInfoCacheHit",
+    "field": "agent.dotnet.pe_info_cache.hits",
+    "id": 309
+  },
+  {
+    "description": "Number of cache misses for dotnet PE information",
+    "type": "counter",
+    "name": "DotnetPEInfoCacheMiss",
+    "field": "agent.dotnet.pe_info_cache.misses",
+    "id": 310
+  },
+  {
+    "description": "Number of cache hits for dotnet #Strings heap lookups",
+    "type": "counter",
+    "name": "DotnetStringsCacheHit",
+    "field": "agent.dotnet.strings_cache.hits",
+    "id": 311
+  },
+  {
+    "description": "Number of cache misses for dotnet #Strings heap lookups",
+    "type": "counter",
+    "name": "DotnetStringsCacheMiss",
+    "field": "agent.dotnet.strings_cache.misses",
+    "id": 312
   }
 ]
