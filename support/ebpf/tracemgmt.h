@@ -789,7 +789,7 @@ static inline EBPF_INLINE int collect_trace(
   u32 pid,
   u32 tid,
   u64 trace_timestamp,
-  u64 off_cpu_time,
+  u64 value,
   u64 cuda_id)
 {
   // The trace is reused on each call to this function so we have to reset the
@@ -800,12 +800,12 @@ static inline EBPF_INLINE int collect_trace(
     return -1;
   }
 
-  Trace *trace   = &record->trace;
-  trace->origin  = origin;
-  trace->pid     = pid;
-  trace->tid     = tid;
-  trace->ktime   = trace_timestamp;
-  trace->offtime = off_cpu_time;
+  Trace *trace  = &record->trace;
+  trace->origin = origin;
+  trace->pid    = pid;
+  trace->tid    = tid;
+  trace->ktime  = trace_timestamp;
+  trace->value  = value;
   if (bpf_get_current_comm(&(trace->comm), sizeof(trace->comm)) < 0) {
     increment_metric(metricID_ErrBPFCurrentComm);
   }

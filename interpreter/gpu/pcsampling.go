@@ -105,7 +105,7 @@ func gpuPCLabels(stallName libpf.String, mnemonic string) map[libpf.String]libpf
 // buildGpuPCMeta constructs TraceEventMeta for a gpupc sample.
 // If a CPU trace is available, metadata is copied from it.
 //
-// OffTime carries the raw PC sample count for this (pid, trace). The reporter
+// Value carries the raw PC sample count for this (pid, trace). The reporter
 // pairs it with the per-pid GpuConfig (via LoadGpuConfig) to set the profile
 // period to ns_per_sample, so a "count" sample_type stays mathematically
 // convertible to GPU nanoseconds via value × period.
@@ -115,7 +115,7 @@ func buildGpuPCMeta(cpuTrace *SymbolizedCudaTrace, pid uint32,
 		Timestamp: libpf.UnixTime64(time.Now().UnixNano()),
 		PID:       libpf.PID(pid),
 		Origin:    support.TraceOriginGpuPC,
-		OffTime:   sampleCount,
+		Value:     sampleCount,
 	}
 	if cpuTrace != nil && cpuTrace.Meta != nil {
 		meta.Timestamp = cpuTrace.Meta.Timestamp
