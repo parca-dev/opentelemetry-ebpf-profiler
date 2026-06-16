@@ -145,7 +145,6 @@ static inline EBPF_INLINE bool pid_event_ratelimit(u32 pid, int ratelimit_action
     return false;
   }
 
-
   if (token_ptr) {
     u64 token   = *token_ptr;
     u64 diff_ts = ts - (token & ~0x1fULL);
