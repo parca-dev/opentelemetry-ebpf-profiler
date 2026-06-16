@@ -22,6 +22,7 @@ import (
 
 func getPFELF(path string, t *testing.T) *File {
 	t.Helper()
+	testsupport.RequireGeneratedTestFile(t, path)
 	file, err := Open(path)
 	require.NoError(t, err)
 	return file
@@ -59,6 +60,7 @@ func TestPFELFSymbols(t *testing.T) {
 }
 
 func TestPFELFSections(t *testing.T) {
+	testsupport.RequireGeneratedTestFile(t, "testdata/fixed-address")
 	elfFile, err := Open("testdata/fixed-address")
 	require.NoError(t, err)
 	defer elfFile.Close()
@@ -107,6 +109,7 @@ func TestGetGoBuildID(t *testing.T) {
 
 	buildID, err := ef.GetGoBuildID()
 	require.NoError(t, err)
+	testsupport.RequireGeneratedTestFile(t, "testdata/go-binary")
 	out, err := exec.Command("go", "tool", "buildid", "testdata/go-binary").Output()
 	require.NoError(t, err)
 	expectedBuildID := strings.TrimRight(string(out), "\n")
