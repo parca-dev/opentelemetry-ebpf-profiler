@@ -169,7 +169,7 @@ func TestLookupTlsSymbolOffset(t *testing.T) {
 			sym, err := ef.LookupSymbol("get_tbss")
 			require.NoError(t, err)
 			code := make([]byte, sym.Size)
-			_, err = ef.ReadVirtualMemory(code, int64(sym.Address))
+			_, err = ef.ReadAt(code, int64(sym.Address))
 			require.NoError(t, err)
 
 			offset, err := symbolOffsetFromCodeX86(code)
@@ -184,7 +184,7 @@ func TestLookupTlsSymbolOffset(t *testing.T) {
 			sym, err := ef.LookupSymbol("get_tdata")
 			require.NoError(t, err)
 			code := make([]byte, sym.Size)
-			_, err = ef.ReadVirtualMemory(code, int64(sym.Address))
+			_, err = ef.ReadAt(code, int64(sym.Address))
 			require.NoError(t, err)
 
 			offset, err := symbolOffsetFromCodeX86(code)

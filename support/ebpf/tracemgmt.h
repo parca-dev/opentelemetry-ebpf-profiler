@@ -43,8 +43,7 @@ extern u32 task_stack_offset;
 extern u32 stack_ptregs_offset;
 
 // Send immediate notifications for event triggers to Go.
-// Notifications for GENERIC_PID and RELOAD_KALLSYMS will be
-// automatically inhibited until HA resets the type.
+// Notifications for GENERIC_PID will be automatically inhibited until HA resets the type.
 static inline EBPF_INLINE void event_send_trigger(struct pt_regs *ctx, u32 event_type)
 {
   int inhibit_key    = event_type;
