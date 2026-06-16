@@ -25,7 +25,7 @@ require (
 	github.com/mdlayher/kobject v0.0.0-20200520190114-19ca17470d7d
 	github.com/minio/sha256-simd v1.0.1
 	github.com/moby/moby/api v1.54.2
-	github.com/open-telemetry/sig-profiling/profcheck v0.0.0-20260511050047-a2cb19688b16
+	github.com/open-telemetry/sig-profiling/profcheck v0.0.0-20260515132015-eaaa963094e9
 	github.com/parca-dev/oomprof v0.1.6
 	github.com/parca-dev/usdt v0.0.2
 	github.com/peterbourgon/ff/v3 v3.4.0
@@ -55,7 +55,7 @@ require (
 	golang.org/x/mod v0.36.0
 	golang.org/x/sync v0.20.0
 	golang.org/x/sys v0.44.0
-	google.golang.org/grpc v1.81.0
+	google.golang.org/grpc v1.81.1
 	google.golang.org/protobuf v1.36.11
 )
 
