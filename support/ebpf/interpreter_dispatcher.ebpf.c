@@ -40,7 +40,7 @@ struct perf_progs_t {
   __uint(max_entries, NUM_TRACER_PROGS);
 } perf_progs SEC(".maps");
 
-// report_events notifies user space about events (GENERIC_PID and RELOAD_KALLSYMS).
+// report_events notifies user space about events (GENERIC_PID).
 //
 // As a key the CPU number is used and the value represents a perf event file descriptor.
 // Information transmitted is the event type only. We use 0 as the number of max entries
@@ -112,13 +112,14 @@ struct inhibit_events_t {
   __uint(max_entries, 2);
 } inhibit_events SEC(".maps");
 
-// Perf event ring buffer for sending completed traces to user-mode.
+// Ring buffer for sending completed traces to userspace.
 //
 // The map is periodically polled and read from in `tracer`.
+// NOTE: We use 0 as the number of max entries for this map as at load time
+// it will be adjusted based on the number of possible CPUs, sampling rate and
+// other factors.
 struct trace_events_t {
-  __uint(type, BPF_MAP_TYPE_PERF_EVENT_ARRAY);
-  __type(key, int);
-  __type(value, u32);
+  __uint(type, BPF_MAP_TYPE_RINGBUF);
   __uint(max_entries, 0);
 } trace_events SEC(".maps");
 

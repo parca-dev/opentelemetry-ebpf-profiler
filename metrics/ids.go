@@ -605,9 +605,6 @@ const (
 	// Number of times the stack delta provider succeeded to extract stack deltas
 	IDStackDeltaProviderSuccess = 271
 
-	// Number of lost trace events in the communication between kernel and user space (trace_events)
-	IDTraceEventLost = 272
-
 	// Number of times a trace event was received without data (trace_events)
 	IDTraceEventNoData = 273
 
@@ -716,6 +713,24 @@ const (
 	// Number of pending PC sample events dropped at retention-window eviction (correlation trace never arrived)
 	IDCudaPendingPCSamplesEvicted = 308
 
+	// Number of cache hits for dotnet PE information
+	IDDotnetPEInfoCacheHit = 309
+
+	// Number of cache misses for dotnet PE information
+	IDDotnetPEInfoCacheMiss = 310
+
+	// Number of cache hits for dotnet #Strings heap lookups
+	IDDotnetStringsCacheHit = 311
+
+	// Number of cache misses for dotnet #Strings heap lookups
+	IDDotnetStringsCacheMiss = 312
+
+	// Number of bpf_ringbuf_output failures when sending trace events
+	IDBPFRingbufOutputErr = 313
+
+	// Number of cache hits for the dotnet PE open/parse error LRU
+	IDDotnetPEInfoErrCacheHit = 314
+
 	// max number of ID values, keep this as *last entry*
-	IDMax = 309
+	IDMax = 315
 )

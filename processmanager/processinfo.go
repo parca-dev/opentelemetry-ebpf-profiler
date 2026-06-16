@@ -129,13 +129,32 @@ func (pm *ProcessManager) getPidInformation(pid libpf.PID, pr process.Process,
 		return nil
 	}
 
+	meta := pr.GetProcessMeta(process.MetaConfig{IncludeEnvVars: pm.includeEnvVars})
+	pm.fillSelfContainerID(pid, &meta)
 	info := &processInfo{
-		meta:     pr.GetProcessMeta(process.MetaConfig{IncludeEnvVars: pm.includeEnvVars}),
+		meta:     meta,
 		libcInfo: nil,
 	}
 	pm.pidToProcessInfo[pid] = info
 	pm.pidPageToMappingInfoSize++
 	return info
+}
+
+// fillSelfContainerID sets the container ID on meta if the process has the same cgroup
+// directory root as the profiler and the standard cgroup-based detection returned no result.
+func (pm *ProcessManager) fillSelfContainerID(pid libpf.PID, meta *process.ProcessMeta) {
+	if meta.ContainerID != libpf.NullString || pm.selfContainerID == libpf.NullString {
+		return
+	}
+	ino, err := process.CgroupRootInode(pid)
+	if err != nil {
+		return
+	}
+	if ino == pm.selfCgroupIno {
+		meta.ContainerID = pm.selfContainerID
+	} else {
+		log.Debugf("Process %d cgroup inode (%d) doesn't match profiler (%d)", pid, ino, pm.selfCgroupIno)
+	}
 }
 
 // assignInterpreter will update the interpreters maps with given interpreter.Instance.
@@ -300,7 +319,7 @@ func (pm *ProcessManager) processRemovedMapping(pid libpf.PID, m *Mapping) uint6
 
 	fileID := host.FileIDFromLibpf(mf.File.Value().FileID)
 	pm.eim.DecRef(fileID)
-	return uint64(deleted)
+	return deleted
 }
 
 // Caller is responsible to hold pm.mu write lock to avoid race conditions.
@@ -335,7 +354,12 @@ func (pm *ProcessManager) processRemovedInterpreters(pid libpf.PID,
 var errInvalidVirtualAddress = errors.New("invalid ELF virtual address")
 
 func (pm *ProcessManager) newFrameMapping(pr process.Process, m *process.RawMapping) (libpf.FrameMapping, error) {
-	elfRef := pfelf.NewReference(m.Path, pr)
+	// Open the mapping's own file via OpenELFMapping (VDSO from memory plus
+	// /proc/<pid>/map_files for deleted-file safety); auxiliary opens such as
+	// .gnu_debuglink targets go through pr.OpenELF.
+	elfRef := pfelf.NewReferenceWithOpenFunc(m.Path, pr, func() (*pfelf.File, error) {
+		return process.OpenELFMapping(pr, m)
+	})
 	defer elfRef.Close()
 
 	info := pm.getELFInfo(pr, m, elfRef)
@@ -441,11 +465,11 @@ func (pm *ProcessManager) processPIDExit(pid libpf.PID) {
 		err = errors.Join(err, fmt.Errorf("failed to delete dummy prefix for PID %d: %v",
 			pid, err2))
 	}
-	pm.pidPageToMappingInfoSize -= uint64(deleted)
 
 	for idx := range info.mappings {
-		pm.processRemovedMapping(pid, &info.mappings[idx])
+		deleted += pm.processRemovedMapping(pid, &info.mappings[idx])
 	}
+	pm.pidPageToMappingInfoSize -= min(pm.pidPageToMappingInfoSize, deleted)
 	pm.processRemovedInterpreters(pid, libpf.Set[util.OnDiskFileIdentifier]{})
 }
 
@@ -636,7 +660,7 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 	for _, m := range mpRemove {
 		numChanges += pm.processRemovedMapping(pid, m)
 	}
-	pm.pidPageToMappingInfoSize -= numChanges
+	pm.pidPageToMappingInfoSize -= min(pm.pidPageToMappingInfoSize, numChanges)
 	pm.mu.Lock()
 	pm.processRemovedInterpreters(pid, interpretersValid)
 	pm.mu.Unlock()
@@ -652,6 +676,7 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 	var meta process.ProcessMeta
 	if updateProcessMeta {
 		meta = pr.GetProcessMeta(process.MetaConfig{IncludeEnvVars: pm.includeEnvVars})
+		pm.fillSelfContainerID(pid, &meta)
 	}
 
 	// Sort and publish the new mappings and meta

@@ -160,7 +160,7 @@ func TestAddTraceAndTimes(t *testing.T) {
 	require.Len(t, outputs, 1, "timing matched, should produce one output")
 
 	out := outputs[0]
-	assert.Equal(t, int64(1000), out.Meta.OffTime, "OffTime should be End-Start")
+	assert.Equal(t, int64(1000), out.Meta.Value, "Value should be End-Start")
 	assert.Equal(t, "0", out.Trace.CustomLabels[libpf.Intern("cuda_device")].String())
 	assert.Equal(t, "7", out.Trace.CustomLabels[libpf.Intern("cuda_stream")].String())
 
@@ -202,7 +202,7 @@ func TestAddTimeThenTrace(t *testing.T) {
 	require.Len(t, finished, 1)
 
 	out := finished[0]
-	assert.Equal(t, int64(3000), out.Meta.OffTime)
+	assert.Equal(t, int64(3000), out.Meta.Value)
 	assert.Equal(t, "1", out.Trace.CustomLabels[libpf.Intern("cuda_device")].String())
 
 	cudaFrame := out.Trace.Frames[0].Value()
@@ -244,7 +244,7 @@ func TestCachedTemplateWithDifferentCorrelationIDs(t *testing.T) {
 		require.Len(t, outputs, 1, "corrID %d should produce one output", tc.corrID)
 
 		out := outputs[0]
-		assert.Equal(t, tc.offTime, out.Meta.OffTime)
+		assert.Equal(t, tc.offTime, out.Meta.Value)
 
 		cudaFrame := out.Trace.Frames[0].Value()
 		assert.Equal(t, libpf.AddressOrLineno(0), cudaFrame.AddressOrLineno,

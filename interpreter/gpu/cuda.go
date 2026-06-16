@@ -19,7 +19,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
-	"go.opentelemetry.io/ebpf-profiler/traceutil"
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
@@ -728,7 +727,6 @@ func emitPCSample(ev *CuptiPCSampleEvent, rep reporter.TraceReporter, cpuTrace *
 		trace.CustomLabels = gpuPCLabels(LookupStallReason(ev.Pid, sr.Index), mnemonic)
 
 		meta := buildGpuPCMeta(cpuTrace, ev.Pid, int64(sr.Samples))
-		trace.Hash = traceutil.HashTrace(trace)
 		if err := rep.ReportTraceEvent(trace, meta); err != nil {
 			log.Errorf("[cuda] failed to report GPU PC sample: %v", err)
 		}
@@ -912,7 +910,7 @@ func (f *gpuTraceFixer) prepTrace(trace *libpf.Trace, meta *samples.TraceEventMe
 
 	if ev.Graph != 0 {
 		// Graphs can have many kernels with same correlation ID.
-		// Copy Trace (Frames differ per kernel, Hash differs) and Meta (OffTime differs)
+		// Copy Trace (Frames differ per kernel, Hash differs) and Meta (Value differs)
 		// since the original stays in the map for future timing events.
 		// CustomLabels are NOT copied: all events for the same correlation ID share
 		// identical cuda_device/cuda_stream/cuda_graph values.
@@ -924,7 +922,7 @@ func (f *gpuTraceFixer) prepTrace(trace *libpf.Trace, meta *samples.TraceEventMe
 		out.Meta = &metaCopy
 	}
 
-	out.Meta.OffTime = int64(ev.End - ev.Start)
+	out.Meta.Value = int64(ev.End - ev.Start)
 	if out.Trace.CustomLabels == nil {
 		out.Trace.CustomLabels = make(map[libpf.String]libpf.String)
 	}

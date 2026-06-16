@@ -122,24 +122,23 @@ get_go_custom_labels_from_map(PerCPURecord *record, void *labels_map_ptr_ptr, Go
       CustomLabel *lbl = &out->labels[out->len];
       char tophash     = map_value->tophash[i];
       char *kstr       = map_value->keys[i].str;
-      unsigned klen    = map_value->keys[i].len;
-      char *vstr       = map_value->values[i].str;
-      unsigned vlen    = map_value->values[i].len;
       if (tophash != 0 && kstr != NULL) {
         // Terminate the bytes we read with a NUL; see get_go_custom_labels_from_slice
         // for why this is required (the PerCPURecord is reused across traces).
-        u8 klen_clamped = MIN(klen, CUSTOM_LABEL_MAX_KEY_LEN);
-        if (bpf_probe_read_user(lbl->key, klen_clamped, kstr)) {
+        u8 klen = MIN(map_value->keys[i].len, CUSTOM_LABEL_MAX_KEY_LEN);
+        if (bpf_probe_read_user(lbl->key, klen, kstr)) {
           DEBUG_PRINT("cl: failed to read key for custom label (%lx)", (unsigned long)kstr);
           return false;
         }
-        lbl->key[klen_clamped] = 0;
-        u8 vlen_clamped        = MIN(vlen, CUSTOM_LABEL_MAX_VAL_LEN);
-        if (bpf_probe_read_user(lbl->val, vlen_clamped, vstr)) {
+        lbl->key[klen] = 0;
+
+        char *vstr = map_value->values[i].str;
+        u8 vlen    = MIN(map_value->values[i].len, CUSTOM_LABEL_MAX_VAL_LEN);
+        if (bpf_probe_read_user(lbl->val, vlen, vstr)) {
           DEBUG_PRINT("cl: failed to read value for custom label");
           return false;
         }
-        lbl->val[vlen_clamped] = 0;
+        lbl->val[vlen] = 0;
         out->len++;
       }
     }

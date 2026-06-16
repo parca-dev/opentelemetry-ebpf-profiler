@@ -18,12 +18,14 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/apmint"
+	"go.opentelemetry.io/ebpf-profiler/interpreter/dotnet"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	"go.opentelemetry.io/ebpf-profiler/lpm"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/nativeunwind"
 	"go.opentelemetry.io/ebpf-profiler/periodiccaller"
+	"go.opentelemetry.io/ebpf-profiler/process"
 	pmebpf "go.opentelemetry.io/ebpf-profiler/processmanager/ebpfapi"
 	eim "go.opentelemetry.io/ebpf-profiler/processmanager/execinfomanager"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
@@ -95,6 +97,11 @@ func New(ctx context.Context, includeTracers types.IncludedTracers, monitorInter
 
 	interpreters := make(map[libpf.PID]map[util.OnDiskFileIdentifier]interpreter.Instance)
 
+	selfContainerID, selfCgroupIno, err := process.DetectSelfContainerIDViaInode()
+	if err != nil {
+		log.Debugf("Failed to detect self container ID via inode: %v", err)
+	}
+
 	pm := &ProcessManager{
 		interpreterTracerEnabled: em.NumInterpreterLoaders() > 0,
 		eim:                      em,
@@ -110,6 +117,8 @@ func New(ctx context.Context, includeTracers types.IncludedTracers, monitorInter
 		metricsAddSlice:          metrics.AddSlice,
 		filterErrorFrames:        filterErrorFrames,
 		includeEnvVars:           includeEnvVars,
+		selfCgroupIno:            selfCgroupIno,
+		selfContainerID:          selfContainerID,
 	}
 
 	collectInterpreterMetrics(ctx, pm, monitorInterval)
@@ -149,7 +158,7 @@ func collectInterpreterMetrics(ctx context.Context, pm *ProcessManager,
 		pm.mu.RLock()
 		defer pm.mu.RUnlock()
 
-		summary := make(map[metrics.MetricID]metrics.MetricValue)
+		summary := make(metrics.Summary)
 
 		for pid := range pm.interpreters {
 			for addr, ii := range pm.interpreters[pid] {
@@ -176,10 +185,8 @@ func collectInterpreterMetrics(ctx context.Context, pm *ProcessManager,
 		summary[metrics.IDTotalProcParseUsec] = metrics.MetricValue(pm.mappingStats.totalProcParseUsec.Swap(0))
 		summary[metrics.IDErrProcParse] = metrics.MetricValue(pm.mappingStats.numProcParseErrors.Swap(0))
 
-		mapsMetrics := pm.ebpf.CollectMetrics()
-		for _, metric := range mapsMetrics {
-			summary[metric.ID] = metric.Value
-		}
+		summary.Add(dotnet.GetAndResetMetrics())
+		summary.Add(pm.ebpf.CollectMetrics())
 
 		pm.eim.UpdateMetricSummary(summary)
 		pm.metricsAddSlice(metricSummaryToSlice(summary))
@@ -275,7 +282,7 @@ func (pm *ProcessManager) convertFrame(pid libpf.PID, ef libpf.EbpfFrame, dst *l
 }
 
 func (pm *ProcessManager) maybeNotifyAPMAgent(
-	rawTrace *libpf.EbpfTrace, umTraceHash libpf.TraceHash, count uint16,
+	rawTrace *libpf.EbpfTrace, trace *libpf.Trace, count uint16,
 ) string {
 	pm.mu.RLock()
 	// Keeping the lock until end of the function is needed because inner map can be modified
@@ -286,9 +293,15 @@ func (pm *ProcessManager) maybeNotifyAPMAgent(
 		return ""
 	}
 	var serviceName string
+	var traceHash libpf.TraceHash
+	traceHashComputed := false
 	for _, mapping := range pidInterp {
 		if apm, ok := mapping.(*apmint.Instance); ok {
-			apm.NotifyAPMAgent(rawTrace.PID, rawTrace, umTraceHash, count)
+			if !traceHashComputed {
+				traceHash = traceutil.HashTrace(trace)
+				traceHashComputed = true
+			}
+			apm.NotifyAPMAgent(rawTrace.PID, rawTrace, traceHash, count)
 			if serviceName != "" {
 				log.Warnf("Overwriting APM service name from '%s' to '%s' for PID %d",
 					serviceName,
@@ -321,12 +334,12 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace) {
 		PID:            bpfTrace.PID,
 		TID:            bpfTrace.TID,
 		APMServiceName: "", // filled in below
-		CPU:            bpfTrace.CPU,
+		CPU:            bpfTrace.CpuID,
 		ProcessName:    bpfTrace.ProcessName,
 		ExecutablePath: bpfTrace.ExecutablePath,
 		ContainerID:    bpfTrace.ContainerID,
 		Origin:         bpfTrace.Origin,
-		OffTime:        bpfTrace.OffTime,
+		Value:          bpfTrace.Value,
 		EnvVars:        bpfTrace.EnvVars,
 		TraceID:        bpfTrace.APMTraceID,
 		SpanID:         bpfTrace.APMTransactionID,
@@ -335,7 +348,7 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace) {
 	pid := bpfTrace.PID
 	kernelFramesLen := len(bpfTrace.KernelFrames)
 	trace := &libpf.Trace{
-		Frames:       make(libpf.Frames, kernelFramesLen, kernelFramesLen+bpfTrace.NumFrames),
+		Frames:       make(libpf.Frames, kernelFramesLen, kernelFramesLen+int(bpfTrace.NumFrames)),
 		CustomLabels: bpfTrace.CustomLabels,
 	}
 	copy(trace.Frames, bpfTrace.KernelFrames)
@@ -412,8 +425,8 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace) {
 		return
 	}
 
-	trace.Hash = traceutil.HashTrace(trace)
-	meta.APMServiceName = pm.maybeNotifyAPMAgent(bpfTrace, trace.Hash, 1)
+	meta.APMServiceName = pm.maybeNotifyAPMAgent(bpfTrace, trace, 1)
+
 	if err := pm.traceReporter.ReportTraceEvent(trace, meta); err != nil {
 		log.Errorf("Failed to report trace event: %v", err)
 	}

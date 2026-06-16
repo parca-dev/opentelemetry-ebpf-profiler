@@ -21,8 +21,10 @@ import (
 )
 
 func getPFELF(path string, t *testing.T) *File {
+	t.Helper()
+	testsupport.RequireGeneratedTestFile(t, path)
 	file, err := Open(path)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	return file
 }
 
@@ -58,6 +60,7 @@ func TestPFELFSymbols(t *testing.T) {
 }
 
 func TestPFELFSections(t *testing.T) {
+	testsupport.RequireGeneratedTestFile(t, "testdata/fixed-address")
 	elfFile, err := Open("testdata/fixed-address")
 	require.NoError(t, err)
 	defer elfFile.Close()
@@ -106,6 +109,7 @@ func TestGetGoBuildID(t *testing.T) {
 
 	buildID, err := ef.GetGoBuildID()
 	require.NoError(t, err)
+	testsupport.RequireGeneratedTestFile(t, "testdata/go-binary")
 	out, err := exec.Command("go", "tool", "buildid", "testdata/go-binary").Output()
 	require.NoError(t, err)
 	expectedBuildID := strings.TrimRight(string(out), "\n")
@@ -169,7 +173,7 @@ func TestLookupTlsSymbolOffset(t *testing.T) {
 			sym, err := ef.LookupSymbol("get_tbss")
 			require.NoError(t, err)
 			code := make([]byte, sym.Size)
-			_, err = ef.ReadVirtualMemory(code, int64(sym.Address))
+			_, err = ef.ReadAt(code, int64(sym.Address))
 			require.NoError(t, err)
 
 			offset, err := symbolOffsetFromCodeX86(code)
@@ -184,7 +188,7 @@ func TestLookupTlsSymbolOffset(t *testing.T) {
 			sym, err := ef.LookupSymbol("get_tdata")
 			require.NoError(t, err)
 			code := make([]byte, sym.Size)
-			_, err = ef.ReadVirtualMemory(code, int64(sym.Address))
+			_, err = ef.ReadAt(code, int64(sym.Address))
 			require.NoError(t, err)
 
 			offset, err := symbolOffsetFromCodeX86(code)

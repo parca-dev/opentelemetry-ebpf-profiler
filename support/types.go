@@ -58,14 +58,13 @@ const (
 )
 
 const (
-	EventTypeGenericPID     = 0x1
-	EventTypeReloadKallsyms = 0x2
+	EventTypeGenericPID = 0x1
 )
 
 const UnwindInfoMaxEntries = 0x4000
 
 const (
-	MetricIDBeginCumulative = 0x78
+	MetricIDBeginCumulative = 0x79
 )
 
 const (
@@ -145,10 +144,10 @@ type StackDeltaPageKey struct {
 	Page   uint64
 }
 type SystemAnalysis struct {
-	Address   uint64
-	Pid       uint32
-	Code      [128]uint8
-	Pad_cgo_0 [4]byte
+	Address uint64
+	Pid     uint32
+	Err     int32
+	Code    [128]uint8
 }
 type TSDInfo struct {
 	Offset     int16
@@ -172,7 +171,8 @@ type Trace struct {
 	Num_frames         uint16
 	Num_kernel_frames  uint16
 	Origin             uint32
-	Offtime            uint64
+	Value              uint64
+	Cpu_id             uint32
 	Frame_data         [3072]uint64
 }
 type UnwindInfo struct {
@@ -353,7 +353,7 @@ type LuaJITProcInfo struct {
 
 const (
 	Sizeof_StackDelta = 0x4
-	Sizeof_Trace      = 0x6370
+	Sizeof_Trace      = 0x6378
 
 	sizeof_ApmIntProcInfo = 0x8
 	sizeof_DotnetProcInfo = 0x4
@@ -369,14 +369,18 @@ const (
 	UnwindRegFp      uint8 = 0x4
 	UnwindRegLr      uint8 = 0x5
 	UnwindRegX86RAX  uint8 = 0x6
-	UnwindRegX86R9   uint8 = 0x7
-	UnwindRegX86R11  uint8 = 0x8
-	UnwindRegX86R15  uint8 = 0xa
+	UnwindRegX86R9   uint8 = 0x9
+	UnwindRegX86R11  uint8 = 0xa
+	UnwindRegX86R13  uint8 = 0xb
+	UnwindRegX86R15  uint8 = 0xc
+	UnwindRegX86RDI  uint8 = 0x7
+	UnwindRegX86R8   uint8 = 0x8
 
-	UnwindFlagCommand  uint8 = 0x1
-	UnwindFlagFrame    uint8 = 0x2
-	UnwindFlagLeafOnly uint8 = 0x4
-	UnwindFlagDerefCfa uint8 = 0x8
+	UnwindFlagCommand    uint8 = 0x1
+	UnwindFlagFrame      uint8 = 0x2
+	UnwindFlagLeafOnly   uint8 = 0x4
+	UnwindFlagDerefCfa   uint8 = 0x8
+	UnwindFlagRegisterRA uint8 = 0x10
 
 	UnwindCommandInvalid      int32 = 0x0
 	UnwindCommandStop         int32 = 0x1
@@ -547,4 +551,5 @@ var MetricsTranslation = []metrics.MetricID{
 	0x6a: metrics.IDUnwindLuaJITErrLMismatch,
 	0x6e: metrics.IDUnwindGoLabelsAttempts,
 	0x6f: metrics.IDUnwindGoLabelsFailures,
+	0x78: metrics.IDBPFRingbufOutputErr,
 }

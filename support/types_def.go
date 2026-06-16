@@ -65,8 +65,7 @@ const (
 )
 
 const (
-	EventTypeGenericPID     = C.EVENT_TYPE_GENERIC_PID
-	EventTypeReloadKallsyms = C.EVENT_TYPE_RELOAD_KALLSYMS
+	EventTypeGenericPID = C.EVENT_TYPE_GENERIC_PID
 )
 
 const UnwindInfoMaxEntries = C.UNWIND_INFO_MAX_ENTRIES
@@ -162,13 +161,17 @@ const (
 	UnwindRegX86RAX  uint8 = C.UNWIND_REG_X86_RAX
 	UnwindRegX86R9   uint8 = C.UNWIND_REG_X86_R9
 	UnwindRegX86R11  uint8 = C.UNWIND_REG_X86_R11
+	UnwindRegX86R13  uint8 = C.UNWIND_REG_X86_R13
 	UnwindRegX86R15  uint8 = C.UNWIND_REG_X86_R15
+	UnwindRegX86RDI  uint8 = C.UNWIND_REG_X86_RDI
+	UnwindRegX86R8   uint8 = C.UNWIND_REG_X86_R8
 
 	// UnwindFlag values from the C header file
-	UnwindFlagCommand  uint8 = C.UNWIND_FLAG_COMMAND
-	UnwindFlagFrame    uint8 = C.UNWIND_FLAG_FRAME
-	UnwindFlagLeafOnly uint8 = C.UNWIND_FLAG_LEAF_ONLY
-	UnwindFlagDerefCfa uint8 = C.UNWIND_FLAG_DEREF_CFA
+	UnwindFlagCommand    uint8 = C.UNWIND_FLAG_COMMAND
+	UnwindFlagFrame      uint8 = C.UNWIND_FLAG_FRAME
+	UnwindFlagLeafOnly   uint8 = C.UNWIND_FLAG_LEAF_ONLY
+	UnwindFlagDerefCfa   uint8 = C.UNWIND_FLAG_DEREF_CFA
+	UnwindFlagRegisterRA uint8 = C.UNWIND_FLAG_REGISTER_RA
 
 	// UnwindCommands from the C header file
 	UnwindCommandInvalid      int32 = C.UNWIND_COMMAND_INVALID
@@ -343,4 +346,5 @@ var MetricsTranslation = []metrics.MetricID{
 	C.metricID_UnwindLuaJITErrLMismatch:                   metrics.IDUnwindLuaJITErrLMismatch,
 	C.metricID_UnwindGoLabelsAttempts:                     metrics.IDUnwindGoLabelsAttempts,
 	C.metricID_UnwindGoLabelsFailures:                     metrics.IDUnwindGoLabelsFailures,
+	C.metricID_BPFRingbufOutputErr:                        metrics.IDBPFRingbufOutputErr,
 }

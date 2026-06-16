@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math/bits"
 	"os"
 	"sync"
 	"sync/atomic"
@@ -316,4 +317,22 @@ func ProgArrayReferences(perfTailCallMapFD int, insns asm.Instructions) []int {
 		}
 	}
 	return insNos
+}
+
+// NextPowerOfTwo returns value rounded up to the next power of two.
+// It returns value unchanged if value is already a power of two.
+// The value returned is capped to the largest power-of-two that can
+// be represented by uint64.
+func NextPowerOfTwo(v uint64) uint64 {
+	const maxVal = uint64(1 << 63)
+
+	if v <= 1 {
+		return 1
+	}
+
+	if v > maxVal {
+		return maxVal
+	}
+
+	return 1 << bits.Len64(v-1)
 }

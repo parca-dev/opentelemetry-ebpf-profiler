@@ -920,7 +920,7 @@ func (impl *ebpfMapsImpl) UpdatePidPageMappingInfo(pid libpf.PID, prefix lpm.Pre
 
 // DeletePidPageMappingInfo removes the elements specified by prefixes from eBPF map
 // pid_page_to_mapping_info and returns the number of elements removed.
-func (impl *ebpfMapsImpl) DeletePidPageMappingInfo(pid libpf.PID, prefixes []lpm.Prefix) (int,
+func (impl *ebpfMapsImpl) DeletePidPageMappingInfo(pid libpf.PID, prefixes []lpm.Prefix) (uint64,
 	error,
 ) {
 	if impl.hasLPMTrieBatchOperations {
@@ -936,11 +936,11 @@ func (impl *ebpfMapsImpl) DeletePidPageMappingInfo(pid libpf.PID, prefixes []lpm
 	return impl.DeletePidPageMappingInfoSingle(pid, prefixes)
 }
 
-func (impl *ebpfMapsImpl) DeletePidPageMappingInfoSingle(pid libpf.PID, prefixes []lpm.Prefix) (int,
+func (impl *ebpfMapsImpl) DeletePidPageMappingInfoSingle(pid libpf.PID, prefixes []lpm.Prefix) (uint64,
 	error,
 ) {
 	cKey := &support.PIDPage{}
-	var deleted int
+	var deleted uint64
 	var combinedErrors error
 	for _, prefix := range prefixes {
 		*cKey = getPIDPageFromPrefix(pid, prefix)
@@ -954,7 +954,7 @@ func (impl *ebpfMapsImpl) DeletePidPageMappingInfoSingle(pid libpf.PID, prefixes
 	return deleted, combinedErrors
 }
 
-func (impl *ebpfMapsImpl) DeletePidPageMappingInfoBatch(pid libpf.PID, prefixes []lpm.Prefix) (int,
+func (impl *ebpfMapsImpl) DeletePidPageMappingInfoBatch(pid libpf.PID, prefixes []lpm.Prefix) (uint64,
 	error,
 ) {
 	// Prepare all keys based on the given prefixes.
@@ -965,7 +965,13 @@ func (impl *ebpfMapsImpl) DeletePidPageMappingInfoBatch(pid libpf.PID, prefixes 
 
 	deleted, err := impl.PidPageToMappingInfo.BatchDelete(
 		ptrCastMarshaler[support.PIDPage](cKeys), nil)
-	return deleted, impl.trackMapError(metrics.IDPidPageToMappingInfoBatchDelete, err)
+
+	// BatchDelete returns a count of deleted entries, so this should never happen.
+	if deleted < 0 {
+		err = errors.Join(err, fmt.Errorf("negative batch delete count: %d", deleted))
+		deleted = 0
+	}
+	return uint64(deleted), impl.trackMapError(metrics.IDPidPageToMappingInfoBatchDelete, err)
 }
 
 // LookupPidPageInformation returns the fileID and bias for a given pid and page combination from

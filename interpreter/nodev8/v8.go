@@ -2359,7 +2359,7 @@ func findJsDispatchTableOffset(ef *pfelf.File, syms relevantSymbols) (uint64, er
 	// and that was in debug mode; allow up to 256 just to be safe.
 	sz := min(sym.Size, 256)
 	code := make([]byte, sz)
-	if _, err := ef.ReadVirtualMemory(code, int64(sym.Address)); err != nil {
+	if _, err := ef.ReadAt(code, int64(sym.Address)); err != nil {
 		return 0, fmt.Errorf("failed to read js_dispatch_table_address code: %w", err)
 	}
 
@@ -2389,7 +2389,7 @@ func (d *v8Data) loadNodeClData(ef *pfelf.File, syms relevantSymbols) error {
 	}
 
 	versBuf := make([]byte, 12)
-	if _, err := ef.ReadVirtualMemory(versBuf, int64(sym.Address)); err != nil {
+	if _, err := ef.ReadAt(versBuf, int64(sym.Address)); err != nil {
 		return fmt.Errorf("failed to read Node version data: %w", err)
 	}
 
@@ -2495,7 +2495,7 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 			sym.Address, sym.Size, sym.Size/3)
 		d.bytecodeSizes = make([]byte, sym.Size)
 		d.bytecodeCount = uint8(sym.Size / 3)
-		if _, err = ef.ReadVirtualMemory(d.bytecodeSizes, int64(sym.Address)); err != nil {
+		if _, err = ef.ReadAt(d.bytecodeSizes, int64(sym.Address)); err != nil {
 			return nil, fmt.Errorf("unable to read bytecode sizes: %v", err)
 		}
 		for _, opcodeLength := range d.bytecodeSizes {
