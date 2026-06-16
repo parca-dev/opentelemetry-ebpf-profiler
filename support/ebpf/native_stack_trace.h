@@ -260,7 +260,7 @@ static EBPF_INLINE ErrorCode unwind_one_frame(PerCPURecord *record, bool *stop)
       // https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/sigframe.h?h=v6.4#n59
       // https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/uapi/asm/sigcontext.h?h=v6.4#n238
       // offsetof(struct rt_sigframe, uc.uc_mcontext) = 40
-      if (bpf_probe_read_user(rt_regs, 18 * sizeof(u64), (void *)(state->sp + 40))) {
+      if (bpf_probe_read_user(rt_regs, sizeof(record->rt_regs), (void *)(state->sp + 40))) {
         goto err_native_pc_read;
       }
       state->rdi = rt_regs[8];
@@ -342,7 +342,7 @@ frame_ok:
   return ERR_OK;
 }
 #elif defined(__aarch64__)
-static EBPF_INLINE ErrorCode unwind_one_frame(struct PerCPURecord *record, bool *stop)
+static EBPF_INLINE ErrorCode unwind_one_frame(PerCPURecord *record, bool *stop)
 {
   UnwindState *state = &record->state;
   *stop              = false;
@@ -370,7 +370,7 @@ static EBPF_INLINE ErrorCode unwind_one_frame(struct PerCPURecord *record, bool 
       //   offsetof(struct rt_sigframe, uc)       128 +
       //   offsetof(struct ucontext, uc_mcontext) 176 +
       //   offsetof(struct sigcontext, regs[0])   8
-      if (bpf_probe_read_user(rt_regs, 34 * sizeof(u64), (void *)(state->sp + 312))) {
+      if (bpf_probe_read_user(rt_regs, sizeof(record->rt_regs), (void *)(state->sp + 312))) {
         goto err_native_pc_read;
       }
       state->pc  = normalize_pac_ptr(rt_regs[32]);
