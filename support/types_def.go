@@ -346,4 +346,5 @@ var MetricsTranslation = []metrics.MetricID{
 	C.metricID_UnwindLuaJITErrLMismatch:                   metrics.IDUnwindLuaJITErrLMismatch,
 	C.metricID_UnwindGoLabelsAttempts:                     metrics.IDUnwindGoLabelsAttempts,
 	C.metricID_UnwindGoLabelsFailures:                     metrics.IDUnwindGoLabelsFailures,
+	C.metricID_BPFRingbufOutputErr:                        metrics.IDBPFRingbufOutputErr,
 }

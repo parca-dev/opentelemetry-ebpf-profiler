@@ -64,7 +64,7 @@ const (
 const UnwindInfoMaxEntries = 0x4000
 
 const (
-	MetricIDBeginCumulative = 0x78
+	MetricIDBeginCumulative = 0x79
 )
 
 const (
@@ -172,6 +172,7 @@ type Trace struct {
 	Num_kernel_frames  uint16
 	Origin             uint32
 	Value              uint64
+	Cpu_id             uint32
 	Frame_data         [3072]uint64
 }
 type UnwindInfo struct {
@@ -352,7 +353,7 @@ type LuaJITProcInfo struct {
 
 const (
 	Sizeof_StackDelta = 0x4
-	Sizeof_Trace      = 0x6370
+	Sizeof_Trace      = 0x6378
 
 	sizeof_ApmIntProcInfo = 0x8
 	sizeof_DotnetProcInfo = 0x4
@@ -550,4 +551,5 @@ var MetricsTranslation = []metrics.MetricID{
 	0x6a: metrics.IDUnwindLuaJITErrLMismatch,
 	0x6e: metrics.IDUnwindGoLabelsAttempts,
 	0x6f: metrics.IDUnwindGoLabelsFailures,
+	0x78: metrics.IDBPFRingbufOutputErr,
 }
