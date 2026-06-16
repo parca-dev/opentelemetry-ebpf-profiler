@@ -21,11 +21,11 @@ require (
 	github.com/elastic/go-perf v0.0.0-20260224073651-af0ee0c731b7
 	github.com/gnurizen/sass-table v0.0.3
 	github.com/google/uuid v1.6.0
-	github.com/klauspost/compress v1.18.5
+	github.com/klauspost/compress v1.18.6
 	github.com/mdlayher/kobject v0.0.0-20200520190114-19ca17470d7d
 	github.com/minio/sha256-simd v1.0.1
 	github.com/moby/moby/api v1.54.2
-	github.com/open-telemetry/sig-profiling/profcheck v0.0.0-20260429061253-c26a8535f105
+	github.com/open-telemetry/sig-profiling/profcheck v0.0.0-20260430131511-d4c84f09b3ab
 	github.com/parca-dev/oomprof v0.1.6
 	github.com/parca-dev/usdt v0.0.2
 	github.com/peterbourgon/ff/v3 v3.4.0
