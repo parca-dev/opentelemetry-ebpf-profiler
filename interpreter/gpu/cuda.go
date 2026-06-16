@@ -19,7 +19,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
-	"go.opentelemetry.io/ebpf-profiler/traceutil"
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
@@ -728,7 +727,6 @@ func emitPCSample(ev *CuptiPCSampleEvent, rep reporter.TraceReporter, cpuTrace *
 		trace.CustomLabels = gpuPCLabels(LookupStallReason(ev.Pid, sr.Index), mnemonic)
 
 		meta := buildGpuPCMeta(cpuTrace, ev.Pid, int64(sr.Samples))
-		trace.Hash = traceutil.HashTrace(trace)
 		if err := rep.ReportTraceEvent(trace, meta); err != nil {
 			log.Errorf("[cuda] failed to report GPU PC sample: %v", err)
 		}
