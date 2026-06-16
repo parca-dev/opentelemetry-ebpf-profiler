@@ -109,6 +109,10 @@ static inline EBPF_INLINE bool pid_information_exists(int pid)
 // based on rate limiting rules.
 static inline EBPF_INLINE bool pid_event_ratelimit(u32 pid, int ratelimit_action)
 {
+  if (ratelimit_action == RATELIMIT_ACTION_RESET) {
+    return false;
+  }
+
   const u8 default_max_attempts = 8; // 25 seconds
   const u8 fast_max_attempts    = 4; // 1.6 seconds
   const u8 fast_timer_flag      = 0x10;
@@ -120,6 +124,7 @@ static inline EBPF_INLINE bool pid_event_ratelimit(u32 pid, int ratelimit_action
   if (ratelimit_action == RATELIMIT_ACTION_RESET || ratelimit_action == RATELIMIT_ACTION_NONE) {
     return false;
   }
+
 
   if (token_ptr) {
     u64 token   = *token_ptr;
@@ -168,8 +173,7 @@ static inline EBPF_INLINE bool pid_event_ratelimit(u32 pid, int ratelimit_action
 }
 
 // report_pid informs userspace about a PID that needs to be processed.
-// If inhibit is true, PID will first be checked against maps/reported_pids
-// and reporting aborted if PID has been recently reported.
+// See pid_event_ratelimit for ratelimit_action functional specifics.
 // Returns true if the PID was successfully reported to user space.
 static inline EBPF_INLINE bool report_pid(void *ctx, u64 pid_tgid, int ratelimit_action)
 {
