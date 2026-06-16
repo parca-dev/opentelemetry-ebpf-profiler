@@ -728,6 +728,9 @@ const (
 	// Number of bpf_ringbuf_output failures when sending trace events
 	IDBPFRingbufOutputErr = 313
 
+	// Number of cache hits for the dotnet PE open/parse error LRU
+	IDDotnetPEInfoErrCacheHit = 314
+
 	// max number of ID values, keep this as *last entry*
-	IDMax = 314
+	IDMax = 315
 )
