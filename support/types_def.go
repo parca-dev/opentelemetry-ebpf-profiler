@@ -110,6 +110,8 @@ const (
 	TraceOriginGpuPC    = C.TRACE_GPU_PC
 )
 
+const FrameVarlenMax = C.FRAME_VARLEN_TOOMANY - 1
+
 type ApmSpanID C.ApmSpanID
 type ApmTraceID C.ApmTraceID
 type CustomLabel C.CustomLabel

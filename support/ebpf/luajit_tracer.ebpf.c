@@ -269,8 +269,14 @@ static EBPF_INLINE ErrorCode lj_debug_framepc(
 static EBPF_INLINE ErrorCode lj_push_frame(
   UnwindState *state, Trace *trace, u64 callee_pt, u64 caller_pt, u32 callee_pc, u32 caller_pc)
 {
-  u64 *data =
-    push_frame(state, trace, FRAME_MARKER_LUAJIT, FRAME_FLAG_PID_SPECIFIC, LUAJIT_NORMAL_FRAME, 3);
+  DEBUG_PRINT("[btv] ee_pt %llx, er_pt %llx", callee_pt, caller_pt);
+  u64 *data = push_frame(
+    state,
+    trace,
+    FRAME_MARKER_LUAJIT,
+    FRAME_FLAG_PID_SPECIFIC,
+    LUAJIT_NORMAL_FRAME,
+    FRAME_VARLEN_THREE);
   if (!data)
     return ERR_STACK_LENGTH_EXCEEDED;
   data[0] = callee_pt;
@@ -307,7 +313,7 @@ static EBPF_INLINE ErrorCode lj_record_frame(
       FRAME_MARKER_LUAJIT,
       FRAME_FLAG_PID_SPECIFIC,
       LUAJIT_FFI_FUNC,
-      1);
+      FRAME_VARLEN_ONE);
     if (!data)
       return ERR_STACK_LENGTH_EXCEEDED;
     data[0] = frame_value;
@@ -654,7 +660,7 @@ find_context(struct pt_regs *ctx, PerCPURecord *record, const LuaJITProcInfo *in
       FRAME_MARKER_LUAJIT,
       FRAME_FLAG_PID_SPECIFIC,
       LUAJIT_G_REPORT,
-      1);
+      FRAME_VARLEN_ONE);
     if (!data)
       return ERR_STACK_LENGTH_EXCEEDED;
     data[0] = (u64)G_ptr;

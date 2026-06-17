@@ -19,6 +19,7 @@ import (
 	eim "go.opentelemetry.io/ebpf-profiler/processmanager/execinfomanager"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
+	"go.opentelemetry.io/ebpf-profiler/support"
 	"go.opentelemetry.io/ebpf-profiler/times"
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
@@ -37,8 +38,8 @@ type elfInfo struct {
 type frameCacheKey struct {
 	// pid is the PID of the process if the frame had FRAME_FLAG_PID_SPECIFIC set
 	pid libpf.PID
-	// data is the frame data: frame header and the two first variable fields
-	data [3]uint64
+	// data is the frame data: frame header and the variable fields
+	data [1 + support.FrameVarlenMax]uint64
 }
 
 // TraceInterceptor is called after symbolization with the symbolized trace
