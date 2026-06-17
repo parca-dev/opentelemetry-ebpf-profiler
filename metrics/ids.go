@@ -647,23 +647,23 @@ const (
 	// Number of failures to read TLS variables via the DTV
 	IDUnwindErrBadDTVRead = 286
 
-	// Number of failures to get TSD base for native custom labels
-	IDUnwindNativeCustomLabelsErrReadTsdBase = 287
+	// Number of cache hits for dotnet PE information
+	IDDotnetPEInfoCacheHit = 287
 
-	// Number of failures to read native custom labels thread-local object
-	IDUnwindNativeCustomLabelsErrReadData = 288
+	// Number of cache misses for dotnet PE information
+	IDDotnetPEInfoCacheMiss = 288
 
-	// Number of failures to read native custom labels key buffer
-	IDUnwindNativeCustomLabelsErrReadKey = 289
+	// Number of cache hits for dotnet #Strings heap lookups
+	IDDotnetStringsCacheHit = 289
 
-	// Number of failures to read native custom labels value buffer
-	IDUnwindNativeCustomLabelsErrReadValue = 290
+	// Number of cache misses for dotnet #Strings heap lookups
+	IDDotnetStringsCacheMiss = 290
 
-	// Number of successful reads of native custom labels
-	IDUnwindNativeCustomLabelsReadSuccesses = 291
+	// Number of bpf_ringbuf_output failures when sending trace events
+	IDBPFRingbufOutputErr = 291
 
-	// Total number of failures to add native custom labels
-	IDUnwindNativeCustomLabelsAddErrors = 292
+	// Number of cache hits for the dotnet PE open/parse error LRU
+	IDDotnetPEInfoErrCacheHit = 292
 
 	// Number of successes adding native custom labels
 	IDUnwindNativeCustomLabelsAddSuccesses = 293
@@ -713,23 +713,23 @@ const (
 	// Number of pending PC sample events dropped at retention-window eviction (correlation trace never arrived)
 	IDCudaPendingPCSamplesEvicted = 308
 
-	// Number of cache hits for dotnet PE information
-	IDDotnetPEInfoCacheHit = 309
+	// Number of failures to get TSD base for native custom labels
+	IDUnwindNativeCustomLabelsErrReadTsdBase = 309
 
-	// Number of cache misses for dotnet PE information
-	IDDotnetPEInfoCacheMiss = 310
+	// Number of failures to read native custom labels thread-local object
+	IDUnwindNativeCustomLabelsErrReadData = 310
 
-	// Number of cache hits for dotnet #Strings heap lookups
-	IDDotnetStringsCacheHit = 311
+	// Number of failures to read native custom labels key buffer
+	IDUnwindNativeCustomLabelsErrReadKey = 311
 
-	// Number of cache misses for dotnet #Strings heap lookups
-	IDDotnetStringsCacheMiss = 312
+	// Number of failures to read native custom labels value buffer
+	IDUnwindNativeCustomLabelsErrReadValue = 312
 
-	// Number of bpf_ringbuf_output failures when sending trace events
-	IDBPFRingbufOutputErr = 313
+	// Number of successful reads of native custom labels
+	IDUnwindNativeCustomLabelsReadSuccesses = 313
 
-	// Number of cache hits for the dotnet PE open/parse error LRU
-	IDDotnetPEInfoErrCacheHit = 314
+	// Total number of failures to add native custom labels
+	IDUnwindNativeCustomLabelsAddErrors = 314
 
 	// max number of ID values, keep this as *last entry*
 	IDMax = 315

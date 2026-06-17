@@ -2099,45 +2099,45 @@
     "id": 286
   },
   {
-    "description": "Number of failures to get TSD base for native custom labels",
+    "description": "Number of cache hits for dotnet PE information",
     "type": "counter",
-    "name": "UnwindNativeCustomLabelsErrReadTsdBase",
-    "field": "bpf.native_custom_labels.errors.read_tsd_base",
+    "name": "DotnetPEInfoCacheHit",
+    "field": "agent.dotnet.pe_info_cache.hits",
     "id": 287
   },
   {
-    "description": "Number of failures to read native custom labels thread-local object",
+    "description": "Number of cache misses for dotnet PE information",
     "type": "counter",
-    "name": "UnwindNativeCustomLabelsErrReadData",
-    "field": "bpf.native_custom_labels.errors.read_data",
+    "name": "DotnetPEInfoCacheMiss",
+    "field": "agent.dotnet.pe_info_cache.misses",
     "id": 288
   },
   {
-    "description": "Number of failures to read native custom labels key buffer",
+    "description": "Number of cache hits for dotnet #Strings heap lookups",
     "type": "counter",
-    "name": "UnwindNativeCustomLabelsErrReadKey",
-    "field": "bpf.native_custom_labels.errors.read_key",
+    "name": "DotnetStringsCacheHit",
+    "field": "agent.dotnet.strings_cache.hits",
     "id": 289
   },
   {
-    "description": "Number of failures to read native custom labels value buffer",
+    "description": "Number of cache misses for dotnet #Strings heap lookups",
     "type": "counter",
-    "name": "UnwindNativeCustomLabelsErrReadValue",
-    "field": "bpf.native_custom_labels.errors.read_value",
+    "name": "DotnetStringsCacheMiss",
+    "field": "agent.dotnet.strings_cache.misses",
     "id": 290
   },
   {
-    "description": "Number of successful reads of native custom labels",
+    "description": "Number of bpf_ringbuf_output failures when sending trace events",
     "type": "counter",
-    "name": "UnwindNativeCustomLabelsReadSuccesses",
-    "field": "bpf.native_custom_labels.read.successes",
+    "name": "BPFRingbufOutputErr",
+    "field": "bpf.errors.ringbuf_output",
     "id": 291
   },
   {
-    "description": "Total number of failures to add native custom labels",
+    "description": "Number of cache hits for the dotnet PE open/parse error LRU",
     "type": "counter",
-    "name": "UnwindNativeCustomLabelsAddErrors",
-    "field": "bpf.native_custom_labels.add.errors",
+    "name": "DotnetPEInfoErrCacheHit",
+    "field": "agent.dotnet.pe_info_err_cache.hits",
     "id": 292
   },
   {
@@ -2253,45 +2253,45 @@
     "id": 308
   },
   {
-    "description": "Number of cache hits for dotnet PE information",
+    "description": "Number of failures to get TSD base for native custom labels",
     "type": "counter",
-    "name": "DotnetPEInfoCacheHit",
-    "field": "agent.dotnet.pe_info_cache.hits",
+    "name": "UnwindNativeCustomLabelsErrReadTsdBase",
+    "field": "bpf.native_custom_labels.errors.read_tsd_base",
     "id": 309
   },
   {
-    "description": "Number of cache misses for dotnet PE information",
+    "description": "Number of failures to read native custom labels thread-local object",
     "type": "counter",
-    "name": "DotnetPEInfoCacheMiss",
-    "field": "agent.dotnet.pe_info_cache.misses",
+    "name": "UnwindNativeCustomLabelsErrReadData",
+    "field": "bpf.native_custom_labels.errors.read_data",
     "id": 310
   },
   {
-    "description": "Number of cache hits for dotnet #Strings heap lookups",
+    "description": "Number of failures to read native custom labels key buffer",
     "type": "counter",
-    "name": "DotnetStringsCacheHit",
-    "field": "agent.dotnet.strings_cache.hits",
+    "name": "UnwindNativeCustomLabelsErrReadKey",
+    "field": "bpf.native_custom_labels.errors.read_key",
     "id": 311
   },
   {
-    "description": "Number of cache misses for dotnet #Strings heap lookups",
+    "description": "Number of failures to read native custom labels value buffer",
     "type": "counter",
-    "name": "DotnetStringsCacheMiss",
-    "field": "agent.dotnet.strings_cache.misses",
+    "name": "UnwindNativeCustomLabelsErrReadValue",
+    "field": "bpf.native_custom_labels.errors.read_value",
     "id": 312
   },
   {
-    "description": "Number of bpf_ringbuf_output failures when sending trace events",
+    "description": "Number of successful reads of native custom labels",
     "type": "counter",
-    "name": "BPFRingbufOutputErr",
-    "field": "bpf.errors.ringbuf_output",
+    "name": "UnwindNativeCustomLabelsReadSuccesses",
+    "field": "bpf.native_custom_labels.read.successes",
     "id": 313
   },
   {
-    "description": "Number of cache hits for the dotnet PE open/parse error LRU",
+    "description": "Total number of failures to add native custom labels",
     "type": "counter",
-    "name": "DotnetPEInfoErrCacheHit",
-    "field": "agent.dotnet.pe_info_err_cache.hits",
+    "name": "UnwindNativeCustomLabelsAddErrors",
+    "field": "bpf.native_custom_labels.add.errors",
     "id": 314
   }
 ]
