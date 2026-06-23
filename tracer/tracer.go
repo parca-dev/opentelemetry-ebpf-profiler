@@ -272,7 +272,7 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 	processManager, err := pm.New(ctx, cfg.IncludeTracers, cfg.Intervals.MonitorInterval(),
 		cfg.Intervals.ExecutableUnloadDelay(), ebpfHandler, cfg.TraceReporter, cfg.ExecutableReporter,
 		elfunwindinfo.NewStackDeltaProvider(),
-		cfg.FilterErrorFrames, cfg.IncludeEnvVars, nil)
+		cfg.FilterErrorFrames, cfg.IncludeEnvVars)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create processManager: %v", err)
 	}
@@ -1369,8 +1369,4 @@ func (t *Tracer) GetInterpretersForPID(pid libpf.PID) []interpreter.Instance {
 // pidEvents channel. Used to speed up tests.
 func (t *Tracer) ForceProcessPID(pid libpf.PID) {
 	t.pidEvents <- libpf.PIDTID(uint64(pid) + uint64(pid)<<32)
-}
-
-func (t *Tracer) SetInterceptor(interceptor pm.TraceInterceptor) {
-	t.processManager.SetInterceptor(interceptor)
 }
