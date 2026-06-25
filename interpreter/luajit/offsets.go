@@ -16,7 +16,7 @@ import (
 	"fmt"
 	"slices"
 
-	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
@@ -43,11 +43,11 @@ func scanSymbols(ef *pfelf.File) map[libpf.SymbolName]libpf.Symbol {
 		return len(interestingSymbols) > 0
 	}
 	if err := ef.VisitSymbols(visitor); err != nil {
-		log.Warningf("failed to read symbols: %v", err)
+		log.Warnf("failed to read symbols: %v", err)
 	}
 
 	if err := ef.VisitDynamicSymbols(visitor); err != nil {
-		log.Warningf("failed to read dynamic symbols: %v", err)
+		log.Warnf("failed to read dynamic symbols: %v", err)
 	}
 
 	return foundSymbols

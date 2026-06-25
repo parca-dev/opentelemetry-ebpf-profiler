@@ -6,7 +6,7 @@ package rtld // import "go.opentelemetry.io/ebpf-profiler/interpreter/rtld"
 import (
 	"fmt"
 
-	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"

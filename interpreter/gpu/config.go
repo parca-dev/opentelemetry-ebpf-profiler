@@ -3,7 +3,7 @@ package gpu // import "go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 import (
 	"sync"
 
-	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 )
 
 // GpuConfig holds the per-process parcagpu sampling parameters used to convert
