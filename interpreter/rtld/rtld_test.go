@@ -5,14 +5,16 @@ package rtld_test
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"testing"
 	"time"
 	"unsafe"
 
 	"github.com/coreos/pkg/dlopen"
-	log "github.com/sirupsen/logrus"
 	"github.com/stretchr/testify/require"
+
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/support"
@@ -29,7 +31,7 @@ func test(t *testing.T) {
 
 	// Enable debug logging for CI debugging
 	if os.Getenv("DEBUG_TEST") != "" {
-		log.SetLevel(log.DebugLevel)
+		log.SetLevel(slog.LevelDebug)
 	}
 
 	// Create a context for the tracer. We use WithCancel (not WithTimeout)

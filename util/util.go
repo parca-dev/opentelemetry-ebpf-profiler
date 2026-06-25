@@ -18,9 +18,10 @@ import (
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/asm"
 	"github.com/cilium/ebpf/link"
-	log "github.com/sirupsen/logrus"
-	"go.opentelemetry.io/ebpf-profiler/libpf/hash"
 	"golang.org/x/sys/unix"
+
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
+	"go.opentelemetry.io/ebpf-profiler/libpf/hash"
 )
 
 // IsValidString checks if string is UTF-8-encoded and only contains expected characters.

@@ -14,7 +14,7 @@ package luajit // import "go.opentelemetry.io/ebpf-profiler/interpreter/luajit"
 import (
 	"os"
 
-	"github.com/sirupsen/logrus"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 )
 
 // Set this to true when LUA_DEBUG env var is set.
@@ -29,8 +29,8 @@ func init() {
 // enabling debug firehose if LUA_DEBUG env var is set.
 func logf(format string, args ...interface{}) {
 	if development {
-		logrus.Infof(format, args...)
+		log.Infof(format, args...)
 	} else {
-		logrus.Debugf(format, args...)
+		log.Debugf(format, args...)
 	}
 }
