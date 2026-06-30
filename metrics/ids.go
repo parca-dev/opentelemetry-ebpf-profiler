@@ -731,6 +731,9 @@ const (
 	// Total number of failures to add native custom labels
 	IDUnwindNativeCustomLabelsAddErrors = 314
 
+	// Number of cupti_events ringbuf reserve failures (GPU events dropped)
+	IDCUPTIEventsRingbufFull = 315
+
 	// max number of ID values, keep this as *last entry*
-	IDMax = 315
+	IDMax = 316
 )

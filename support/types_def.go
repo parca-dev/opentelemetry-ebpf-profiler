@@ -347,4 +347,5 @@ var MetricsTranslation = []metrics.MetricID{
 	C.metricID_UnwindGoLabelsAttempts:                     metrics.IDUnwindGoLabelsAttempts,
 	C.metricID_UnwindGoLabelsFailures:                     metrics.IDUnwindGoLabelsFailures,
 	C.metricID_BPFRingbufOutputErr:                        metrics.IDBPFRingbufOutputErr,
+	C.metricID_CUPTIEventsRingbufFull:                     metrics.IDCUPTIEventsRingbufFull,
 }

@@ -2293,5 +2293,12 @@
     "name": "UnwindNativeCustomLabelsAddErrors",
     "field": "bpf.native_custom_labels.add.errors",
     "id": 314
+  },
+  {
+    "description": "Number of cupti_events ringbuf reserve failures (GPU events dropped)",
+    "type": "counter",
+    "name": "CUPTIEventsRingbufFull",
+    "field": "cuda.errors.ringbuf_full",
+    "id": 315
   }
 ]

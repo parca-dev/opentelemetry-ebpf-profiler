@@ -171,6 +171,8 @@ type Config struct {
 	SamplesPerSecond int
 	// MapScaleFactor is the scaling factor for eBPF map sizes.
 	MapScaleFactor int
+	// CUPTIEventScaleFactor scales the cupti_events ringbuf as a power of two over its 1 MiB base (0 = 1 MiB). Default 0.
+	CUPTIEventScaleFactor int
 	// FilterErrorFrames indicates whether error frames should be filtered.
 	FilterErrorFrames bool
 	// FilterIdleFrames indicates whether idle frames should be filtered.
@@ -644,6 +646,10 @@ func loadAllMaps(coll *cebpf.CollectionSpec, cfg *Config,
 	// of the process?
 	ringbufSize := uint64(cfg.SamplesPerSecond * runtime.NumCPU() * support.Sizeof_Trace)
 	adaption["trace_events"] = uint32(min(util.NextPowerOfTwo(ringbufSize), 1<<31))
+
+	// Scale cupti_events over its 1 MiB base; graph-heavy GPU workloads overflow the default and drop events. Capped at 2 GiB.
+	cuptiEventsSize := uint64(1<<20) << uint(cfg.CUPTIEventScaleFactor)
+	adaption["cupti_events"] = uint32(min(cuptiEventsSize, 1<<31))
 
 	for i := support.StackDeltaBucketSmallest; i <= support.StackDeltaBucketLargest; i++ {
 		mapName := fmt.Sprintf("exe_id_to_%d_stack_deltas", i)
