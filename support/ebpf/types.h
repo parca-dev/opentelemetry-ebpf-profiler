@@ -377,6 +377,9 @@ enum {
   // number of bpf_ringbuf_output failures
   metricID_BPFRingbufOutputErr,
 
+  // number of cupti_events ringbuf reserve failures (GPU events dropped)
+  metricID_CUPTIEventsRingbufFull,
+
   //
   // Metric IDs above are for counters (cumulative values)
   //

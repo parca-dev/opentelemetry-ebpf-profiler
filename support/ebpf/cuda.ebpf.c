@@ -175,7 +175,9 @@ struct cuda_progs_t {
 } cuda_progs SEC(".maps");
 
 // Unified ringbuf for all CUPTI events sent to user-space. Every event begins
-// with a u32 event_type discriminator at offset 0. 1 MB capacity.
+// with a u32 event_type discriminator at offset 0. 1 MB base capacity here is a
+// fallback; userspace resizes it at load via CUPTIEventScaleFactor (see
+// tracer.go), since graph-heavy GPU workloads overflow 1 MB and drop events.
 struct cupti_events_t {
   __uint(type, BPF_MAP_TYPE_RINGBUF);
   __uint(max_entries, 1 << 20);
@@ -231,6 +233,7 @@ int BPF_USDT(
 
   struct kernel_event *evt = bpf_ringbuf_reserve(&cupti_events, sizeof(*evt), 0);
   if (!evt) {
+    increment_metric(metricID_CUPTIEventsRingbufFull);
     return 0;
   }
   evt->event_type     = EVENT_TYPE_KERNEL;
@@ -317,6 +320,7 @@ process_activity_chunk(struct pt_regs *ctx, u64 ptrs_base, u32 num_activities, u
 
       struct kernel_event *evt = bpf_ringbuf_reserve(&cupti_events, sizeof(*evt), 0);
       if (!evt) {
+        increment_metric(metricID_CUPTIEventsRingbufFull);
         continue;
       }
       evt->event_type     = EVENT_TYPE_KERNEL;
@@ -411,6 +415,7 @@ int BPF_USDT(cuda_cubin_loaded, u64 cubin_crc, u64 cubin_ptr, u64 cubin_size)
 
   struct cubin_event *evt = bpf_ringbuf_reserve(&cupti_events, sizeof(*evt), 0);
   if (!evt) {
+    increment_metric(metricID_CUPTIEventsRingbufFull);
     // Ringbuf full — don't mark seen so a later re-fire gets another shot.
     return 0;
   }
@@ -448,6 +453,7 @@ int BPF_USDT(cuda_gpu_config, u32 device_id, u32 sampling_factor, u32 clock_khz,
 
   struct gpu_config_event *evt = bpf_ringbuf_reserve(&cupti_events, sizeof(*evt), 0);
   if (!evt) {
+    increment_metric(metricID_CUPTIEventsRingbufFull);
     return 0;
   }
   evt->event_type      = EVENT_TYPE_GPU_CONFIG;
@@ -481,6 +487,7 @@ int BPF_USDT(cuda_stall_reason_map, u64 names_base, u32 count)
 
   struct stall_reason_map_event *evt = bpf_ringbuf_reserve(&cupti_events, sizeof(*evt), 0);
   if (!evt) {
+    increment_metric(metricID_CUPTIEventsRingbufFull);
     return 0;
   }
   evt->event_type = EVENT_TYPE_STALL_REASON_MAP;
@@ -555,6 +562,7 @@ process_pc_sample_chunk(struct pt_regs *ctx, u64 ptrs_base, u32 count, u32 start
 
       struct pc_sample_event *evt = bpf_ringbuf_reserve(&cupti_events, sizeof(*evt), 0);
       if (!evt) {
+        increment_metric(metricID_CUPTIEventsRingbufFull);
         err = PC_SAMPLE_ERR_RINGBUF_FULL;
         goto err_exit;
       }
@@ -657,6 +665,7 @@ int BPF_USDT(cuda_error, s32 code, u64 message_ptr, u64 component_ptr)
 
   struct error_event *evt = bpf_ringbuf_reserve(&cupti_events, sizeof(*evt), 0);
   if (!evt) {
+    increment_metric(metricID_CUPTIEventsRingbufFull);
     return 0;
   }
   evt->event_type   = EVENT_TYPE_ERROR;
