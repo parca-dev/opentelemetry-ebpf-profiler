@@ -2144,9 +2144,35 @@ func (d *v8Data) readIntrospectionData(ef *pfelf.File) error {
 		// At least back to V8 8.4
 		vms.Script.Source = vms.Script.Name - pointerSize
 	}
+	// Lost in V8 9.4
 	if vms.BytecodeArray.SourcePositionTable == 0 {
-		// Lost in V8 9.4
-		vms.BytecodeArray.SourcePositionTable = vms.FixedArrayBase.Length + 3*pointerSize
+		var nptrs uint16 = 3
+		// Unfortunately, this has historically changed pretty often. The following are valid for all
+		// versions where `kSourcePositionTableOffset` appears in bytecode-array.h:
+		// everything from 11.9.86 (inclusive) to 14.9.194 (exclusive).
+		// It also works for everything from that point until the present day (15.1.14),
+		// because even though they've gotten rid of `kSourcePositionTableOffset` the offset hasn't
+		// actually changed since then.
+		//
+		// TODO: check versions before that range, where the field lives in bytecode-array.tq. Until then, we
+		// just use "3" as the default (which is what we always used before).
+		//
+		// This being wrong breaks file/line symbolization, but apparently only for
+		// Baseline frames.
+		if d.version >= v8Ver(11, 9, 86) {
+			if d.version < v8Ver(12, 0, 67) {
+				nptrs = 2
+			} else if d.version < v8Ver(12, 1, 36) {
+				nptrs = 3
+			} else if d.version < v8Ver(12, 3, 43) {
+				nptrs = 4
+			} else if d.version < v8Ver(12, 3, 97) {
+				nptrs = 3
+			} else {
+				nptrs = 2
+			}
+		}
+		vms.BytecodeArray.SourcePositionTable = vms.FixedArrayBase.Length + nptrs*pointerSize
 	}
 	if vms.BytecodeArray.Data == 0 {
 		// At least back to V8 8.4 (16 = 3*int32 + uint16)
