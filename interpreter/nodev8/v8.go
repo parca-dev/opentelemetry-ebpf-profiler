@@ -1393,8 +1393,12 @@ func (i *v8Instance) getCode(taggedPtr libpf.Address, cookie uint32) (*v8Code, e
 	return i.readCode(taggedPtr, cookie, nil)
 }
 
-// getCodeFromJSFunction reads and caches needed V8 Code object data from a JSFunction pointer.
-func (i *v8Instance) getCodeFromJSFunc(taggedPtr libpf.Address, cookie uint32) (*v8Code, error) {
+// getCodeFromJSFunction reads and caches needed V8 Code object data using
+// the SFI from a JSFunction pointer. Finding the Code from a JSFunction pointer
+// is complicated in Node >= v24, (search "leaptiering" in v8_tracer.ebpf.c), so
+// unlike in previous revisions of this function, we just expect it to be passed in
+// from eBPF, and don't do the work of finding it again.
+func (i *v8Instance) getCodeFromJSFunc(taggedPtr libpf.Address, cookie uint32, codeTaggedPtr libpf.Address) (*v8Code, error) {
 	if code, ok := i.addrToCode.Get(taggedPtr); ok {
 		if code.cookie == cookie {
 			return code, nil
@@ -1418,8 +1422,7 @@ func (i *v8Instance) getCodeFromJSFunc(taggedPtr libpf.Address, cookie uint32) (
 		return nil, fmt.Errorf("getSFI: %w", err)
 	}
 
-	// Chase and read the Code object
-	codeTaggedPtr := npsr.Ptr(jsfunc, uint(vms.JSFunction.Code))
+	// Read the Code object
 	return i.readCode(codeTaggedPtr, cookie, sfi)
 }
 
@@ -1833,9 +1836,13 @@ func (i *v8Instance) Symbolize(ef libpf.EbpfFrame, frames *libpf.Frames, _ libpf
 		var code *v8Code
 		codeCookie := uint32(deltaOrMarker & support.V8LineCookieMask >> support.V8LineCookieShift)
 		if subframeType == support.V8FileTypeNativeCode {
+			log.Debugf("calling getCode with pointer %#x", pointer)
 			code, err = i.getCode(pointer, codeCookie)
 		} else {
-			code, err = i.getCodeFromJSFunc(pointer, codeCookie)
+			codePointerAndType := libpf.Address(ef.Variable(2))
+			codePointer := codePointerAndType&^support.V8FileTypeMask | HeapObjectTag
+			log.Debugf("calling getCodeFromJSFunc with pointer %#x; codePointer: %#x", pointer, codePointer)
+			code, err = i.getCodeFromJSFunc(pointer, codeCookie, codePointer)
 		}
 		if err == nil {
 			err = i.symbolizeCode(code, deltaOrMarker, ef.Flags().ReturnAddress(), frames)
