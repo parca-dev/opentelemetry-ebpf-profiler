@@ -340,6 +340,17 @@ func (impl *ebpfMapsImpl) loadUSDTProgram(progName string, useMulti bool) error 
 			progName, ins, impl.perfProgsFD, impl.probeProgsMap.FD())
 	}
 
+	// Repoint per_cpu_records to the chain's own record map, as loadProbeUnwinders
+	// does for the kprobe unwinders.
+	if kprobeRec := impl.allMaps["per_cpu_rec_kp"]; kprobeRec != nil {
+		recInsns := util.ProgArrayReferences(impl.allMaps["per_cpu_records"].FD(), progSpec.Instructions)
+		for _, ins := range recInsns {
+			if assocErr := progSpec.Instructions[ins].AssociateMap(kprobeRec); assocErr != nil {
+				return fmt.Errorf("failed to rewrite per_cpu_records ptr: %v", assocErr)
+			}
+		}
+	}
+
 	// Load the eBPF program into the kernel. If no error is returned,
 	// the eBPF program can be used/called/triggered from now on.
 	prog, err := cebpf.NewProgramWithOptions(progSpec, programOptions)
