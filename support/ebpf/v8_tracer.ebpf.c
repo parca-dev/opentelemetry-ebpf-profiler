@@ -30,21 +30,38 @@ struct v8_procs_t {
 
 // Record a V8 frame
 static EBPF_INLINE ErrorCode push_v8(
-  UnwindState *state, Trace *trace, u64 pointer_and_type, u64 delta_or_marker, bool return_address)
+  UnwindState *state,
+  Trace *trace,
+  u64 pointer_and_type,
+  u64 delta_or_marker,
+  bool return_address,
+  u64 code)
 {
-  DEBUG_PRINT(
-    "Pushing v8 frame delta_or_marker=%llx, pointer_and_type=%llx",
-    delta_or_marker,
-    pointer_and_type);
+  bool should_push_code = (pointer_and_type & V8_FILE_TYPE_MASK) == V8_FILE_TYPE_NATIVE_JSFUNC;
+  if (should_push_code) {
+    DEBUG_PRINT(
+      "Pushing v8 frame delta_or_marker=%llx, pointer_and_type=%llx, code=%llx",
+      delta_or_marker,
+      pointer_and_type,
+      code);
+  } else {
+    DEBUG_PRINT(
+      "Pushing v8 frame delta_or_marker=%llx, pointer_and_type=%llx",
+      delta_or_marker,
+      pointer_and_type);
+  }
 
   const u8 ra_flag = return_address ? FRAME_FLAG_RETURN_ADDRESS : 0;
 
-  u64 *data = push_frame(state, trace, FRAME_MARKER_V8, FRAME_FLAG_PID_SPECIFIC | ra_flag, 0, 2);
+  u64 *data = push_frame(
+    state, trace, FRAME_MARKER_V8, FRAME_FLAG_PID_SPECIFIC | ra_flag, 0, 2 + (int)should_push_code);
   if (!data) {
     return ERR_STACK_LENGTH_EXCEEDED;
   }
   data[0] = pointer_and_type;
   data[1] = delta_or_marker;
+  if (should_push_code)
+    data[2] = code;
   return ERR_OK;
 }
 
@@ -137,7 +154,7 @@ static EBPF_INLINE ErrorCode unwind_one_v8_frame(PerCPURecord *record, V8ProcInf
     fp_bytecode_offset);
 
   // Data that will be sent to HA is in these variables.
-  uintptr_t pointer_and_type = 0, delta_or_marker = 0;
+  uintptr_t pointer_and_type = 0, delta_or_marker = 0, code = 0;
 
   // Frames can be either be "standard", in which case they have a pointer to a context
   // in `fp_marker` here, or non-standard, in which case they have a "marker" indicating their type.
@@ -184,7 +201,6 @@ static EBPF_INLINE ErrorCode unwind_one_v8_frame(PerCPURecord *record, V8ProcInf
   // At this point we can at least report the SFI if other things fail.
   pointer_and_type = V8_FILE_TYPE_NATIVE_SFI | sfi;
 
-  uintptr_t code;
   if (vi->leaptiering) {
     // Under leaptiering the JSFunction no longer stores a Code pointer. Instead it
     // holds a 32-bit JSDispatchHandle (at the same offset the Code pointer used to
@@ -354,7 +370,8 @@ static EBPF_INLINE ErrorCode unwind_one_v8_frame(PerCPURecord *record, V8ProcInf
   delta_or_marker = (pc - code_start) | ((uintptr_t)cookie << V8_LINE_COOKIE_SHIFT);
 
 frame_done:;
-  ErrorCode error = push_v8(state, trace, pointer_and_type, delta_or_marker, state->return_address);
+  ErrorCode error =
+    push_v8(state, trace, pointer_and_type, delta_or_marker, state->return_address, code);
   if (error) {
     return error;
   }
