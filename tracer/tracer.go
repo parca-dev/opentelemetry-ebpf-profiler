@@ -476,8 +476,12 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 		cfg.LoadProbe ||
 		cfg.IncludeTracers.Has(types.CUDATracer) {
 		// Load the tail call destinations if any kind of event profiling is enabled.
+		// loadProbeUnwinders repoints this chain's per_cpu_records references to
+		// per_cpu_rec_kp so a perf sampler can't clobber an in-flight uprobe unwind;
+		// the perf chain keeps per_cpu_records.
 		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], tailCallProgs,
-			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD()); err != nil {
+			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD(),
+			ebpfMaps["per_cpu_records"].FD(), ebpfMaps["per_cpu_rec_kp"]); err != nil {
 			return nil, nil, nil, nil, fmt.Errorf("failed to load kprobe eBPF programs: %v", err)
 		}
 	}
@@ -496,7 +500,8 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 			},
 		}
 		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], offCPUProgs,
-			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD()); err != nil {
+			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD(),
+			ebpfMaps["per_cpu_records"].FD(), ebpfMaps["per_cpu_rec_kp"]); err != nil {
 			return nil, nil, nil, nil, fmt.Errorf("failed to load kprobe eBPF programs: %v", err)
 		}
 	}
@@ -510,7 +515,8 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 			},
 		}
 		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], probeProgs,
-			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD()); err != nil {
+			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD(),
+			ebpfMaps["per_cpu_records"].FD(), ebpfMaps["per_cpu_rec_kp"]); err != nil {
 			return nil, nil, nil, nil, fmt.Errorf("failed to load uprobe eBPF programs: %v", err)
 		}
 	}
@@ -799,6 +805,7 @@ func loadPerfUnwinders(coll *cebpf.CollectionSpec, ebpfProgs map[string]*cebpf.P
 func loadProbeUnwinders(coll *cebpf.CollectionSpec, ebpfProgs map[string]*cebpf.Program,
 	tailcallMap *cebpf.Map, progs []progLoaderHelper,
 	bpfVerifierLogLevel uint32, perfTailCallMapFD int,
+	perCPURecordsFD int, perCPURecordsKprobeMap *cebpf.Map,
 ) error {
 	programOptions := cebpf.ProgramOptions{
 		LogLevel: cebpf.LogLevel(bpfVerifierLogLevel),
@@ -824,6 +831,14 @@ func loadProbeUnwinders(coll *cebpf.CollectionSpec, ebpfProgs map[string]*cebpf.
 		for _, ins := range insns {
 			if err := progSpec.Instructions[ins].AssociateMap(tailcallMap); err != nil {
 				return fmt.Errorf("failed to rewrite map ptr: %v", err)
+			}
+		}
+
+		// Repoint per_cpu_records to the chain's own record map.
+		recInsns := util.ProgArrayReferences(perCPURecordsFD, progSpec.Instructions)
+		for _, ins := range recInsns {
+			if err := progSpec.Instructions[ins].AssociateMap(perCPURecordsKprobeMap); err != nil {
+				return fmt.Errorf("failed to rewrite per_cpu_records ptr: %v", err)
 			}
 		}
 
