@@ -128,9 +128,11 @@ func (l *luajitInstance) Detach(ebpf interpreter.EbpfHandler, pid libpf.PID) err
 
 func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpreter.Data, error) {
 	base := path.Base(info.FileName())
+	// Tarantool statically links LuaJIT into its main executable, so there is
+	// no separate libluajit-5.1.so mapping to match on.
 	if !strings.HasPrefix(base, "libluajit-5.1.so") &&
 		!strings.HasPrefix(base, "luajit") &&
-		base != "nginx" && base != "openresty" {
+		base != "nginx" && base != "openresty" && base != "tarantool" {
 		return nil, nil
 	}
 
