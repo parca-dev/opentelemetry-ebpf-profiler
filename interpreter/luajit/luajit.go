@@ -53,6 +53,9 @@ type luajitData struct {
 	g2Traces uint16
 	// Offset of cur_L field in the global_State struct.
 	currentLOffset uint16
+	// Offset of jit_base within global_State (relative to G). Extracted separately
+	// because it is not always adjacent to cur_L (tarantool inserts mem_L between).
+	g2jitbase uint16
 }
 
 type luajitInstance struct {
@@ -90,6 +93,7 @@ func (d *luajitData) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf
 		G2dispatch:      d.g2Dispatch,
 		Cur_L_offset:    d.currentLOffset,
 		Cframe_size_jit: uint16(cframeSizeJIT),
+		G2jitbase:       d.g2jitbase,
 	}
 	if err := ebpf.UpdateProcData(libpf.LuaJIT, pid, unsafe.Pointer(&cdata)); err != nil {
 		return nil, err

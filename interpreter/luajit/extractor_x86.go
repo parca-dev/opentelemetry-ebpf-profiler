@@ -227,6 +227,44 @@ func (x *x86Extractor) findG2DispatchOffsetFromLjDispatchUpdate(b []byte) (uint6
 	return uint64(leas[0].disp), nil
 }
 
+// findG2JitBaseFromExitHandler extracts the offset of jit_base from G.
+//
+// On trace exit, lj_vm_exit_handler restores BASE/L from G and then clears
+// G->jit_base. These accesses are relative to the DISPATCH register (r14 on
+// x86, where DISPATCH = G + g2dispatch), for example:
+//
+//	movq -0xE30(%r14), %rbp   ; rbp = G->cur_L
+//	movq -0xE20(%r14), %rdx   ; rdx = G->jit_base
+//	movq $0,  -0xE20(%r14)    ; G->jit_base = NULL
+//
+// The clear is a 64-bit store of immediate zero to DISPATCH+disp, so
+// g2jitbase = g2dispatch + disp. Validate that the candidate sits just after
+// cur_L to distinguish it from other zeroed fields.
+func (x *x86Extractor) findG2JitBaseFromExitHandler(
+	b []byte, g2dispatch, curLOffset uint64) (uint64, error) {
+	b, _ = xh.SkipEndBranch(b) //nolint:errcheck
+	for len(b) > 0 {
+		i, err := x86asm.Decode(b, 64)
+		if err != nil {
+			return 0, err
+		}
+		if i.Op == x86asm.MOV {
+			mem, ok0 := i.Args[0].(x86asm.Mem)
+			imm, ok1 := i.Args[1].(x86asm.Imm)
+			if ok0 && ok1 && imm == 0 && mem.Base == x86asm.R14 && mem.Index == 0 {
+				// x86asm leaves negative disp32 values zero-extended in its
+				// int64 field, so sign-extend before adding it to g2dispatch.
+				cand := g2dispatch + uint64(int64(int32(mem.Disp)))
+				if cand > curLOffset && cand <= curLOffset+0x18 {
+					return cand, nil
+				}
+			}
+		}
+		b = b[i.Len:]
+	}
+	return 0, nil
+}
+
 // Find first or second call address, the one whose first argument is 0x10 off of
 // sym's first argument.
 // libluajit-5.1.so`luaopen_jit:

@@ -662,8 +662,17 @@ find_context(struct pt_regs *ctx, PerCPURecord *record, const LuaJITProcInfo *in
   }
 
   // The JIT doesn't update base as it goes but it does update G.jit_base.
+  // jit_base is read at its own offset (info->g2jitbase), not assumed adjacent to
+  // cur_L: tarantool's LuaJIT has an extra mem_L field between cur_L and jit_base.
   if (high == LUAJIT_JIT_FILE_ID) {
-    record->luajitUnwindState.frame = scr->G.jit_base - 1;
+    TValue *jit_base = NULL;
+    if (bpf_probe_read_user(
+          &jit_base, sizeof(jit_base), (void *)((char *)G_ptr + info->g2jitbase))) {
+      DEBUG_PRINT("lj: failed to read G->jit_base");
+      increment_metric(metricID_UnwindLuaJITErrNoContext);
+      return ERR_LUAJIT_READ_LUA_CONTEXT;
+    }
+    record->luajitUnwindState.frame = jit_base - 1;
   }
   // otherwise, if the first unwinder was Luajit, then we're in
   // the interpreter. L->base won't have been updated, but

@@ -181,6 +181,11 @@ func TestOffsets(t *testing.T) {
 						"bootstrap emit bad-G candidates and starves luajit "+
 						"triangulation in CI")
 
+				// OpenResty/luajit2 has no mem_L field, so jit_base must sit
+				// immediately after cur_L on both architectures.
+				require.Equal(t, ljd.currentLOffset+8, ljd.g2jitbase,
+					"openresty jit_base must be cur_L+8")
+
 				// On symbolized builds, anchoring at lj_vm_asm_begin must produce
 				// the same extracted offsets as the heuristic on both architectures.
 				if sym, ok := scanSymbols(ef)[libpf.SymbolName("lj_vm_asm_begin")]; ok {

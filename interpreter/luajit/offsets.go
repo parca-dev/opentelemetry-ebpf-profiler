@@ -31,6 +31,7 @@ func scanSymbols(ef *pfelf.File) map[libpf.SymbolName]libpf.Symbol {
 		"lua_pushcclosure":         {},
 		"luaopen_jit":              {},
 		"lua_close":                {},
+		"lj_vm_exit_handler":       {},
 	}
 
 	foundSymbols := map[libpf.SymbolName]libpf.Symbol{}
@@ -105,12 +106,47 @@ func extractOffsets(ef *pfelf.File, ljd *luajitData, ir util.Range) error {
 	}
 	ljd.g2Dispatch = uint16(g2dispatch)
 
+	g2jitbase, err := oft.findG2JitBaseOffset(uint64(curLOffset), g2dispatch)
+	if err != nil {
+		return err
+	}
+	if g2jitbase > 0xffff {
+		return fmt.Errorf("lj: g to jit_base offset %v is too large", g2jitbase)
+	}
+	ljd.g2jitbase = uint16(g2jitbase)
+
 	// If we have symbols we can check that the start address is correct.
 	if s, e := oft.lookupSymbol("lj_vm_asm_begin"); e == nil && ir.Start != uint64(s.Address) {
 		return fmt.Errorf("lj: unexpected start address %x, expected %x", s.Address, ir.Start)
 	}
 
 	return nil
+}
+
+// findG2JitBaseOffset returns the offset of jit_base within global_State,
+// relative to G. Tarantool's LuaJIT inserts a mem_L field between cur_L and
+// jit_base, so jit_base cannot always be assumed to be at cur_L+8.
+//
+// Extract the offset from lj_vm_exit_handler, which clears G->jit_base through
+// the DISPATCH register. If that hidden symbol is unavailable, fall back to
+// cur_L+8, which is the existing OpenResty/luajit2 layout.
+func (o *offsetData) findG2JitBaseOffset(curLOffset, g2dispatch uint64) (uint64, error) {
+	fallback := curLOffset + 8
+	sym, err := o.lookupSymbol("lj_vm_exit_handler")
+	if err != nil {
+		log.Debugf("lj: no lj_vm_exit_handler symbol, assuming jit_base at cur_L+8")
+		return fallback, nil
+	}
+	b, err := o.readSym(sym)
+	if err != nil {
+		return fallback, nil
+	}
+	g2jitbase, err := o.e.findG2JitBaseFromExitHandler(b, g2dispatch, curLOffset)
+	if err != nil || g2jitbase == 0 {
+		log.Debugf("lj: could not extract jit_base offset (%v), assuming cur_L+8", err)
+		return fallback, nil
+	}
+	return g2jitbase, nil
 }
 
 type extractor interface {
@@ -156,6 +192,12 @@ type extractor interface {
 	find3rdArgToLibPreregCall(b []byte, baseAddr int64) (uint64, error)
 
 	find4thArgToLibRegCall(b []byte, baseAddr int64) (int64, error)
+
+	// lj_vm_exit_handler restores interpreter state on trace exit and clears
+	// jit_base through DISPATCH. Its displacement yields jit_base's offset from
+	// G. curLOffset constrains the candidate to the fields immediately after
+	// cur_L. Returns zero if the offset cannot be found.
+	findG2JitBaseFromExitHandler(b []byte, g2dispatch, curLOffset uint64) (uint64, error)
 
 	// find2ndArgTo2ndPushClosureCall finds the address of the
 	// second argument to the second "lua_pushcclosure" call,

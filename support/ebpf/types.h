@@ -608,6 +608,10 @@ typedef struct LuaJITProcInfo {
   u16 g2dispatch;
   u16 cur_L_offset;
   u16 cframe_size_jit;
+  // Offset of jit_base within global_State (relative to G). NOT necessarily
+  // adjacent to cur_L: some LuaJIT builds (e.g. tarantool) insert a mem_L field
+  // between cur_L and jit_base. OpenResty/luajit2 has jit_base right after cur_L.
+  u16 g2jitbase;
 } LuaJITProcInfo;
 
 // COMM_LEN defines the maximum length we will receive for the comm of a task.
