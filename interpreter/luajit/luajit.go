@@ -141,7 +141,20 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		return nil, err
 	}
 
-	luaInterp, err := extractInterpreterBounds(info.Deltas(), cframeSize)
+	// When the binary is unstripped (e.g. tarantool), lj_vm_asm_begin marks the
+	// exact start of the VM interpreter. Anchor the interpreter-range detection
+	// to it: the stack-delta heuristic alone can match an unrelated large gap
+	// (observed on x86 tarantool — it matched 0x164469 instead of the real
+	// lj_vm_asm_begin 0x261ca0, then failed the start-address sanity check).
+	// lj_vm_asm_begin is a hidden .symtab symbol; raw ef.LookupSymbol only finds
+	// dynamic symbols, so use scanSymbols (which reads .symtab via VisitSymbols),
+	// matching how extractOffsets resolves it.
+	var asmBegin uint64
+	if sym, ok := scanSymbols(ef)[libpf.SymbolName("lj_vm_asm_begin")]; ok {
+		asmBegin = uint64(sym.Address)
+	}
+
+	luaInterp, err := extractInterpreterBounds(info.Deltas(), cframeSize, asmBegin)
 	if err != nil {
 		return nil, err
 	}
@@ -170,8 +183,26 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 // big and has a somewhat unique FDE we can pick out. We could tighten this up by looking for
 // direct jumps to the start of the interpreter (one can be found lj_dispatch_update) but we'd
 // still need to consult the stack deltas to get the end of the interpreter.
-func extractInterpreterBounds(deltas sdtypes.StackDeltaArray, param int32) (util.Range,
-	error) {
+func extractInterpreterBounds(deltas sdtypes.StackDeltaArray, param int32,
+	asmBegin uint64) (util.Range, error) {
+	// If lj_vm_asm_begin is known (unstripped binary), the interpreter range
+	// starts exactly at that symbol. Return the delta gap that starts there
+	// rather than the first large gap matching the unwind pattern, which can be
+	// an unrelated function on some builds (x86 tarantool).
+	if asmBegin != 0 {
+		// The VM asm is one large delta interval, but its start can sit a few
+		// bytes below lj_vm_asm_begin (the preceding function's unwind info
+		// extends to just before the symbol). Match the interval that CONTAINS
+		// the symbol and is large (the interpreter), then start the range exactly
+		// at the symbol so it matches the lj_vm_asm_begin sanity check.
+		for i := 0; i < len(deltas)-1; i++ {
+			if deltas[i].Address <= asmBegin && asmBegin < deltas[i+1].Address &&
+				deltas[i+1].Address-asmBegin > 10_000 {
+				return util.Range{Start: asmBegin, End: deltas[i+1].Address}, nil
+			}
+		}
+		// Fall through to the heuristic if the symbol isn't in a large interval.
+	}
 	for i := 0; i < len(deltas)-1; i++ {
 		d, next := &deltas[i], &deltas[i+1]
 		if next.Address-d.Address > 10_000 {

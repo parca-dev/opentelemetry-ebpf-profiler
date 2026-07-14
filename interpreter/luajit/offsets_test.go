@@ -23,10 +23,89 @@ import (
 
 	"github.com/stretchr/testify/require"
 	testcontainers "github.com/testcontainers/testcontainers-go"
+	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/nativeunwind/elfunwindinfo"
 	sdtypes "go.opentelemetry.io/ebpf-profiler/nativeunwind/stackdeltatypes"
+	"go.opentelemetry.io/ebpf-profiler/support"
 )
+
+// TestExtractInterpreterBoundsAnchor verifies the lj_vm_asm_begin anchoring used
+// for statically linked, multi-function binaries such as Tarantool. It also
+// covers the heuristic-only path used when the symbol is unavailable.
+func TestExtractInterpreterBoundsAnchor(t *testing.T) {
+	const (
+		x86Param = int32(80)
+		armParam = int32(208)
+		bigGap   = uint64(19400)
+		asmBegin = uint64(0x261ca0)
+	)
+	mk := func(addr uint64, baseReg uint8, param int32) sdtypes.StackDelta {
+		return sdtypes.StackDelta{
+			Address: addr,
+			Info: support.UnwindInfo{
+				BaseReg: baseReg,
+				Param:   param,
+			},
+		}
+	}
+
+	t.Run("x86-decoy-gap-before-vm-asm", func(t *testing.T) {
+		deltas := sdtypes.StackDeltaArray{
+			mk(0x1000, support.UnwindRegSp, x86Param),
+			mk(0x1000+15000, 0, 0),
+			mk(asmBegin, support.UnwindRegSp, x86Param),
+			mk(asmBegin+bigGap, 0, 0),
+		}
+		heuristic, err := extractInterpreterBounds(deltas, x86Param, 0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(0x1000), heuristic.Start)
+
+		anchored, err := extractInterpreterBounds(deltas, x86Param, asmBegin)
+		require.NoError(t, err)
+		require.Equal(t, asmBegin, anchored.Start)
+		require.Equal(t, asmBegin+bigGap, anchored.End)
+	})
+
+	t.Run("arm64-fp-vm-asm-no-regression", func(t *testing.T) {
+		deltas := sdtypes.StackDeltaArray{
+			mk(0x2000, support.UnwindRegSp, armParam),
+			mk(0x2100, 0, 0),
+			mk(asmBegin, support.UnwindRegFp, 16),
+			mk(asmBegin+bigGap, 0, 0),
+		}
+		heuristic, err := extractInterpreterBounds(deltas, armParam, 0)
+		require.NoError(t, err)
+		anchored, err := extractInterpreterBounds(deltas, armParam, asmBegin)
+		require.NoError(t, err)
+		require.Equal(t, heuristic, anchored)
+	})
+
+	t.Run("vm-asm-delta-starts-below-symbol", func(t *testing.T) {
+		deltas := sdtypes.StackDeltaArray{
+			mk(asmBegin-4, support.UnwindRegFp, 16),
+			mk(asmBegin-4+bigGap, 0, 0),
+		}
+		heuristic, err := extractInterpreterBounds(deltas, armParam, 0)
+		require.NoError(t, err)
+		anchored, err := extractInterpreterBounds(deltas, armParam, asmBegin)
+		require.NoError(t, err)
+		require.Equal(t, asmBegin, anchored.Start)
+		require.Equal(t, heuristic.End, anchored.End)
+	})
+
+	t.Run("falls-back-when-symbol-not-in-large-interval", func(t *testing.T) {
+		deltas := sdtypes.StackDeltaArray{
+			mk(asmBegin, support.UnwindRegSp, x86Param),
+			mk(asmBegin+100, 0, 0),
+			mk(asmBegin+0x10000, support.UnwindRegSp, x86Param),
+			mk(asmBegin+0x10000+bigGap, 0, 0),
+		}
+		anchored, err := extractInterpreterBounds(deltas, x86Param, asmBegin)
+		require.NoError(t, err)
+		require.Equal(t, asmBegin+0x10000, anchored.Start)
+	})
+}
 
 const (
 	openrestyBase = "openresty/openresty"
@@ -78,7 +157,7 @@ func TestOffsets(t *testing.T) {
 				intervals, param, err := extractStackDeltas(target, ef)
 				require.NoError(t, err)
 
-				interp, err := extractInterpreterBounds(intervals.Deltas, param)
+				interp, err := extractInterpreterBounds(intervals.Deltas, param, 0)
 				require.NoError(t, err)
 
 				ljd := luajitData{}
@@ -101,6 +180,22 @@ func TestOffsets(t *testing.T) {
 					"g2Dispatch mismatch: a wrong value here makes the eBPF JIT "+
 						"bootstrap emit bad-G candidates and starves luajit "+
 						"triangulation in CI")
+
+				// On symbolized builds, anchoring at lj_vm_asm_begin must produce
+				// the same extracted offsets as the heuristic on both architectures.
+				if sym, ok := scanSymbols(ef)[libpf.SymbolName("lj_vm_asm_begin")]; ok {
+					anchored, anchorErr := extractInterpreterBounds(
+						intervals.Deltas, param, uint64(sym.Address))
+					require.NoError(t, anchorErr)
+					require.Equal(t, uint64(sym.Address), anchored.Start)
+					require.GreaterOrEqual(t, anchored.Start, interp.Start)
+
+					anchoredData := luajitData{}
+					require.NoError(t, extractOffsets(ef, &anchoredData, anchored))
+					require.Equal(t, ljd.currentLOffset, anchoredData.currentLOffset)
+					require.Equal(t, ljd.g2Traces, anchoredData.g2Traces)
+					require.Equal(t, ljd.g2Dispatch, anchoredData.g2Dispatch)
+				}
 
 				od := offsetData{}
 				err = od.init(ef)
@@ -495,7 +590,7 @@ func TestFiles(t *testing.T) {
 		intervals, param, err := extractStackDeltas(target, ef)
 		require.NoError(t, err)
 
-		interp, err := extractInterpreterBounds(intervals.Deltas, param)
+		interp, err := extractInterpreterBounds(intervals.Deltas, param, 0)
 		require.NoError(t, err)
 
 		err = extractOffsets(ef, &ljd, interp)
