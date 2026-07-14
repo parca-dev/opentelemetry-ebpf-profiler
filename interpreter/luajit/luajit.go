@@ -56,6 +56,7 @@ type luajitData struct {
 }
 
 type luajitInstance struct {
+	interpreter.InstanceStubs
 	rm         remotememory.RemoteMemory
 	protos     map[libpf.Address]*proto
 	jitRegions regionMap
@@ -479,17 +480,5 @@ func (l *luajitInstance) Symbolize(frame libpf.EbpfFrame, frames *libpf.Frames, 
 		return fmt.Errorf("Unrecognized LuaJIT frame kind: %d", ljkind)
 	}
 
-	return nil
-}
-
-func (l *luajitInstance) GetAndResetMetrics() ([]metrics.Metric, error) {
-	return nil, nil
-}
-
-func (l *luajitInstance) ReleaseResources() error {
-	return nil
-}
-
-func (l *luajitInstance) UpdateLibcInfo(ebpf interpreter.EbpfHandler, pid libpf.PID, info libc.LibcInfo) error {
 	return nil
 }
