@@ -345,10 +345,12 @@ type NativeCustomLabelsProcInfo struct {
 	Als_handle_tls_offset        uint64
 }
 type LuaJITProcInfo struct {
-	G2dispatch      uint16
-	Cur_L_offset    uint16
-	Cframe_size_jit uint16
-	G2jitbase       uint16
+	G2dispatch         uint16
+	Cur_L_offset       uint16
+	Cframe_size_jit    uint16
+	G2jitbase          uint16
+	Cframe_size_interp uint16
+	Interp_fp          uint16
 }
 
 const (

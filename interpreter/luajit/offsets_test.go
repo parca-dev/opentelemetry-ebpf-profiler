@@ -107,6 +107,50 @@ func TestExtractInterpreterBoundsAnchor(t *testing.T) {
 	})
 }
 
+func TestInterpCframeUnwind(t *testing.T) {
+	mk := func(addr uint64, baseReg uint8, param int32) sdtypes.StackDelta {
+		return sdtypes.StackDelta{
+			Address: addr,
+			Info: support.UnwindInfo{
+				BaseReg: baseReg,
+				Param:   param,
+			},
+		}
+	}
+
+	t.Run("stack-pointer-based", func(t *testing.T) {
+		deltas := sdtypes.StackDeltaArray{
+			mk(0x1000, 0, 0),
+			mk(0x2000, support.UnwindRegSp, 96),
+			mk(0x3000, 0, 0),
+		}
+		param, fp, ok := interpCframeUnwind(deltas, 0x2004)
+		require.True(t, ok)
+		require.Equal(t, uint16(96), param)
+		require.Zero(t, fp)
+	})
+
+	t.Run("frame-pointer-based", func(t *testing.T) {
+		deltas := sdtypes.StackDeltaArray{
+			mk(0x2000, support.UnwindRegFp, 16),
+			mk(0x3000, 0, 0),
+		}
+		param, fp, ok := interpCframeUnwind(deltas, 0x2000)
+		require.True(t, ok)
+		require.Equal(t, uint16(16), param)
+		require.Equal(t, uint16(1), fp)
+	})
+
+	t.Run("invalid-cfa-offset", func(t *testing.T) {
+		deltas := sdtypes.StackDeltaArray{
+			mk(0x2000, support.UnwindRegSp, 0),
+			mk(0x3000, 0, 0),
+		}
+		_, _, ok := interpCframeUnwind(deltas, 0x2000)
+		require.False(t, ok)
+	})
+}
+
 const (
 	openrestyBase = "openresty/openresty"
 )
