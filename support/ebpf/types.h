@@ -619,6 +619,9 @@ typedef struct LuaJITProcInfo {
   // (arm64: CFA = fp + param) vs SP based (x86: CFA = sp + param). 0 = use default.
   u16 cframe_size_interp;
   u16 interp_fp;
+  // Offset of the previous-C-frame link. Zero uses the architecture default.
+  // On x64, standard LuaJIT/OpenResty use 4*8 while Tarantool uses 6*8.
+  u16 cframe_prev_offset;
 } LuaJITProcInfo;
 
 // COMM_LEN defines the maximum length we will receive for the comm of a task.

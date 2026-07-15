@@ -351,6 +351,7 @@ type LuaJITProcInfo struct {
 	G2jitbase          uint16
 	Cframe_size_interp uint16
 	Interp_fp          uint16
+	Cframe_prev_offset uint16
 }
 
 const (
@@ -361,6 +362,7 @@ const (
 	sizeof_DotnetProcInfo = 0x4
 	sizeof_PHPProcInfo    = 0x18
 	sizeof_RubyProcInfo   = 0x48
+	sizeof_LuaJITProcInfo = 0xe
 )
 
 const (

@@ -18,6 +18,7 @@ import (
 	"io"
 	"os"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -201,6 +202,27 @@ func TestDeriveJITCframeSize(t *testing.T) {
 	t.Run("transition-would-overflow", func(t *testing.T) {
 		require.Equal(t, uint16(cframeSizeJIT), deriveJITCframeSize(0xffff, 0))
 	})
+}
+
+func TestCframePrevOffsetForExecutable(t *testing.T) {
+	switch runtime.GOARCH {
+	case "amd64":
+		require.Equal(t, uint16(4*8), defaultCframePrevOffset)
+		require.Equal(t, uint16(6*8), tarantoolCframePrevOffset)
+	case "arm64":
+		require.Zero(t, defaultCframePrevOffset)
+		require.Zero(t, tarantoolCframePrevOffset)
+	default:
+		t.Fatalf("unsupported architecture %s", runtime.GOARCH)
+	}
+
+	for _, executable := range []string{
+		"libluajit-5.1.so.2", "luajit", "nginx", "openresty", "unknown-runtime",
+	} {
+		require.Equal(t, defaultCframePrevOffset, cframePrevOffsetForExecutable(executable),
+			executable)
+	}
+	require.Equal(t, tarantoolCframePrevOffset, cframePrevOffsetForExecutable("tarantool"))
 }
 
 func TestX86FindG2JitBaseFromExitHandler(t *testing.T) {

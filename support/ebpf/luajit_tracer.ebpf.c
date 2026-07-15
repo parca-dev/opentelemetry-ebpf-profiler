@@ -89,15 +89,15 @@ enum { LJ_CONT_TAILCALL, LJ_CONT_FFI_CALLBACK }; /* Special continuations. */
 #define restorestack(L, n) ((TValue *)((char *)L.stack + (n)))
 
 #if defined(__x86_64__)
-  #define CFRAME_OFS_PREV (4 * 8)
-  #define CFRAME_OFS_PC   (3 * 8)
-  #define CFRAME_OFS_NRES (2 * 4)
-  #define CFRAME_OFS_L    (2 * 8)
+  #define CFRAME_OFS_PREV_DEFAULT (4 * 8)
+  #define CFRAME_OFS_PC           (3 * 8)
+  #define CFRAME_OFS_NRES         (2 * 4)
+  #define CFRAME_OFS_L            (2 * 8)
 #elif defined(__aarch64__)
-  #define CFRAME_OFS_PREV 0
-  #define CFRAME_OFS_NRES 40
-  #define CFRAME_OFS_L    16
-  #define CFRAME_OFS_PC   8
+  #define CFRAME_OFS_PREV_DEFAULT 0
+  #define CFRAME_OFS_NRES         40
+  #define CFRAME_OFS_L            16
+  #define CFRAME_OFS_PC           8
 #endif
 
 #define CFRAME_RESUME        1
@@ -107,7 +107,9 @@ enum { LJ_CONT_TAILCALL, LJ_CONT_FFI_CALLBACK }; /* Special continuations. */
 #define cframe_raw(cf)       ((void *)((s64)(cf) & CFRAME_RAWMASK))
 #define cframe_pc_addr(cf)   (void *)(((char *)(cf)) + CFRAME_OFS_PC)
 #define cframe_L_addr(cf)    (void *)(((char *)(cf)) + CFRAME_OFS_L)
-#define cframe_prev(cf)      deref((void **)(((char *)(cf)) + CFRAME_OFS_PREV))
+#define cframe_prev(info, cf)                                                                      \
+  deref((void **)(((char *)(cf)) + ((info)->cframe_prev_offset ? (info)->cframe_prev_offset        \
+                                                               : CFRAME_OFS_PREV_DEFAULT)))
 
 /* Invalid bytecode position. */
 #define NO_BCPOS (~(u32)0)
@@ -197,6 +199,8 @@ static EBPF_INLINE ErrorCode lj_debug_framepc(
       /* Lua function below errfunc/gc/hook: find cframe to get the PC. */
       DEBUG_PRINT("lj: lua function below errfunc/gc/hook");
       // This code is commented out because we haven't figured out how to test it.
+      // Re-enabling this untested search also requires threading LuaJITProcInfo
+      // into lj_debug_framepc so cframe_prev can select the runtime layout.
       //     void *cf = cframe_raw(record->luajitUnwindScratch.L.cframe);
       //     TValue *f = record->luajitUnwindScratch.L.base-1;
       // #define CFRAME_SEARCH_LOOPS 5
@@ -215,7 +219,7 @@ static EBPF_INLINE ErrorCode lj_debug_framepc(
       //         bpf_probe_read_user(&nres, sizeof(s32), nresp);
       //         if (f >= restorestack(record->luajitUnwindScratch.L, -nres))
       //           break;
-      //         cf = cframe_raw(cframe_prev(cf));
+      //         cf = cframe_raw(cframe_prev(info, cf));
       //         if (cf == NULL) {
       //           *pc = NO_BCPOS;
       //           return ERR_OK;
@@ -231,7 +235,7 @@ static EBPF_INLINE ErrorCode lj_debug_framepc(
       //         f = frame_prevl(f, frame_val);
       //       } else {
       //         if (frame_isc(frame_val) || (frame_iscont(frame_val) && frame_iscont_fficb(f)))
-      //           cf = cframe_raw(cframe_prev(cf));
+      //           cf = cframe_raw(cframe_prev(info, cf));
       //         f = frame_prevd(f,frame_val);
       //       }
       //     }
@@ -515,7 +519,7 @@ static EBPF_INLINE ErrorCode walk_luajit_stack(
         cf = record->luajitUnwindState.cframe = record->luajitUnwindScratch.L.cframe;
       }
       if (cf != NULL) {
-        void *prev    = cframe_prev(cframe_raw(cf));
+        void *prev    = cframe_prev(info, cframe_raw(cf));
         done_with_lua = !prev;
 
         unwind_native_frame(

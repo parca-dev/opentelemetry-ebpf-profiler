@@ -20,4 +20,9 @@ import "go.opentelemetry.io/ebpf-profiler/support"
 const (
 	cframeSize    int32 = support.LJCframeSpaceX86
 	cframeSizeJIT int32 = cframeSize + cframeJITTransitionSize
+
+	// Standard LuaJIT and OpenResty store SAVE_CFRAME at rsp+4*8. Tarantool's
+	// x64 VM reserves two extra words and stores the same link at rsp+6*8.
+	defaultCframePrevOffset   uint16 = 4 * 8
+	tarantoolCframePrevOffset uint16 = 6 * 8
 )
