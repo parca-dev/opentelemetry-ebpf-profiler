@@ -13,7 +13,11 @@ package luajit // import "go.opentelemetry.io/ebpf-profiler/interpreter/luajit"
 
 import (
 	"errors"
+	"fmt"
+	"io"
 
+	"go.opentelemetry.io/ebpf-profiler/asm/amd"
+	"go.opentelemetry.io/ebpf-profiler/asm/expression"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	xh "go.opentelemetry.io/ebpf-profiler/x86helpers"
 	"golang.org/x/arch/x86/x86asm"
@@ -48,56 +52,71 @@ which is a dynamic public symbol that should be in all binaries of LuaJIT includ
 	0x0000000000016dae <+46>:    mov    %rbx,%rdi
 	0x0000000000016db1 <+49>:    movq   $0x0,0x170(%rbp)  ; 0x170 is curLOffset
 */
+// findOffsetsFromLuaClose recovers glref (offset of G in L) and curL (offset of
+// cur_L in G) from lua_close. The prologue looks like:
+//
+//	mov 0x10(%rdi), %rbx       ; %rbx = L->glref  (i.e. G)
+//	...
+//	mov %rsi, 0x158(%rbx)      ; G->cur_L = 0  (%rsi previously zeroed via XOR)
+//
+// We drive the asm/amd symbolic interpreter so that whichever register ends up
+// holding G keeps its provenance (Mem8([L + glref])) regardless of MOV chains,
+// 32/64-bit register aliasing, or which register the compiler picks. We then
+// stop at the first memory store of zero whose base register matches that
+// expression and read both offsets off it.
+//
 //nolint:nonamedreturns
 func (x *x86Extractor) findOffsetsFromLuaClose(b []byte) (glref, curL uint64, err error) {
-	b, _ = xh.SkipEndBranch(b) //nolint:errcheck
-	var greg x86asm.Reg
-	var zeroReg x86asm.Reg
-	for len(b) > 0 {
-		var i x86asm.Inst
-		i, err = x86asm.Decode(b, 64)
-		if err != nil {
-			return 0, 0, err
-		}
-		if i.Op == x86asm.XOR {
-			a0, ok1 := i.Args[0].(x86asm.Reg)
-			a1, ok2 := i.Args[1].(x86asm.Reg)
-			if ok1 && ok2 && a0 == a1 {
-				zeroReg = a0
+	it := amd.NewInterpreterWithCode(b)
+	// SysV ABI passes lua_State *L in RDI. The interpreter initializes every
+	// register to a fresh Named expression, so RDI's initial value IS our L.
+	// expression.Match uses pointer equality for *named, so this same instance
+	// is what we'll match against.
+	L := it.Regs.GetX86(x86asm.RDI)
+
+	for {
+		inst, stepErr := it.Step()
+		if stepErr != nil {
+			if errors.Is(stepErr, io.EOF) {
+				break
 			}
+			return 0, 0, fmt.Errorf("scanning lua_close for glref store: %w", stepErr)
 		}
-		if i.Op == x86asm.MOV {
-			if greg == 0 {
-				a0, ok1 := i.Args[0].(x86asm.Reg)
-				a1, ok2 := i.Args[1].(x86asm.Mem)
-				if ok1 && ok2 && a1.Base == x86asm.RDI {
-					greg = a0
-					glref = uint64(a1.Disp)
-				}
-			} else {
-				a0, ok1 := i.Args[0].(x86asm.Mem)
-				if ok1 && sameReg(a0.Base, greg) {
-					imm, ok2 := i.Args[1].(x86asm.Imm)
-					if ok2 && imm == 0 {
-						curL = uint64(a0.Disp)
-						return glref, curL, nil
-					}
-					r1, ok2 := i.Args[1].(x86asm.Reg)
-					if ok2 && sameReg(r1, zeroReg) {
-						curL = uint64(a0.Disp)
-						return glref, curL, nil
-					}
-				}
-				// If Greg is dest error
-				if r0, ok := i.Args[0].(x86asm.Reg); ok && sameReg(r0, greg) {
-					err = errors.New("parse error, register holding G was clobbered")
-					return 0, 0, err
-				}
-			}
+		if inst.Op != x86asm.MOV {
+			continue
 		}
-		b = b[i.Len:]
+		dst, isMem := inst.Args[0].(x86asm.Mem)
+		if !isMem || dst.Base == 0 {
+			continue
+		}
+		if !isZeroOperand(inst.Args[1], &it.Regs) {
+			continue
+		}
+		// The interpreter doesn't model memory stores, so the symbolic value of
+		// the destination's base register is its value as of just before the
+		// store - exactly what we want. We expect G = Mem8([L + glref]).
+		glrefCap := expression.NewImmediateCapture("glref")
+		if it.Regs.GetX86(dst.Base).Match(
+			expression.Mem8(expression.Add(L, glrefCap)),
+		) {
+			return glrefCap.CapturedValue(), uint64(dst.Disp), nil
+		}
 	}
 	return 0, 0, errors.New("find offsets from lua_close failed")
+}
+
+// isZeroOperand reports whether arg currently evaluates to zero - either as a
+// literal immediate or as a register the symbolic interpreter has determined
+// holds zero (typically from xor reg, reg).
+func isZeroOperand(arg x86asm.Arg, regs *amd.Registers) bool {
+	switch v := arg.(type) {
+	case x86asm.Imm:
+		return v == 0
+	case x86asm.Reg:
+		cap := expression.NewImmediateCapture("zero")
+		return regs.GetX86(v).Match(cap) && cap.CapturedValue() == 0
+	}
+	return false
 }
 
 // This is different in most builds and we need to get it from stripped binaries.
@@ -239,41 +258,39 @@ func (x *x86Extractor) findG2DispatchOffsetFromLjDispatchUpdate(b []byte) (uint6
 //
 //nolint:lll
 func (x *x86Extractor) findLjDispatchUpdateAddr(b []byte, addr uint64) (uint64, error) {
-	b, ip := xh.SkipEndBranch(b)
-	var Lreg x86asm.Reg
-	rdiHasG := false
-	for len(b) > 0 {
-		i, err := x86asm.Decode(b, 64)
-		if err != nil {
-			return 0, err
-		}
-		if i.Op == x86asm.MOV {
-			if a1, ok1 := i.Args[1].(x86asm.Reg); ok1 && a1 == x86asm.RDI {
-				if a0, ok0 := i.Args[0].(x86asm.Reg); ok0 {
-					Lreg = a0
-				}
-			}
-			if a0, ok := i.Args[0].(x86asm.Reg); ok && a0 == x86asm.RDI {
-				if a1, ok1 := i.Args[1].(x86asm.Mem); ok1 {
-					// Look for: movq   0x10(%rbx), %rdi
-					if a1.Base == Lreg && a1.Disp == 0x10 {
-						rdiHasG = true
-					}
-				}
-			}
-		}
+	it := amd.NewInterpreterWithCode(b)
+	it.CodeAddress = expression.Imm(addr)
+	// L is initial RDI (SysV first arg). lj_dispatch_update's first arg is G,
+	// reached via L->glref at offset 0x10. We don't care which register the
+	// compiler parks L in - symbolic tracking handles the chain.
+	L := it.Regs.GetX86(x86asm.RDI)
+	G := expression.Mem8(expression.Add(L, expression.Imm(0x10)))
 
-		if i.Op == x86asm.CALL && rdiHasG {
-			offset := int64(i.Args[0].(x86asm.Rel))
-			callAddr := int64(addr) + ip + offset + int64(i.Len)
-			// TODO: make sure callAddr is within .text bounds?
-			if callAddr < 0 {
-				return 0, errors.New("invalid call address")
+	for {
+		inst, err := it.Step()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
 			}
-			return uint64(callAddr), nil
+			return 0, fmt.Errorf("scanning function body: %w", err)
 		}
-		ip += int64(i.Len)
-		b = b[i.Len:]
+		if inst.Op != x86asm.CALL {
+			continue
+		}
+		if !it.Regs.GetX86(x86asm.RDI).Match(G) {
+			continue
+		}
+		rel, ok := inst.Args[0].(x86asm.Rel)
+		if !ok {
+			continue
+		}
+		// it.PC() is the offset past the CALL within the interpreter's bytes,
+		// which equals the offset in the caller's bytes since we started at 0.
+		callAddr := int64(addr) + int64(it.PC()) + int64(rel)
+		if callAddr < 0 {
+			return 0, errors.New("invalid call address")
+		}
+		return uint64(callAddr), nil
 	}
 	return 0, errors.New("lj_dispatch_update addr not found")
 }
@@ -291,41 +308,43 @@ func (x *x86Extractor) findLjDispatchUpdateAddr(b []byte, addr uint64) (uint64, 
 // libluajit-5.1.so[0x6379f] <+31>: jbe    0x637ae        ; <+46> at lib_jit.c:304:1
 // ----------- 0x430 is the G to J->traces offset
 // libluajit-5.1.so[0x637a1] <+33>: movq   0x430(%rdx), %rdx
+//
+// Some builds apply an ADD/SUB constant to the register holding G before the
+// final load; the symbolic interpreter folds those into the address expression
+// for free, so the captured displacement is the true G->traces offset.
 func (x *x86Extractor) findG2TracesOffsetFromChecktrace(b []byte) (uint64, error) {
-	b, _ = xh.SkipEndBranch(b) //nolint:errcheck
-	var Greg x86asm.Reg
-	var offset int64
-	for len(b) > 0 {
-		i, err := x86asm.Decode(b, 64)
-		if err != nil {
-			return 0, err
-		}
-		switch i.Op {
-		case x86asm.MOV:
-			a1, ok := i.Args[1].(x86asm.Mem)
-			if ok {
-				// glref offset is 0x10
-				if a1.Disp == 0x10 {
-					Greg = i.Args[0].(x86asm.Reg)
-				} else if a1.Base == Greg {
-					return uint64(a1.Disp + offset), nil
-				}
-			}
-		case x86asm.SUB, x86asm.ADD:
-			r, ok := i.Args[0].(x86asm.Reg)
-			if ok && r == Greg {
-				delta, ok := i.Args[1].(x86asm.Imm)
-				if ok {
-					if i.Op == x86asm.SUB {
-						offset -= int64(delta)
-					} else {
-						offset += int64(delta)
-					}
-				}
-			}
+	it := amd.NewInterpreterWithCode(b)
+	// L is initial RDI; G is L->glref. glref is hard-wired at 0x10 in the
+	// LJ_GC64 layout (findOffsetsFromLuaClose enforces this assumption
+	// before extractOffsets gets here).
+	L := it.Regs.GetX86(x86asm.RDI)
+	G := expression.Mem8(expression.Add(L, expression.Imm(0x10)))
+	tracesCap := expression.NewImmediateCapture("g2traces")
+	pattern := expression.Mem8(expression.Add(G, tracesCap))
 
+	for {
+		inst, err := it.Step()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return 0, fmt.Errorf("scanning jit_checktrace for G->traces load: %w", err)
 		}
-		b = b[i.Len:]
+		// We're looking for a load from [G + disp] into a register; the
+		// destination's new symbolic value is what we match against.
+		if inst.Op != x86asm.MOV {
+			continue
+		}
+		dstReg, dstIsReg := inst.Args[0].(x86asm.Reg)
+		if !dstIsReg {
+			continue
+		}
+		if _, srcIsMem := inst.Args[1].(x86asm.Mem); !srcIsMem {
+			continue
+		}
+		if it.Regs.GetX86(dstReg).Match(pattern) {
+			return tracesCap.CapturedValue(), nil
+		}
 	}
 	return 0, errors.New("offset not found")
 }
@@ -382,37 +401,41 @@ func (x *x86Extractor) callExists(b []byte, baseAddr, targetCall int64) (bool, e
 //
 //nolint:lll
 func (x *x86Extractor) find2ndArgTo2ndPushClosureCall(b []byte, baseAddr, targetCall int64) (uint64, error) {
-	var leaRsi int64
-	calls := 2
-	b, ip := xh.SkipEndBranch(b)
-	for len(b) > 0 {
-		i, err := x86asm.Decode(b, 64)
+	it := amd.NewInterpreterWithCode(b)
+	it.CodeAddress = expression.Imm(uint64(baseAddr))
+	callsLeft := 2
+
+	for {
+		inst, err := it.Step()
 		if err != nil {
-			return 0, err
-		}
-		if i.Op == x86asm.LEA {
-			a0, ok1 := i.Args[0].(x86asm.Reg)
-			a1, ok2 := i.Args[1].(x86asm.Mem)
-			if ok1 && ok2 {
-				if a0 == x86asm.RSI && a1.Base == x86asm.RIP {
-					leaRsi = calcRipRelativeAddr(a1, baseAddr, ip+int64(i.Len))
-				}
+			if errors.Is(err, io.EOF) {
+				break
 			}
+			return 0, fmt.Errorf("scanning function body: %w", err)
 		}
-		if i.Op == x86asm.CALL {
-			a0, ok := i.Args[0].(x86asm.Rel)
-			if ok {
-				callAddr := baseAddr + ip + int64(i.Len) + int64(a0)
-				if callAddr == targetCall {
-					calls--
-					if calls == 0 {
-						return uint64(leaRsi), nil
-					}
-				}
-			}
+		if inst.Op != x86asm.CALL {
+			continue
 		}
-		ip += int64(i.Len)
-		b = b[i.Len:]
+		rel, ok := inst.Args[0].(x86asm.Rel)
+		if !ok {
+			continue
+		}
+		if baseAddr+int64(it.PC())+int64(rel) != targetCall {
+			continue
+		}
+		callsLeft--
+		if callsLeft > 0 {
+			continue
+		}
+		// Each LEA $disp(%rip), %rsi the interpreter has executed sets RSI to
+		// a concrete absolute address (CodeAddress + pc_after_lea + disp).
+		// Read whatever RSI currently holds; if the immediate-preceding LEA
+		// canonicalized to an Imm it will match.
+		rsiCap := expression.NewImmediateCapture("rsi")
+		if !it.Regs.GetX86(x86asm.RSI).Match(rsiCap) {
+			return 0, errors.New("RSI is not a concrete address at the 2nd matching call")
+		}
+		return rsiCap.CapturedValue(), nil
 	}
 	return 0, errors.New("failed to find rip relative lea instruction stored in rsi")
 }
@@ -468,8 +491,6 @@ func skipCallsAABA(b []byte, ip, baseAddr int64) ([]byte, int64, error) {
 // 6d973:	48 8d 35 1c a2 00 00 	lea    0xa21c(%rip),%rsi     # 77b96 <lj_lib_init_debug+0x236>
 // 6d97a:	e8 a1 28 ff ff       	call   60220 <lj_lib_prereg>
 func (x *x86Extractor) find3rdArgToLibPreregCall(b []byte, baseAddr int64) (uint64, error) {
-	var rdxAddr int64
-	calls := 3
 	b, ip := xh.SkipEndBranch(b)
 	// Skip the lua_push* call sequence (and all the preceding calls which varies depending on
 	// inlining).
@@ -488,40 +509,39 @@ func (x *x86Extractor) find3rdArgToLibPreregCall(b []byte, baseAddr int64) (uint
 	// libluajit-5.1.so[0x700dd] <+189>: movl   $0x12, %edx
 	// libluajit-5.1.so[0x700e2] <+194>: leaq   0x9b0a(%rip), %rsi
 	// libluajit-5.1.so[0x700e9] <+201>: callq  0x9af0         ; symbol stub for: lua_pushlstring
-	var err error
-	b, ip, err = skipCallsAABA(b, ip, baseAddr)
+	b, ip, err := skipCallsAABA(b, ip, baseAddr)
 	if err != nil {
 		return 0, err
 	}
-	for len(b) > 0 {
-		i, err := x86asm.Decode(b, 64)
+
+	it := amd.NewInterpreterWithCode(b)
+	it.CodeAddress = expression.Imm(uint64(baseAddr + ip))
+	callsLeft := 3
+
+	for {
+		inst, err := it.Step()
 		if err != nil {
-			return 0, err
-		}
-		// Some compilers will use MOV instead of LEA
-		if i.Op == x86asm.MOV {
-			a0, ok1 := i.Args[0].(x86asm.Reg)
-			if ok1 && a0 == x86asm.EDX {
-				rdxAddr = int64(i.Args[1].(x86asm.Imm))
+			if errors.Is(err, io.EOF) {
+				break
 			}
+			return 0, fmt.Errorf("scanning function body: %w", err)
 		}
-		if i.Op == x86asm.LEA {
-			a0, ok1 := i.Args[0].(x86asm.Reg)
-			a1, ok2 := i.Args[1].(x86asm.Mem)
-			if ok1 && ok2 {
-				if a0 == x86asm.RDX && a1.Base == x86asm.RIP {
-					rdxAddr = calcRipRelativeAddr(a1, baseAddr, ip+int64(i.Len))
-				}
-			}
+		if inst.Op != x86asm.CALL {
+			continue
 		}
-		if i.Op == x86asm.CALL {
-			calls--
-			if calls == 0 {
-				return uint64(rdxAddr), nil
-			}
+		callsLeft--
+		if callsLeft > 0 {
+			continue
 		}
-		ip += int64(i.Len)
-		b = b[i.Len:]
+		// At the 3rd call after AABA, RDX should hold the luaopen_jit_util
+		// address - either via `lea $rip-rel, %rdx` (canonicalized to a
+		// concrete Imm by the interpreter) or `mov $imm, %edx` (some
+		// compilers).
+		rdxCap := expression.NewImmediateCapture("rdx")
+		if !it.Regs.GetX86(x86asm.RDX).Match(rdxCap) {
+			return 0, errors.New("RDX is not a concrete value at the 3rd post-AABA call")
+		}
+		return rdxCap.CapturedValue(), nil
 	}
 	return 0, errors.New("failed to find 3rd arg to lj_lib_prereg call")
 }
@@ -537,64 +557,20 @@ func (x *x86Extractor) find3rdArgToLibPreregCall(b []byte, baseAddr int64) (uint
 // bbbe:	48 83 c4 08          	add    $0x8,%rsp
 // bbc2:	c3                   	ret
 func (x *x86Extractor) find4thArgToLibRegCall(b []byte, baseAddr int64) (int64, error) {
-	var ip int64
-	b, ip = xh.SkipEndBranch(b)
-	for len(b) > 0 {
-		i, err := x86asm.Decode(b, 64)
-		if err != nil {
-			return 0, err
-		}
-		if i.Op == x86asm.LEA {
-			a0, ok1 := i.Args[0].(x86asm.Reg)
-			a1, ok2 := i.Args[1].(x86asm.Mem)
-			if ok1 && ok2 {
-				// RCX is 4th arg
-				if a0 == x86asm.RCX && a1.Base == x86asm.RIP {
-					return calcRipRelativeAddr(a1, baseAddr, ip+int64(i.Len)), nil
-				}
-			}
-		}
-		if i.Op == x86asm.MOV {
-			a0, ok1 := i.Args[0].(x86asm.Reg)
-			a1, ok2 := i.Args[1].(x86asm.Imm)
-			if ok1 && ok2 && a0 == x86asm.ECX {
-				return int64(a1), nil
-			}
-		}
-		ip += int64(i.Len)
-		b = b[i.Len:]
+	it := amd.NewInterpreterWithCode(b)
+	it.CodeAddress = expression.Imm(uint64(baseAddr))
+	// luaopen_jit_util's body is: set up call args (RCX via either
+	// `lea $rip-rel, %rcx` or `mov $imm, %ecx`), then call lj_lib_register.
+	// Step until that CALL, then read RCX symbolically.
+	_, err := it.LoopWithBreak(func(op x86asm.Inst) bool {
+		return op.Op == x86asm.CALL
+	})
+	if err != nil && err != io.EOF {
+		return 0, err
 	}
-	return 0, errors.New("failed to find 4th arg to lj_reg call")
-}
-
-func calcRipRelativeAddr(a1 x86asm.Mem, baseAddr, ip int64) int64 {
-	// Disp is an int64 but its not set properly and negative numbers
-	// are 32 bit.  TODO: This is a bug that should be created/looked up.
-	disp := int32(a1.Disp)
-	return baseAddr + ip + int64(disp)
-}
-
-// If we're dealing with 32bit values compilers will use R or E prefix
-// interchangeably (E refs are just zero padded).
-func sameReg(r1, r2 x86asm.Reg) bool {
-	if r1 == r2 {
-		return true
+	rcxCap := expression.NewImmediateCapture("rcx")
+	if !it.Regs.GetX86(x86asm.RCX).Match(rcxCap) {
+		return 0, errors.New("failed to find 4th arg to lj_reg call")
 	}
-	f := func(r1, r2 x86asm.Reg) bool {
-		switch r1 {
-		case x86asm.EAX:
-			return r2 == x86asm.RAX
-		case x86asm.ECX:
-			return r2 == x86asm.RCX
-		case x86asm.EDX:
-			return r2 == x86asm.RDX
-		case x86asm.EBX:
-			return r2 == x86asm.RBX
-		case x86asm.ESI:
-			return r2 == x86asm.RSI
-		default:
-			return false
-		}
-	}
-	return f(r1, r2) || f(r2, r1)
+	return int64(rcxCap.CapturedValue()), nil
 }

@@ -173,6 +173,44 @@ func TestMoveSignExtend(t *testing.T) {
 	require.True(t, i.Regs.Get(RAX).Match(pattern))
 }
 
+func TestSubImmediate(t *testing.T) {
+	// 0000 	48 BA 00 10 00 00 00 00 00 00 	mov rdx, 0x1000
+	// 000a 	48 83 EA 0C 	sub rdx, 0xC
+	// 000e 	48 8B 92 3C 04 00 00 	mov rdx, qword ptr [rdx + 0x43C]
+	//
+	// The CPU effectively executes mov rdx, [0x1000 - 0xc + 0x43c] = [0x1430].
+	// Symbolically we expect: prev + (-0xc) + 0x43c collapses to prev + 0x430,
+	// so RDX after the third instruction is Mem8(Imm(0x1000 + 0x430)) = Mem8(Imm(0x1430)).
+	it := NewInterpreterWithCode([]byte{
+		0x48, 0xba, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x48, 0x83, 0xea, 0x0c,
+		0x48, 0x8b, 0x92, 0x3c, 0x04, 0x00, 0x00,
+	})
+	_, err := it.Loop()
+	require.ErrorIs(t, err, io.EOF)
+	assertEval(t, it.Regs.Get(RDX), expression.Mem8(expression.Imm(0x1430)))
+}
+
+func TestSubRegister(t *testing.T) {
+	// 0000 	48 B8 00 10 00 00 00 00 00 00 	mov rax, 0x1000
+	// 000a 	48 B9 0C 00 00 00 00 00 00 00 	mov rcx, 0xc
+	// 0014 	48 29 C8 	sub rax, rcx
+	// 0017 	48 8B 80 3C 04 00 00 	mov rax, qword ptr [rax + 0x43c]
+	//
+	// The register being subtracted (%rcx) holds a known immediate, so -1*rcx
+	// folds and rax collapses to [0x1000 - 0xc + 0x43c] = [0x1430] - same as
+	// the imm form, exercising the SUB Reg path.
+	it := NewInterpreterWithCode([]byte{
+		0x48, 0xb8, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x48, 0xb9, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x48, 0x29, 0xc8,
+		0x48, 0x8b, 0x80, 0x3c, 0x04, 0x00, 0x00,
+	})
+	_, err := it.Loop()
+	require.ErrorIs(t, err, io.EOF)
+	assertEval(t, it.Regs.Get(RAX), expression.Mem8(expression.Imm(0x1430)))
+}
+
 func TestRIPRelativeAddressing(t *testing.T) {
 	// Test case: mov 0x10512121(%rip),%rcx
 	code := []byte{
@@ -217,4 +255,56 @@ func TestRIPRelativeAddressing(t *testing.T) {
 	expectedExpr := expression.ZeroExtend(expression.Mem(expectedAddr, 8), 64)
 
 	assertEval(t, rcxVal, expectedExpr)
+}
+
+func TestDisplacementSignExtension(t *testing.T) {
+	// x86asm zero-extends 32-bit displacements, so immFromDisp must recover the
+	// sign for backward references while leaving a full 64-bit moffs address
+	// intact. Cover both immFromDisp call sites (MemArg and the RIP-relative
+	// MOV special case) plus the moffs64 form.
+	mem8 := func(addr uint64) expression.Expression {
+		return expression.ZeroExtend(expression.Mem(expression.Imm(addr), 8), 64)
+	}
+	for _, tc := range []struct {
+		name string
+		code []byte
+		base uint64
+		reg  x86asm.Reg
+		want expression.Expression
+	}{
+		{
+			// lea -0x1d13(%rip),%rdx at 0x6d96c -> 0x6bc60 (MemArg path).
+			name: "lea-negative-rip",
+			code: []byte{0x48, 0x8d, 0x15, 0xed, 0xe2, 0xff, 0xff},
+			base: 0x6d96c,
+			reg:  x86asm.RDX,
+			want: expression.Imm(0x6bc60),
+		},
+		{
+			// mov -0x1234(%rip),%rax at 0x10000: RIP=0x10007 -> [0xedd3]
+			// (RIP-relative MOV path, not MemArg).
+			name: "mov-negative-rip",
+			code: []byte{0x48, 0x8b, 0x05, 0xcc, 0xed, 0xff, 0xff},
+			base: 0x10000,
+			reg:  x86asm.RAX,
+			want: mem8(0xedd3),
+		},
+		{
+			// movabs rax, [0x1122334455667788]: the moffs64 form carries a full
+			// 64-bit address that must not be truncated to 32 bits.
+			name: "moffs64-full-width",
+			code: []byte{0x48, 0xa1, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11},
+			base: 0,
+			reg:  x86asm.RAX,
+			want: mem8(0x1122334455667788),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			it := NewInterpreterWithCode(tc.code)
+			it.CodeAddress = expression.Imm(tc.base)
+			_, err := it.Step()
+			require.NoError(t, err)
+			assertEval(t, it.Regs.GetX86(tc.reg), tc.want)
+		})
+	}
 }
