@@ -19,5 +19,5 @@ import "go.opentelemetry.io/ebpf-profiler/support"
 
 const (
 	cframeSize    int32 = support.LJCframeSpaceX86
-	cframeSizeJIT int32 = cframeSize + 16
+	cframeSizeJIT int32 = cframeSize + cframeJITTransitionSize
 )

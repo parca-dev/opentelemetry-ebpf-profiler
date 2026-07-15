@@ -242,25 +242,37 @@ func (x *x86Extractor) findG2DispatchOffsetFromLjDispatchUpdate(b []byte) (uint6
 // cur_L to distinguish it from other zeroed fields.
 func (x *x86Extractor) findG2JitBaseFromExitHandler(
 	b []byte, g2dispatch, curLOffset uint64) (uint64, error) {
-	b, _ = xh.SkipEndBranch(b) //nolint:errcheck
-	for len(b) > 0 {
-		i, err := x86asm.Decode(b, 64)
+	it := amd.NewInterpreterWithCode(b)
+	// LuaJIT dedicates R14 to DISPATCH on x86-64. Retain the interpreter's
+	// initial symbolic value so stores through a clobbered R14 cannot match.
+	dispatch := it.Regs.GetX86(x86asm.R14)
+
+	for {
+		inst, err := it.Step()
 		if err != nil {
-			return 0, err
-		}
-		if i.Op == x86asm.MOV {
-			mem, ok0 := i.Args[0].(x86asm.Mem)
-			imm, ok1 := i.Args[1].(x86asm.Imm)
-			if ok0 && ok1 && imm == 0 && mem.Base == x86asm.R14 && mem.Index == 0 {
-				// x86asm leaves negative disp32 values zero-extended in its
-				// int64 field, so sign-extend before adding it to g2dispatch.
-				cand := g2dispatch + uint64(int64(int32(mem.Disp)))
-				if cand > curLOffset && cand <= curLOffset+0x18 {
-					return cand, nil
-				}
+			if errors.Is(err, io.EOF) {
+				break
 			}
+			return 0, fmt.Errorf("scanning lj_vm_exit_handler for jit_base store: %w", err)
 		}
-		b = b[i.Len:]
+		if inst.Op != x86asm.MOV || !isZeroOperand(inst.Args[1], &it.Regs) {
+			continue
+		}
+		dst, ok := inst.Args[0].(x86asm.Mem)
+		if !ok || dst.Index != 0 {
+			continue
+		}
+
+		// asm/amd sign-extends disp32 and preserves R14's provenance, so match
+		// the destination as DISPATCH+disp rather than repeating decoder logic.
+		disp := expression.NewImmediateCapture("jit_base displacement")
+		if !it.MemArg(dst).Match(expression.Add(dispatch, disp)) {
+			continue
+		}
+		candidate := g2dispatch + disp.CapturedValue()
+		if candidate > curLOffset && candidate <= curLOffset+maxJitBaseOffsetFromCurL {
+			return candidate, nil
+		}
 	}
 	return 0, nil
 }

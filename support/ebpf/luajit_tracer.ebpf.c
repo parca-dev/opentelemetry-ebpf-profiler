@@ -372,8 +372,8 @@ static EBPF_INLINE ErrorCode lj_prev_frame(PerCPURecord *record, TValue frame_va
 static EBPF_INLINE ErrorCode
 unwind_native_frame(const LuaJITProcInfo *info, UnwindState *state, bool is_jit)
 {
-  /* Interpreter frames unwind naturally, we need to poke sp/pc for JIT frames */
-  /* so we need to call this for the native unwinder to continue over them. */
+  /* Both interpreter and JIT frames need their C frame stepped over before */
+  /* handing back to the native unwinder. */
   /* https://github.com/openresty/luajit2/blob/7952882d/src/lj_frame.h#L178 */
   if (is_jit) {
     u32 spadjust = (u32)state->text_section_id;
@@ -679,6 +679,11 @@ find_context(struct pt_regs *ctx, PerCPURecord *record, const LuaJITProcInfo *in
     if (bpf_probe_read_user(
           &jit_base, sizeof(jit_base), (void *)((char *)G_ptr + info->g2jitbase))) {
       DEBUG_PRINT("lj: failed to read G->jit_base");
+      increment_metric(metricID_UnwindLuaJITErrNoContext);
+      return ERR_LUAJIT_READ_LUA_CONTEXT;
+    }
+    if (jit_base == NULL) {
+      DEBUG_PRINT("lj: G->jit_base is NULL");
       increment_metric(metricID_UnwindLuaJITErrNoContext);
       return ERR_LUAJIT_READ_LUA_CONTEXT;
     }

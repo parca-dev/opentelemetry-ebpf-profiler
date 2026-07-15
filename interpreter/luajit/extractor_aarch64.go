@@ -137,6 +137,7 @@ func (a *armExtractor) findG2DispatchOffsetFromLjDispatchUpdate(b []byte) (uint6
 // disambiguate from cur_L itself / any other zeroed field.
 func (a *armExtractor) findG2JitBaseFromExitHandler(
 	b []byte, _, curLOffset uint64) (uint64, error) {
+	const globalState = arm64asm.RegSP(arm64asm.X22)
 	for ; len(b) >= 4; b = b[4:] {
 		i, err := arm64asm.Decode(b)
 		if err != nil {
@@ -146,9 +147,10 @@ func (a *armExtractor) findG2JitBaseFromExitHandler(
 		}
 		if i.Op == arm64asm.STR {
 			a1, ok := i.Args[1].(arm64asm.MemImmediate)
-			if ok && i.Args[0] == arm64asm.XZR {
+			if ok && i.Args[0] == arm64asm.XZR &&
+				a1.Base == globalState && a1.Mode == arm64asm.AddrOffset {
 				disp := getImm(a1)
-				if disp > curLOffset && disp <= curLOffset+0x18 {
+				if disp > curLOffset && disp <= curLOffset+maxJitBaseOffsetFromCurL {
 					return disp, nil
 				}
 			}

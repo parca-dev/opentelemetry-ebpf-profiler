@@ -79,6 +79,8 @@ func TestExtractInterpreterBoundsAnchor(t *testing.T) {
 		anchored, err := extractInterpreterBounds(deltas, armParam, asmBegin)
 		require.NoError(t, err)
 		require.Equal(t, heuristic, anchored)
+		require.Equal(t, asmBegin, anchored.Start)
+		require.Equal(t, asmBegin+bigGap, anchored.End)
 	})
 
 	t.Run("vm-asm-delta-starts-below-symbol", func(t *testing.T) {
@@ -101,9 +103,17 @@ func TestExtractInterpreterBoundsAnchor(t *testing.T) {
 			mk(asmBegin+0x10000, support.UnwindRegSp, x86Param),
 			mk(asmBegin+0x10000+bigGap, 0, 0),
 		}
+		heuristic, err := extractInterpreterBounds(deltas, x86Param, 0)
+		require.NoError(t, err)
 		anchored, err := extractInterpreterBounds(deltas, x86Param, asmBegin)
 		require.NoError(t, err)
 		require.Equal(t, asmBegin+0x10000, anchored.Start)
+		require.Equal(t, heuristic, anchored)
+	})
+
+	t.Run("empty-deltas", func(t *testing.T) {
+		_, err := extractInterpreterBounds(nil, x86Param, asmBegin)
+		require.Error(t, err)
 	})
 }
 
@@ -148,6 +158,151 @@ func TestInterpCframeUnwind(t *testing.T) {
 		}
 		_, _, ok := interpCframeUnwind(deltas, 0x2000)
 		require.False(t, ok)
+	})
+
+	t.Run("unsupported-base-register", func(t *testing.T) {
+		deltas := sdtypes.StackDeltaArray{
+			mk(0x2000, 0, 96),
+			mk(0x3000, 0, 0),
+		}
+		_, _, ok := interpCframeUnwind(deltas, 0x2000)
+		require.False(t, ok)
+	})
+
+	t.Run("cfa-offset-overflows-uint16", func(t *testing.T) {
+		deltas := sdtypes.StackDeltaArray{
+			mk(0x2000, support.UnwindRegSp, 70000),
+			mk(0x3000, 0, 0),
+		}
+		_, _, ok := interpCframeUnwind(deltas, 0x2000)
+		require.False(t, ok)
+	})
+
+	t.Run("interpreter-start-not-found", func(t *testing.T) {
+		deltas := sdtypes.StackDeltaArray{
+			mk(0x1000, support.UnwindRegSp, 96),
+			mk(0x2000, 0, 0),
+		}
+		_, _, ok := interpCframeUnwind(deltas, 0x3000)
+		require.False(t, ok)
+	})
+}
+
+func TestDeriveJITCframeSize(t *testing.T) {
+	t.Run("extraction-unavailable", func(t *testing.T) {
+		require.Equal(t, uint16(cframeSizeJIT), deriveJITCframeSize(0, 0))
+	})
+	t.Run("stack-pointer-based", func(t *testing.T) {
+		require.Equal(t, uint16(112), deriveJITCframeSize(96, 0))
+	})
+	t.Run("frame-pointer-based", func(t *testing.T) {
+		require.Equal(t, uint16(cframeSizeJIT), deriveJITCframeSize(16, 1))
+	})
+	t.Run("transition-would-overflow", func(t *testing.T) {
+		require.Equal(t, uint16(cframeSizeJIT), deriveJITCframeSize(0xffff, 0))
+	})
+}
+
+func TestX86FindG2JitBaseFromExitHandler(t *testing.T) {
+	// movq $0, -0xe80(%r14): 0x1070 - 0xe80 = 0x1f0.
+	code := []byte{0x49, 0xc7, 0x86, 0x80, 0xf1, 0xff, 0xff, 0, 0, 0, 0}
+	x := x86Extractor{}
+
+	got, err := x.findG2JitBaseFromExitHandler(code, 0x1070, 0x1e0)
+	require.NoError(t, err)
+	require.Equal(t, uint64(0x1f0), got)
+
+	t.Run("realistic-instruction-sequence", func(t *testing.T) {
+		sequence := []byte{
+			// movq -0xe90(r14), rbp; movq -0xe80(r14), rdx
+			0x49, 0x8b, 0xae, 0x70, 0xf1, 0xff, 0xff,
+			0x49, 0x8b, 0x96, 0x80, 0xf1, 0xff, 0xff,
+		}
+		sequence = append(sequence, code...)
+		got, err := x.findG2JitBaseFromExitHandler(sequence, 0x1070, 0x1e0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(0x1f0), got)
+	})
+
+	t.Run("clobbered-dispatch-register", func(t *testing.T) {
+		clobbered := append([]byte{0x49, 0x89, 0xc6}, code...) // movq rax, r14
+		got, err := x.findG2JitBaseFromExitHandler(clobbered, 0x1070, 0x1e0)
+		require.NoError(t, err)
+		require.Zero(t, got)
+	})
+
+	t.Run("zero-register-store", func(t *testing.T) {
+		// xor eax, eax; movq rax, -0xe80(r14)
+		zeroRegister := []byte{
+			0x31, 0xc0,
+			0x49, 0x89, 0x86, 0x80, 0xf1, 0xff, 0xff,
+		}
+		got, err := x.findG2JitBaseFromExitHandler(zeroRegister, 0x1070, 0x1e0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(0x1f0), got)
+	})
+
+	t.Run("nonzero-store", func(t *testing.T) {
+		nonzero := append([]byte(nil), code...)
+		nonzero[len(nonzero)-4] = 1
+		got, err := x.findG2JitBaseFromExitHandler(nonzero, 0x1070, 0x1e0)
+		require.NoError(t, err)
+		require.Zero(t, got)
+	})
+
+	t.Run("outside-cur-L-window", func(t *testing.T) {
+		got, err := x.findG2JitBaseFromExitHandler(code, 0x1070, 0x100)
+		require.NoError(t, err)
+		require.Zero(t, got)
+	})
+
+	t.Run("empty", func(t *testing.T) {
+		got, err := x.findG2JitBaseFromExitHandler(nil, 0x1070, 0x1e0)
+		require.NoError(t, err)
+		require.Zero(t, got)
+	})
+}
+
+func TestARM64FindG2JitBaseFromExitHandler(t *testing.T) {
+	// str xzr, [x22, #0x1f0]
+	code := []byte{0xdf, 0xfa, 0x00, 0xf9}
+	a := armExtractor{}
+
+	got, err := a.findG2JitBaseFromExitHandler(code, 0, 0x1e0)
+	require.NoError(t, err)
+	require.Equal(t, uint64(0x1f0), got)
+
+	t.Run("realistic-instruction-sequence", func(t *testing.T) {
+		sequence := []byte{
+			0xc0, 0xf2, 0x40, 0xf9, // ldr x0, [x22, #0x1e0]
+			0xc1, 0xfa, 0x40, 0xf9, // ldr x1, [x22, #0x1f0]
+		}
+		sequence = append(sequence, code...)
+		got, err := a.findG2JitBaseFromExitHandler(sequence, 0, 0x1e0)
+		require.NoError(t, err)
+		require.Equal(t, uint64(0x1f0), got)
+	})
+
+	t.Run("wrong-base-register", func(t *testing.T) {
+		// str xzr, [x0, #0x1f0]
+		wrongBase := []byte{0x1f, 0xf8, 0x00, 0xf9}
+		got, err := a.findG2JitBaseFromExitHandler(wrongBase, 0, 0x1e0)
+		require.NoError(t, err)
+		require.Zero(t, got)
+	})
+
+	t.Run("nonzero-source-register", func(t *testing.T) {
+		nonzero := append([]byte(nil), code...)
+		nonzero[0] = 0xc0 // str x0, [x22, #0x1f0]
+		got, err := a.findG2JitBaseFromExitHandler(nonzero, 0, 0x1e0)
+		require.NoError(t, err)
+		require.Zero(t, got)
+	})
+
+	t.Run("outside-cur-L-window", func(t *testing.T) {
+		got, err := a.findG2JitBaseFromExitHandler(code, 0, 0x100)
+		require.NoError(t, err)
+		require.Zero(t, got)
 	})
 }
 
@@ -195,6 +350,7 @@ func TestOffsets(t *testing.T) {
 
 				ef, err := pfelf.Open(target)
 				require.NoError(t, err)
+				foundSymbols := scanSymbols(ef)
 
 				// create stacktrace deltas to make sure we can find interp bounds
 				// some ugliness so we can run arm and x86 unit tests on both platforms.
@@ -203,9 +359,17 @@ func TestOffsets(t *testing.T) {
 
 				interp, err := extractInterpreterBounds(intervals.Deltas, param, 0)
 				require.NoError(t, err)
+				interpParam, interpFP, ok := interpCframeUnwind(intervals.Deltas, interp.Start)
+				require.True(t, ok)
+				if interpFP == 1 {
+					require.Equal(t, uint16(16), interpParam)
+				} else {
+					require.LessOrEqual(t, param, int32(0xffff))
+					require.Equal(t, uint16(param), interpParam)
+				}
 
 				ljd := luajitData{}
-				err = extractOffsets(ef, &ljd, interp)
+				err = extractOffsets(ef, &ljd, interp, foundSymbols)
 
 				if tc.fail {
 					//nolint:lll
@@ -229,10 +393,13 @@ func TestOffsets(t *testing.T) {
 				// immediately after cur_L on both architectures.
 				require.Equal(t, ljd.currentLOffset+8, ljd.g2jitbase,
 					"openresty jit_base must be cur_L+8")
+				_, hasExitHandler := foundSymbols[libpf.SymbolName("lj_vm_exit_handler")]
+				require.Equal(t, hasExitHandler, ljd.jitBaseExtracted,
+					"jit_base extraction status must match exit-handler availability")
 
 				// On symbolized builds, anchoring at lj_vm_asm_begin must produce
 				// the same extracted offsets as the heuristic on both architectures.
-				if sym, ok := scanSymbols(ef)[libpf.SymbolName("lj_vm_asm_begin")]; ok {
+				if sym, ok := foundSymbols[libpf.SymbolName("lj_vm_asm_begin")]; ok {
 					anchored, anchorErr := extractInterpreterBounds(
 						intervals.Deltas, param, uint64(sym.Address))
 					require.NoError(t, anchorErr)
@@ -240,14 +407,14 @@ func TestOffsets(t *testing.T) {
 					require.GreaterOrEqual(t, anchored.Start, interp.Start)
 
 					anchoredData := luajitData{}
-					require.NoError(t, extractOffsets(ef, &anchoredData, anchored))
+					require.NoError(t, extractOffsets(ef, &anchoredData, anchored, foundSymbols))
 					require.Equal(t, ljd.currentLOffset, anchoredData.currentLOffset)
 					require.Equal(t, ljd.g2Traces, anchoredData.g2Traces)
 					require.Equal(t, ljd.g2Dispatch, anchoredData.g2Dispatch)
 				}
 
 				od := offsetData{}
-				err = od.init(ef)
+				err = od.init(ef, foundSymbols)
 				require.NoError(t, err)
 
 				// Test that our chicanery for finding traceinfo checks out on symbolized builds.
@@ -632,6 +799,7 @@ func TestFiles(t *testing.T) {
 		if err != nil {
 			continue
 		}
+		foundSymbols := scanSymbols(ef)
 		ljd := luajitData{}
 
 		// create stacktrace deltas to make sure we can find interp bounds
@@ -642,14 +810,15 @@ func TestFiles(t *testing.T) {
 		interp, err := extractInterpreterBounds(intervals.Deltas, param, 0)
 		require.NoError(t, err)
 
-		err = extractOffsets(ef, &ljd, interp)
+		err = extractOffsets(ef, &ljd, interp, foundSymbols)
 		require.NoError(t, err, de)
 		require.NotZero(t, ljd.currentLOffset)
 		require.NotZero(t, ljd.g2Traces)
 		require.NotZero(t, ljd.g2Dispatch)
+		require.NotZero(t, ljd.g2jitbase)
 
 		od := offsetData{}
-		err = od.init(ef)
+		err = od.init(ef, foundSymbols)
 		require.NoError(t, err)
 
 		// Test that our chicanery for finding traceinfo checks out on symbolized builds.

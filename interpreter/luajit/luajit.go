@@ -56,6 +56,8 @@ type luajitData struct {
 	// Offset of jit_base within global_State (relative to G). Extracted separately
 	// because it is not always adjacent to cur_L (tarantool inserts mem_L between).
 	g2jitbase uint16
+	// Used only while loading to reject Tarantool's known-wrong fallback.
+	jitBaseExtracted bool
 	// How to step over the interpreter C frame on the native handback, taken from
 	// the interpreter region's stack delta. cframeSizeInterp is the CFA offset;
 	// interpFP is 1 when frame-pointer based. Zero means use the default.
@@ -165,8 +167,9 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 	// lj_vm_asm_begin is a hidden .symtab symbol; raw ef.LookupSymbol only finds
 	// dynamic symbols, so use scanSymbols (which reads .symtab via VisitSymbols),
 	// matching how extractOffsets resolves it.
+	foundSymbols := scanSymbols(ef)
 	var asmBegin uint64
-	if sym, ok := scanSymbols(ef)[libpf.SymbolName("lj_vm_asm_begin")]; ok {
+	if sym, ok := foundSymbols[libpf.SymbolName("lj_vm_asm_begin")]; ok {
 		asmBegin = uint64(sym.Address)
 	}
 
@@ -187,14 +190,17 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 	// A JIT trace uses the VM gate's C frame plus a 16-byte transition frame.
 	// On SP-based x86 builds, derive that from the extracted interpreter frame;
 	// frame-pointer-based arm64 retains the architecture constant.
-	ljd.cframeSizeJIT = uint16(cframeSizeJIT)
-	if ljd.cframeSizeInterp != 0 && ljd.interpFP == 0 {
-		ljd.cframeSizeJIT = ljd.cframeSizeInterp + 16
-	}
+	ljd.cframeSizeJIT = deriveJITCframeSize(ljd.cframeSizeInterp, ljd.interpFP)
 	logf("lj: cframe size jit %d", ljd.cframeSizeJIT)
 
-	if err = extractOffsets(ef, ljd, luaInterp); err != nil {
+	if err = extractOffsets(ef, ljd, luaInterp, foundSymbols); err != nil {
 		return nil, err
+	}
+	// Tarantool's global_State contains mem_L, so the OpenResty cur_L+8
+	// fallback is known to be wrong. Fail attachment rather than silently
+	// emitting corrupt JIT stacks if the hidden exit-handler symbol disappears.
+	if base == "tarantool" && !ljd.jitBaseExtracted {
+		return nil, errors.New("failed to extract jit_base offset required for Tarantool")
 	}
 
 	logf("lj: offsets %+v", ljd)
@@ -249,6 +255,16 @@ func extractInterpreterBounds(deltas sdtypes.StackDeltaArray, param int32,
 	return util.Range{}, errors.New("failed to find interpreter range")
 }
 
+// deriveJITCframeSize adds LuaJIT's transition frame to SP-based interpreter
+// frames. FP-based or unavailable unwind data retains the architecture default.
+func deriveJITCframeSize(interpSize, interpFP uint16) uint16 {
+	if interpSize != 0 && interpFP == 0 &&
+		interpSize <= uint16(0xffff-cframeJITTransitionSize) {
+		return interpSize + cframeJITTransitionSize
+	}
+	return uint16(cframeSizeJIT)
+}
+
 // interpCframeUnwind returns how to step over the interpreter's C frame when
 // handing back to the native unwinder. It uses the stack delta covering the VM
 // assembly: param is the CFA offset and fp is one for frame-pointer-based CFA.
@@ -259,10 +275,14 @@ func interpCframeUnwind(deltas sdtypes.StackDeltaArray, interpStart uint64) (par
 			if p <= 0 || p > 0xffff {
 				return 0, 0, false
 			}
-			if deltas[i].Info.BaseReg == support.UnwindRegFp {
+			switch deltas[i].Info.BaseReg {
+			case support.UnwindRegFp:
 				return uint16(p), 1, true
+			case support.UnwindRegSp:
+				return uint16(p), 0, true
+			default:
+				return 0, 0, false
 			}
-			return uint16(p), 0, true
 		}
 	}
 	return 0, 0, false

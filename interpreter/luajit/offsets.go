@@ -23,6 +23,13 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
+const (
+	// Known jit_base layouts are cur_L+8 (OpenResty) and cur_L+0x10
+	// (Tarantool, which inserts mem_L). Keep extraction tightly bounded.
+	maxJitBaseOffsetFromCurL = uint64(0x18)
+	cframeJITTransitionSize  = 16
+)
+
 func scanSymbols(ef *pfelf.File) map[libpf.SymbolName]libpf.Symbol {
 	interestingSymbols := map[libpf.SymbolName]struct{}{
 		"lj_vm_asm_begin":          {},
@@ -73,9 +80,10 @@ func scanSymbols(ef *pfelf.File) map[libpf.SymbolName]libpf.Symbol {
 //
 // Some versions of openresty have a stripped luajit which makes things a little more
 // complicated because we have to start from a public symbol and work our way around.
-func extractOffsets(ef *pfelf.File, ljd *luajitData, ir util.Range) error {
+func extractOffsets(ef *pfelf.File, ljd *luajitData, ir util.Range,
+	foundSymbols map[libpf.SymbolName]libpf.Symbol) error {
 	oft := offsetData{}
-	if err := oft.init(ef); err != nil {
+	if err := oft.init(ef, foundSymbols); err != nil {
 		return err
 	}
 
@@ -106,14 +114,12 @@ func extractOffsets(ef *pfelf.File, ljd *luajitData, ir util.Range) error {
 	}
 	ljd.g2Dispatch = uint16(g2dispatch)
 
-	g2jitbase, err := oft.findG2JitBaseOffset(uint64(curLOffset), g2dispatch)
-	if err != nil {
-		return err
-	}
+	g2jitbase, extracted := oft.findG2JitBaseOffset(uint64(curLOffset), g2dispatch)
 	if g2jitbase > 0xffff {
 		return fmt.Errorf("lj: g to jit_base offset %v is too large", g2jitbase)
 	}
 	ljd.g2jitbase = uint16(g2jitbase)
+	ljd.jitBaseExtracted = extracted
 
 	// If we have symbols we can check that the start address is correct.
 	if s, e := oft.lookupSymbol("lj_vm_asm_begin"); e == nil && ir.Start != uint64(s.Address) {
@@ -130,23 +136,24 @@ func extractOffsets(ef *pfelf.File, ljd *luajitData, ir util.Range) error {
 // Extract the offset from lj_vm_exit_handler, which clears G->jit_base through
 // the DISPATCH register. If that hidden symbol is unavailable, fall back to
 // cur_L+8, which is the existing OpenResty/luajit2 layout.
-func (o *offsetData) findG2JitBaseOffset(curLOffset, g2dispatch uint64) (uint64, error) {
+func (o *offsetData) findG2JitBaseOffset(curLOffset, g2dispatch uint64) (uint64, bool) {
 	fallback := curLOffset + 8
 	sym, err := o.lookupSymbol("lj_vm_exit_handler")
 	if err != nil {
 		log.Debugf("lj: no lj_vm_exit_handler symbol, assuming jit_base at cur_L+8")
-		return fallback, nil
+		return fallback, false
 	}
 	b, err := o.readSym(sym)
 	if err != nil {
-		return fallback, nil
+		log.Debugf("lj: could not read lj_vm_exit_handler (%v), assuming jit_base at cur_L+8", err)
+		return fallback, false
 	}
 	g2jitbase, err := o.e.findG2JitBaseFromExitHandler(b, g2dispatch, curLOffset)
 	if err != nil || g2jitbase == 0 {
 		log.Debugf("lj: could not extract jit_base offset (%v), assuming cur_L+8", err)
-		return fallback, nil
+		return fallback, false
 	}
-	return g2jitbase, nil
+	return g2jitbase, true
 }
 
 type extractor interface {
@@ -196,7 +203,8 @@ type extractor interface {
 	// lj_vm_exit_handler restores interpreter state on trace exit and clears
 	// jit_base through DISPATCH. Its displacement yields jit_base's offset from
 	// G. curLOffset constrains the candidate to the fields immediately after
-	// cur_L. Returns zero if the offset cannot be found.
+	// cur_L. g2dispatch is needed on x86; arm64 addresses G directly and ignores
+	// it. Returns zero if the offset cannot be found.
 	findG2JitBaseFromExitHandler(b []byte, g2dispatch, curLOffset uint64) (uint64, error)
 
 	// find2ndArgTo2ndPushClosureCall finds the address of the
@@ -226,12 +234,16 @@ type offsetData struct {
 	foundSymbols   map[libpf.SymbolName]libpf.Symbol
 }
 
-func (o *offsetData) init(ef *pfelf.File) error {
+func (o *offsetData) init(ef *pfelf.File,
+	foundSymbols map[libpf.SymbolName]libpf.Symbol) error {
 	o.f = ef
 	o.e = newExtractor(ef)
 
 	var err error
-	o.foundSymbols = scanSymbols(ef)
+	if foundSymbols == nil {
+		foundSymbols = scanSymbols(ef)
+	}
+	o.foundSymbols = foundSymbols
 	// Two extractors use luaopen_jit so cache it.
 	b, addr, err := o.readSymByName("luaopen_jit")
 	if err != nil {
