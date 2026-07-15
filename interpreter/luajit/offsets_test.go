@@ -333,6 +333,146 @@ func TestX86Checktrace(t *testing.T) {
 	}
 }
 
+func TestX86LjDispatchUpdateAddr(t *testing.T) {
+	testdata := []struct {
+		name     string
+		baseAddr uint64
+		expected uint64
+		code     []byte
+	}{
+		{
+			// Canonical: stash L in callee-saved %rbx, then load G into %rdi
+			// for the lj_dispatch_update call. CALL targets baseAddr+12+0xff4
+			// = 0x1000.
+			name:     "canonical-via-rbx",
+			baseAddr: 0,
+			expected: 0x1000,
+			code: []byte{
+				0x48, 0x89, 0xfb, //                      mov  %rdi, %rbx
+				0x48, 0x8b, 0x7b, 0x10, //                mov  0x10(%rbx), %rdi
+				0xe8, 0xf4, 0x0f, 0x00, 0x00, //          call 0x1000
+			},
+		},
+		{
+			// Resilience case: the compiler loads G straight into %rdi without
+			// first parking L in a separate register. The old extractor's
+			// Lreg-then-load pattern required the stash; symbolic tracking
+			// follows L's provenance through the self-overwrite of %rdi.
+			name:     "direct-rdi-self-overwrite",
+			baseAddr: 0,
+			expected: 0x1000,
+			code: []byte{
+				0x48, 0x8b, 0x7f, 0x10, //                mov  0x10(%rdi), %rdi
+				0xe8, 0xf7, 0x0f, 0x00, 0x00, //          call 0x1000
+			},
+		},
+		{
+			// Earlier calls in the prologue do not have G in %rdi and must be
+			// skipped over without consuming the result.
+			name:     "skip-prologue-call",
+			baseAddr: 0,
+			expected: 0x1000,
+			code: []byte{
+				0x48, 0x89, 0xfb, //                      mov  %rdi, %rbx
+				0xe8, 0xf8, 0x04, 0x00, 0x00, //          call 0x500 (not dispatch_update)
+				0x48, 0x8b, 0x7b, 0x10, //                mov  0x10(%rbx), %rdi
+				0xe8, 0xef, 0x0f, 0x00, 0x00, //          call 0x1000 (dispatch_update)
+			},
+		},
+	}
+
+	for _, tc := range testdata {
+		t.Run(tc.name, func(t *testing.T) {
+			x := x86Extractor{}
+			got, err := x.findLjDispatchUpdateAddr(tc.code, tc.baseAddr)
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, got)
+		})
+	}
+}
+
+func TestX86RipRelativeLea2ndArgTo2ndCall(t *testing.T) {
+	// Two LEA-CALL pairs; both CALLs target 0x1000. After the 1st call's LEA
+	// RSI = 0x500; after the 2nd's RSI = 0xa00. The function should return
+	// 0xa00 (RSI's value at the 2nd matching CALL).
+	code := []byte{
+		0x48, 0x8d, 0x35, 0xf9, 0x04, 0x00, 0x00, // lea  0x4f9(%rip), %rsi  ; RSI = 0+7+0x4f9 = 0x500
+		0xe8, 0xf4, 0x0f, 0x00, 0x00, //             call 0x1000             ; target=0+12+0xff4
+		0x48, 0x8d, 0x35, 0xed, 0x09, 0x00, 0x00, // lea  0x9ed(%rip), %rsi  ; RSI = 0+19+0x9ed = 0xa00
+		0xe8, 0xe8, 0x0f, 0x00, 0x00, //             call 0x1000             ; target=0+24+0xfe8
+	}
+	x := x86Extractor{}
+	got, err := x.find2ndArgTo2ndPushClosureCall(code, 0, 0x1000)
+	require.NoError(t, err)
+	require.Equal(t, uint64(0xa00), got)
+}
+
+func TestX86Find4thArgToLibRegCall(t *testing.T) {
+	testdata := []struct {
+		name     string
+		expected int64
+		code     []byte
+	}{
+		{
+			// Canonical luaopen_jit_util: lea $rip-rel, %rcx; ...; call lj_lib_register.
+			// LEA at pos 4 (7 bytes), so RCX = 0 + 11 + 0xd21f5 = 0xd2200.
+			name:     "lea-rip-relative",
+			expected: 0xd2200,
+			code: []byte{
+				0x48, 0x83, 0xec, 0x08, //                   sub  $0x8, %rsp
+				0x48, 0x8d, 0x0d, 0xf5, 0x21, 0x0d, 0x00, // lea  0xd21f5(%rip), %rcx
+				0xe8, 0xf0, 0xff, 0x01, 0x00, //             call (target irrelevant)
+			},
+		},
+		{
+			// Some compilers materialize the 4th arg via `mov $imm, %ecx`.
+			name:     "mov-immediate",
+			expected: 0x1234,
+			code: []byte{
+				0xb9, 0x34, 0x12, 0x00, 0x00, //             mov  $0x1234, %ecx
+				0xe8, 0xfb, 0x1f, 0x00, 0x00, //             call (target irrelevant)
+			},
+		},
+	}
+
+	for _, tc := range testdata {
+		t.Run(tc.name, func(t *testing.T) {
+			x := x86Extractor{}
+			got, err := x.find4thArgToLibRegCall(tc.code, 0)
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, got)
+		})
+	}
+}
+
+func TestX86Find3rdArgToLibPreregCall(t *testing.T) {
+	// Construct a minimal AABA call sequence (A=0x1000, B=0x2000) followed by
+	// 3 more CALLs, with `lea $rip-rel, %rdx` immediately before the 3rd.
+	// AABA section occupies bytes 0-19; the post-AABA interpreter section
+	// runs from byte 20 onward with CodeAddress=20:
+	//   pos 20-24: CALL (target irrelevant - 1st post-AABA)
+	//   pos 25-29: CALL                                (2nd)
+	//   pos 30-36: LEA  0x3fdb(%rip), %rdx  -> RDX = 20 + 17 + 0x3fdb = 0x4000
+	//   pos 37-41: CALL                                (3rd - read RDX here)
+	code := []byte{
+		// AABA: A, A, B, A (A=0x1000, B=0x2000), each call is 5 bytes
+		0xe8, 0xfb, 0x0f, 0x00, 0x00, //                 call 0x1000   (A, pos 0)
+		0xe8, 0xf6, 0x0f, 0x00, 0x00, //                 call 0x1000   (A, pos 5)
+		0xe8, 0xf1, 0x1f, 0x00, 0x00, //                 call 0x2000   (B, pos 10)
+		0xe8, 0xec, 0x0f, 0x00, 0x00, //                 call 0x1000   (A, pos 15) -> ip=20
+
+		// Post-AABA section interpreted with CodeAddress=20.
+		0xe8, 0x00, 0x00, 0x00, 0x00, //                 call (1st post-AABA, pos 20)
+		0xe8, 0x00, 0x00, 0x00, 0x00, //                 call (2nd post-AABA, pos 25)
+		0x48, 0x8d, 0x15, 0xdb, 0x3f, 0x00, 0x00, //     lea  0x3fdb(%rip), %rdx
+		0xe8, 0x00, 0x00, 0x00, 0x00, //                 call (3rd post-AABA, pos 37)
+	}
+	x := x86Extractor{}
+	got, err := x.find3rdArgToLibPreregCall(code, 0)
+	require.NoError(t, err)
+	require.Equal(t, uint64(0x4000), got)
+}
+
 // spot testing
 func TestFiles(t *testing.T) {
 	files, err := os.ReadDir("./testdata")
