@@ -440,45 +440,48 @@ func (x *x86Extractor) find2ndArgTo2ndPushClosureCall(b []byte, baseAddr, target
 }
 
 //nolint:gocritic
-func skipCallsAABA(b []byte, ip, baseAddr int64) ([]byte, int64, error) {
+func skipCallsAABA(it *amd.Interpreter, baseAddr int64) error {
 	var lastCall int64
 	var acall int64
 	// 3 Step process, 1 is find AA, 2 is find B and 3 is find A.
 	step := 0
-	for len(b) > 0 {
-		i, err := x86asm.Decode(b, 64)
+
+	for {
+		i, err := it.LoopWithBreak(func(i x86asm.Inst) bool {
+			return i.Op == x86asm.CALL
+		})
 		if err != nil {
-			return nil, 0, err
-		}
-		if i.Op == x86asm.CALL {
-			a0, ok := i.Args[0].(x86asm.Rel)
-			if ok {
-				callAddr := baseAddr + ip + int64(i.Len) + int64(a0)
-				if step == 0 && callAddr == lastCall {
-					// Found potential AA
-					step = 1
-					acall = callAddr
-				} else if step == 1 && callAddr != lastCall {
-					// Found AAB
-					step = 2
-				} else if step == 2 && callAddr == acall {
-					// Found AABA
-					step = 3
-				} else {
-					// Found different pattern, reset
-					step = 0
-					acall = 0
-				}
-				lastCall = callAddr
+			if errors.Is(err, io.EOF) {
+				break
 			}
+			return fmt.Errorf("skipping AABA: %w", err)
 		}
-		ip += int64(i.Len)
-		b = b[i.Len:]
+		a0, ok := i.Args[0].(x86asm.Rel)
+		if ok {
+			callAddr := baseAddr + int64(it.PC()) + int64(a0)
+			if step == 0 && callAddr == lastCall {
+				// Found potential AA
+				step = 1
+				acall = callAddr
+			} else if step == 1 && callAddr != lastCall {
+				// Found AAB
+				step = 2
+			} else if step == 2 && callAddr == acall {
+				// Found AABA
+				step = 3
+			} else {
+				// Found different pattern, reset
+				step = 0
+				acall = 0
+			}
+			lastCall = callAddr
+		}
 		if step == 3 {
-			return b, ip, nil
+			return nil
 		}
+
 	}
-	return nil, 0, errors.New("failed to find AABA call pattern")
+	return errors.New("failed to find AABA call pattern")
 }
 
 // This function finds the IP relative value passed to lj_lib_prereg as arg 3 (rdx).
