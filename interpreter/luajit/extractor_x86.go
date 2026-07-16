@@ -263,10 +263,10 @@ func (x *x86Extractor) findLjDispatchUpdateAddr(b []byte, addr uint64) (uint64, 
 
 	for {
 		inst, err := it.Step()
+		if errors.Is(err, io.EOF) {
+			break
+		}
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
 			return 0, fmt.Errorf("scanning function body: %w", err)
 		}
 		if inst.Op != x86asm.CALL {
@@ -319,10 +319,10 @@ func (x *x86Extractor) findG2TracesOffsetFromChecktrace(b []byte) (uint64, error
 
 	for {
 		inst, err := it.Step()
+		if errors.Is(err, io.EOF) {
+			break
+		}
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
 			return 0, fmt.Errorf("scanning jit_checktrace for G->traces load: %w", err)
 		}
 		// We're looking for a load from [G + disp] into a register; the
@@ -405,10 +405,10 @@ func (x *x86Extractor) find2ndArgTo2ndPushClosureCall(b []byte, baseAddr, target
 
 	for {
 		inst, err := it.Step()
+		if errors.Is(err, io.EOF) {
+			break
+		}
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
 			return 0, fmt.Errorf("scanning function body: %w", err)
 		}
 		if inst.Op != x86asm.CALL {
@@ -449,10 +449,10 @@ func skipCallsAABA(it *amd.Interpreter, baseAddr int64) error {
 		i, err := it.LoopWithBreak(func(i x86asm.Inst) bool {
 			return i.Op == x86asm.CALL
 		})
+		if errors.Is(err, io.EOF) {
+			break
+		}
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
 			return fmt.Errorf("skipping AABA: %w", err)
 		}
 		a0, ok := i.Args[0].(x86asm.Rel)
@@ -519,10 +519,10 @@ func (x *x86Extractor) find3rdArgToLibPreregCall(b []byte, baseAddr int64) (uint
 
 	for {
 		inst, err := it.Step()
+		if errors.Is(err, io.EOF) {
+			break
+		}
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
 			return 0, fmt.Errorf("scanning function body: %w", err)
 		}
 		if inst.Op != x86asm.CALL {
@@ -564,7 +564,7 @@ func (x *x86Extractor) find4thArgToLibRegCall(b []byte, baseAddr int64) (int64, 
 	_, err := it.LoopWithBreak(func(op x86asm.Inst) bool {
 		return op.Op == x86asm.CALL
 	})
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		return 0, err
 	}
 	rcxCap := expression.NewImmediateCapture("rcx")
