@@ -137,8 +137,6 @@ func isZeroOperand(arg x86asm.Arg, regs *amd.Registers) bool {
 // LEA and that store's displacement is the canonical g2dispatch.
 // https://github.com/openresty/luajit2/blob/7952882d/src/lj_dispatch.c#L122
 func (x *x86Extractor) findG2DispatchOffsetFromLjDispatchUpdate(b []byte) (uint64, error) {
-	b, _ = xh.SkipEndBranch(b) //nolint:errcheck
-
 	type ref struct {
 		disp int64
 		pos  int
@@ -147,11 +145,11 @@ func (x *x86Extractor) findG2DispatchOffsetFromLjDispatchUpdate(b []byte) (uint6
 		greg   x86asm.Reg
 		leas   []ref
 		stores []ref
-		pos    int
 	)
 
-	for len(b) > 0 {
-		i, err := x86asm.Decode(b, 64)
+	it := amd.NewInterpreterWithCode(b)
+	for {
+		i, err := it.Step()
 		if err != nil {
 			// Some builds put SSE/AVX instructions the decoder doesn't know
 			// later in lj_dispatch_update; stop scanning and decide from what
@@ -175,17 +173,15 @@ func (x *x86Extractor) findG2DispatchOffsetFromLjDispatchUpdate(b []byte) (uint6
 			// below the loop iter LEA.
 			if dst, ok := i.Args[0].(x86asm.Mem); ok && greg != 0 &&
 				dst.Base == greg && dst.Index == 0 && dst.Disp > 0 {
-				stores = append(stores, ref{disp: dst.Disp, pos: pos})
+				stores = append(stores, ref{disp: dst.Disp, pos: it.PC()})
 			}
 		}
 		if i.Op == x86asm.LEA && greg != 0 {
 			if src, ok := i.Args[1].(x86asm.Mem); ok && src.Base == greg &&
 				src.Index == 0 && src.Disp > 0 {
-				leas = append(leas, ref{disp: src.Disp, pos: pos})
+				leas = append(leas, ref{disp: src.Disp, pos: it.PC()})
 			}
 		}
-		b = b[i.Len:]
-		pos++
 	}
 
 	if len(leas) == 0 {
