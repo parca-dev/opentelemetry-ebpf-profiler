@@ -19,7 +19,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/asm/amd"
 	"go.opentelemetry.io/ebpf-profiler/asm/expression"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
-	xh "go.opentelemetry.io/ebpf-profiler/x86helpers"
 	"golang.org/x/arch/x86/x86asm"
 )
 
@@ -137,8 +136,6 @@ func isZeroOperand(arg x86asm.Arg, regs *amd.Registers) bool {
 // LEA and that store's displacement is the canonical g2dispatch.
 // https://github.com/openresty/luajit2/blob/7952882d/src/lj_dispatch.c#L122
 func (x *x86Extractor) findG2DispatchOffsetFromLjDispatchUpdate(b []byte) (uint64, error) {
-	b, _ = xh.SkipEndBranch(b) //nolint:errcheck
-
 	type ref struct {
 		disp int64
 		pos  int
@@ -147,11 +144,11 @@ func (x *x86Extractor) findG2DispatchOffsetFromLjDispatchUpdate(b []byte) (uint6
 		greg   x86asm.Reg
 		leas   []ref
 		stores []ref
-		pos    int
 	)
 
-	for len(b) > 0 {
-		i, err := x86asm.Decode(b, 64)
+	it := amd.NewInterpreterWithCode(b)
+	for {
+		i, err := it.Step()
 		if err != nil {
 			// Some builds put SSE/AVX instructions the decoder doesn't know
 			// later in lj_dispatch_update; stop scanning and decide from what
@@ -175,17 +172,15 @@ func (x *x86Extractor) findG2DispatchOffsetFromLjDispatchUpdate(b []byte) (uint6
 			// below the loop iter LEA.
 			if dst, ok := i.Args[0].(x86asm.Mem); ok && greg != 0 &&
 				dst.Base == greg && dst.Index == 0 && dst.Disp > 0 {
-				stores = append(stores, ref{disp: dst.Disp, pos: pos})
+				stores = append(stores, ref{disp: dst.Disp, pos: it.PC()})
 			}
 		}
 		if i.Op == x86asm.LEA && greg != 0 {
 			if src, ok := i.Args[1].(x86asm.Mem); ok && src.Base == greg &&
 				src.Index == 0 && src.Disp > 0 {
-				leas = append(leas, ref{disp: src.Disp, pos: pos})
+				leas = append(leas, ref{disp: src.Disp, pos: it.PC()})
 			}
 		}
-		b = b[i.Len:]
-		pos++
 	}
 
 	if len(leas) == 0 {
@@ -268,10 +263,10 @@ func (x *x86Extractor) findLjDispatchUpdateAddr(b []byte, addr uint64) (uint64, 
 
 	for {
 		inst, err := it.Step()
+		if errors.Is(err, io.EOF) {
+			break
+		}
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
 			return 0, fmt.Errorf("scanning function body: %w", err)
 		}
 		if inst.Op != x86asm.CALL {
@@ -324,10 +319,10 @@ func (x *x86Extractor) findG2TracesOffsetFromChecktrace(b []byte) (uint64, error
 
 	for {
 		inst, err := it.Step()
+		if errors.Is(err, io.EOF) {
+			break
+		}
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
 			return 0, fmt.Errorf("scanning jit_checktrace for G->traces load: %w", err)
 		}
 		// We're looking for a load from [G + disp] into a register; the
@@ -350,46 +345,49 @@ func (x *x86Extractor) findG2TracesOffsetFromChecktrace(b []byte) (uint64, error
 }
 
 func (x *x86Extractor) findFirstCall(b []byte, baseAddr int64) (uint64, error) {
-	b, ip := xh.SkipEndBranch(b)
-	for len(b) > 0 {
-		i, err := x86asm.Decode(b, 64)
+	it := amd.NewInterpreterWithCode(b)
+	it.CodeAddress = expression.Imm(uint64(baseAddr))
+	for {
+		i, err := it.Step()
+		if errors.Is(err, io.EOF) {
+			break
+		}
 		if err != nil {
 			return 0, err
 		}
 		if i.Op == x86asm.CALL {
 			a0, ok := i.Args[0].(x86asm.Rel)
 			if ok {
-				// RIP relative calls are relative to next instruction.
-				callAddr := baseAddr + ip + int64(i.Len) + int64(a0)
+				callAddr := baseAddr + int64(it.PC()) + int64(a0)
 				return uint64(callAddr), nil
 			}
 		}
-		ip += int64(i.Len)
-		b = b[i.Len:]
 	}
 	return 0, errors.New("no call found")
 }
 
 // Return true if the code in b calls targetCall.
 func (x *x86Extractor) callExists(b []byte, baseAddr, targetCall int64) (bool, error) {
-	b, ip := xh.SkipEndBranch(b)
-	for len(b) > 0 {
-		i, err := x86asm.Decode(b, 64)
+	it := amd.NewInterpreterWithCode(b)
+	it.CodeAddress = expression.Imm(uint64(baseAddr))
+	for {
+		i, err := it.Step()
+
+		if errors.Is(err, io.EOF) {
+			break
+		}
 		if err != nil {
 			return false, err
 		}
 		if i.Op == x86asm.CALL {
 			a0, ok := i.Args[0].(x86asm.Rel)
 			if ok {
-				// RIP relative calls are relative to next instruction.
-				callAddr := baseAddr + ip + int64(i.Len) + int64(a0)
+				callAddr := baseAddr + int64(it.PC()) + int64(a0)
 				if callAddr == targetCall {
 					return true, nil
 				}
 			}
 		}
-		ip += int64(i.Len)
-		b = b[i.Len:]
 	}
 	return false, nil
 }
@@ -407,10 +405,10 @@ func (x *x86Extractor) find2ndArgTo2ndPushClosureCall(b []byte, baseAddr, target
 
 	for {
 		inst, err := it.Step()
+		if errors.Is(err, io.EOF) {
+			break
+		}
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
 			return 0, fmt.Errorf("scanning function body: %w", err)
 		}
 		if inst.Op != x86asm.CALL {
@@ -441,45 +439,48 @@ func (x *x86Extractor) find2ndArgTo2ndPushClosureCall(b []byte, baseAddr, target
 }
 
 //nolint:gocritic
-func skipCallsAABA(b []byte, ip, baseAddr int64) ([]byte, int64, error) {
+func skipCallsAABA(it *amd.Interpreter, baseAddr int64) error {
 	var lastCall int64
 	var acall int64
 	// 3 Step process, 1 is find AA, 2 is find B and 3 is find A.
 	step := 0
-	for len(b) > 0 {
-		i, err := x86asm.Decode(b, 64)
+
+	for {
+		i, err := it.LoopWithBreak(func(i x86asm.Inst) bool {
+			return i.Op == x86asm.CALL
+		})
+		if errors.Is(err, io.EOF) {
+			break
+		}
 		if err != nil {
-			return nil, 0, err
+			return fmt.Errorf("skipping AABA: %w", err)
 		}
-		if i.Op == x86asm.CALL {
-			a0, ok := i.Args[0].(x86asm.Rel)
-			if ok {
-				callAddr := baseAddr + ip + int64(i.Len) + int64(a0)
-				if step == 0 && callAddr == lastCall {
-					// Found potential AA
-					step = 1
-					acall = callAddr
-				} else if step == 1 && callAddr != lastCall {
-					// Found AAB
-					step = 2
-				} else if step == 2 && callAddr == acall {
-					// Found AABA
-					step = 3
-				} else {
-					// Found different pattern, reset
-					step = 0
-					acall = 0
-				}
-				lastCall = callAddr
+		a0, ok := i.Args[0].(x86asm.Rel)
+		if ok {
+			callAddr := baseAddr + int64(it.PC()) + int64(a0)
+			if step == 0 && callAddr == lastCall {
+				// Found potential AA
+				step = 1
+				acall = callAddr
+			} else if step == 1 && callAddr != lastCall {
+				// Found AAB
+				step = 2
+			} else if step == 2 && callAddr == acall {
+				// Found AABA
+				step = 3
+			} else {
+				// Found different pattern, reset
+				step = 0
+				acall = 0
 			}
+			lastCall = callAddr
 		}
-		ip += int64(i.Len)
-		b = b[i.Len:]
 		if step == 3 {
-			return b, ip, nil
+			return nil
 		}
+
 	}
-	return nil, 0, errors.New("failed to find AABA call pattern")
+	return errors.New("failed to find AABA call pattern")
 }
 
 // This function finds the IP relative value passed to lj_lib_prereg as arg 3 (rdx).
@@ -491,7 +492,6 @@ func skipCallsAABA(b []byte, ip, baseAddr int64) ([]byte, int64, error) {
 // 6d973:	48 8d 35 1c a2 00 00 	lea    0xa21c(%rip),%rsi     # 77b96 <lj_lib_init_debug+0x236>
 // 6d97a:	e8 a1 28 ff ff       	call   60220 <lj_lib_prereg>
 func (x *x86Extractor) find3rdArgToLibPreregCall(b []byte, baseAddr int64) (uint64, error) {
-	b, ip := xh.SkipEndBranch(b)
 	// Skip the lua_push* call sequence (and all the preceding calls which varies depending on
 	// inlining).
 	// libluajit-5.1.so[0x700a5] <+133>: movq   %rbx, %rdi
@@ -509,21 +509,20 @@ func (x *x86Extractor) find3rdArgToLibPreregCall(b []byte, baseAddr int64) (uint
 	// libluajit-5.1.so[0x700dd] <+189>: movl   $0x12, %edx
 	// libluajit-5.1.so[0x700e2] <+194>: leaq   0x9b0a(%rip), %rsi
 	// libluajit-5.1.so[0x700e9] <+201>: callq  0x9af0         ; symbol stub for: lua_pushlstring
-	b, ip, err := skipCallsAABA(b, ip, baseAddr)
+	it := amd.NewInterpreterWithCode(b)
+	it.CodeAddress = expression.Imm(uint64(baseAddr))
+	err := skipCallsAABA(it, baseAddr)
 	if err != nil {
 		return 0, err
 	}
-
-	it := amd.NewInterpreterWithCode(b)
-	it.CodeAddress = expression.Imm(uint64(baseAddr + ip))
 	callsLeft := 3
 
 	for {
 		inst, err := it.Step()
+		if errors.Is(err, io.EOF) {
+			break
+		}
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
 			return 0, fmt.Errorf("scanning function body: %w", err)
 		}
 		if inst.Op != x86asm.CALL {
@@ -565,7 +564,7 @@ func (x *x86Extractor) find4thArgToLibRegCall(b []byte, baseAddr int64) (int64, 
 	_, err := it.LoopWithBreak(func(op x86asm.Inst) bool {
 		return op.Op == x86asm.CALL
 	})
-	if err != nil && err != io.EOF {
+	if err != nil && !errors.Is(err, io.EOF) {
 		return 0, err
 	}
 	rcxCap := expression.NewImmediateCapture("rcx")
