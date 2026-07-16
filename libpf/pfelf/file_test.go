@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -16,7 +17,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/testsupport"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
-	xh "go.opentelemetry.io/ebpf-profiler/x86helpers"
 	xx "golang.org/x/arch/x86/x86asm"
 )
 
@@ -116,9 +116,40 @@ func TestGetGoBuildID(t *testing.T) {
 	assert.Equal(t, expectedBuildID, buildID)
 }
 
+var endbr64 = [4]byte{0xf3, 0x0f, 0x1e, 0xfa}
+
+// Note: this used to be in x86helpers, which has now been deleted,
+// because it's only used in one place (here).
+//
+// Ordinarily we would make `symbolOffsetFromCodeX86` use the new `amd` package
+// for disassembly, which would let us get rid of this `skipEndBranch` logic entirely,
+// but we can't do that because it introduces an import cycle
+// pfelf -> amd -> pfelf .
+//
+// It is not worth putting in much effort to fix this because these tests are for native custom
+// labels which is being reworked anyway as Otel Thread Context.
+//
+// Original comment follows:
+//
+// On some binaries the function starts like this:
+//
+//	0x0000000000012860 <+0>:     f3 0f 1e fa     endbr64
+//	0x0000000000012864 <+4>:     41 55   push   %r13
+//
+// This is some kind of stack smashing indirect jump protection, treat it as a nop,
+// x86asm doesn't know how to handle it.
+//
+//nolint:gocritic
+func skipEndBranch(b []byte) ([]byte, int64) {
+	if slices.Equal(b[0:4], endbr64[:]) {
+		return b[4:], 4
+	}
+	return b, 0
+}
+
 func symbolOffsetFromCodeX86(code []byte) (int64, error) {
 	// e.g. mov    eax,DWORD PTR fs:0xfffffffffffffffc
-	code, _ = xh.SkipEndBranch(code)
+	code, _ = skipEndBranch(code)
 	offset := 0
 	for {
 		insn, err := xx.Decode(code[offset:], 64)
