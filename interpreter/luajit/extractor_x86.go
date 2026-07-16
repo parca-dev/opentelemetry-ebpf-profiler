@@ -369,24 +369,26 @@ func (x *x86Extractor) findFirstCall(b []byte, baseAddr int64) (uint64, error) {
 
 // Return true if the code in b calls targetCall.
 func (x *x86Extractor) callExists(b []byte, baseAddr, targetCall int64) (bool, error) {
-	b, ip := xh.SkipEndBranch(b)
-	for len(b) > 0 {
-		i, err := x86asm.Decode(b, 64)
+	it := amd.NewInterpreterWithCode(b)
+	it.CodeAddress = expression.Imm(uint64(baseAddr))
+	for {
+		i, err := it.Step()
+
+		if errors.Is(err, io.EOF) {
+			break
+		}
 		if err != nil {
 			return false, err
 		}
 		if i.Op == x86asm.CALL {
 			a0, ok := i.Args[0].(x86asm.Rel)
 			if ok {
-				// RIP relative calls are relative to next instruction.
-				callAddr := baseAddr + ip + int64(i.Len) + int64(a0)
+				callAddr := baseAddr + int64(it.PC()) + int64(a0)
 				if callAddr == targetCall {
 					return true, nil
 				}
 			}
 		}
-		ip += int64(i.Len)
-		b = b[i.Len:]
 	}
 	return false, nil
 }
