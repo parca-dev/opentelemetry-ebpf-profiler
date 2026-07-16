@@ -19,5 +19,12 @@ import "go.opentelemetry.io/ebpf-profiler/support"
 
 const (
 	cframeSize    int32 = support.LJCframeSpaceArm
-	cframeSizeJIT int32 = cframeSize + 16
+	cframeSizeJIT int32 = cframeSize + cframeJITTransitionSize
+
+	// Standard LuaJIT, OpenResty, and Tarantool all store the arm64 previous
+	// C-frame link at the beginning of the VM C frame. Both values being zero
+	// makes the eBPF ABI's zero-means-architecture-default fallback unambiguous;
+	// a future differing arm64 layout would require revisiting that sentinel.
+	defaultCframePrevOffset   uint16 = 0
+	tarantoolCframePrevOffset uint16 = 0
 )

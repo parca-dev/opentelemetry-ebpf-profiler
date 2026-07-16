@@ -154,6 +154,24 @@ func (regs *vmRegs) getUnwindInfoARM() sdtypes.UnwindInfo {
 	return info
 }
 
+// detectCoroStartupARM recognizes libcoro's synthetic arm64 fiber entry.
+// coro_create installs this three-instruction trampoline as the first PC on a
+// new stack. It calls the fiber function and branches to the abort path if that
+// function returns, so there is no caller frame to recover.
+func detectCoroStartupARM(code []byte) int {
+	if len(code) < coroStartupSize || !bytes.Equal(code[:8], []byte{
+		0xe0, 0x03, 0x14, 0xaa, // mov x0, x20
+		0x60, 0x02, 0x3f, 0xd6, // blr x19
+	}) {
+		return 0
+	}
+	inst, err := arm64asm.Decode(code[8:12])
+	if err != nil || inst.Op != arm64asm.B {
+		return 0
+	}
+	return coroStartupSize
+}
+
 func detectEntryARM(code []byte) int {
 	// Refer to test cases for the seen assembly dumps.
 	// Both, on GLIBC and MUSL there is no FDE for the entry code. This code tries

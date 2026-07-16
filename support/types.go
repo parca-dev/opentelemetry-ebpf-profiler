@@ -345,9 +345,13 @@ type NativeCustomLabelsProcInfo struct {
 	Als_handle_tls_offset        uint64
 }
 type LuaJITProcInfo struct {
-	G2dispatch      uint16
-	Cur_L_offset    uint16
-	Cframe_size_jit uint16
+	G2dispatch         uint16
+	Cur_L_offset       uint16
+	Cframe_size_jit    uint16
+	G2jitbase          uint16
+	Cframe_size_interp uint16
+	Interp_fp          uint16
+	Cframe_prev_offset uint16
 }
 
 const (
@@ -358,6 +362,7 @@ const (
 	sizeof_DotnetProcInfo = 0x4
 	sizeof_PHPProcInfo    = 0x18
 	sizeof_RubyProcInfo   = 0x48
+	sizeof_LuaJITProcInfo = 0xe
 )
 
 const (
