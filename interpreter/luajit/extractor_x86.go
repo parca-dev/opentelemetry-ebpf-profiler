@@ -346,22 +346,23 @@ func (x *x86Extractor) findG2TracesOffsetFromChecktrace(b []byte) (uint64, error
 }
 
 func (x *x86Extractor) findFirstCall(b []byte, baseAddr int64) (uint64, error) {
-	b, ip := xh.SkipEndBranch(b)
-	for len(b) > 0 {
-		i, err := x86asm.Decode(b, 64)
+	it := amd.NewInterpreterWithCode(b)
+	it.CodeAddress = expression.Imm(uint64(baseAddr))
+	for {
+		i, err := it.Step()
+		if errors.Is(err, io.EOF) {
+			break
+		}
 		if err != nil {
 			return 0, err
 		}
 		if i.Op == x86asm.CALL {
 			a0, ok := i.Args[0].(x86asm.Rel)
 			if ok {
-				// RIP relative calls are relative to next instruction.
-				callAddr := baseAddr + ip + int64(i.Len) + int64(a0)
+				callAddr := baseAddr + int64(it.PC()) + int64(a0)
 				return uint64(callAddr), nil
 			}
 		}
-		ip += int64(i.Len)
-		b = b[i.Len:]
 	}
 	return 0, errors.New("no call found")
 }
