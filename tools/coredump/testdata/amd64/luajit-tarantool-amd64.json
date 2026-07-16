@@ -1,0 +1,102 @@
+{
+  "coredump-ref": "65ef424d129db489d5fe7133be988d94a7137718d45fc8cb550917404949f392",
+  "threads": [
+    {
+      "lwp": 1,
+      "frames": [
+        "?+0x0",
+        "fib+2 in @/workload/workload.lua:4",
+        "fib+7 in @/workload/workload.lua:4",
+        "fib+7 in @/workload/workload.lua:4",
+        "fib+10 in @/workload/workload.lua:4",
+        "fib+10 in @/workload/workload.lua:4",
+        "fib+10 in @/workload/workload.lua:4",
+        "fib+7 in @/workload/workload.lua:4",
+        "fib+10 in @/workload/workload.lua:4",
+        "fib+7 in @/workload/workload.lua:4",
+        "fib+7 in @/workload/workload.lua:4",
+        "fib+7 in @/workload/workload.lua:4",
+        "fib+10 in @/workload/workload.lua:4",
+        "fib+7 in @/workload/workload.lua:4",
+        "fib+10 in @/workload/workload.lua:4",
+        "fib+10 in @/workload/workload.lua:4",
+        "fib+7 in @/workload/workload.lua:4",
+        "fib+7 in @/workload/workload.lua:4",
+        "fib+10 in @/workload/workload.lua:4",
+        "fib+7 in @/workload/workload.lua:4",
+        "fib+7 in @/workload/workload.lua:4",
+        "hot_loop+11 in @/workload/workload.lua:15",
+        "main+19 in @/workload/workload.lua:20",
+        "tarantool+0x2691ed",
+        "tarantool+0x2021a6",
+        "tarantool+0x1f5fc0",
+        "tarantool+0x1f7516",
+        "tarantool+0x5139f",
+        "tarantool+0x227c75",
+        "tarantool+0x49f029"
+      ]
+    }
+  ],
+  "modules": [
+    {
+      "ref": "ddbb3718b8bd9cbd780e5ab08b4503c30a6c4fa0706ebe5d074ed6b596c1714e",
+      "local-path": "/usr/lib/x86_64-linux-gnu/libicudata.so.74.2"
+    },
+    {
+      "ref": "1b87a1a50b496cfead2b0ad134c2ff536705c82608db240c7e8aa48d6c0e4217",
+      "local-path": "/usr/lib/x86_64-linux-gnu/libm.so.6"
+    },
+    {
+      "ref": "e6391daf670544d3a8f2b8a0cb8e27b4246fea109352abed50a29ec57f03153d",
+      "local-path": "/usr/lib/x86_64-linux-gnu/libcrypto.so.3"
+    },
+    {
+      "ref": "9b64150b28505a33d6bc3ecf709c279f6de97a1c184dbda65d06ee4537f6d286",
+      "local-path": "/usr/lib/x86_64-linux-gnu/libz.so.1.3"
+    },
+    {
+      "ref": "7560aadde38e5f4237a47a1ddd5891f9b36768a77a60faae30beee003ac01901",
+      "local-path": "/usr/lib/x86_64-linux-gnu/libicuuc.so.74.2"
+    },
+    {
+      "ref": "d8db8739a1633c972cec6a4fe0566bdcec6fd088f98723492ab0361f66238f75",
+      "local-path": "/usr/lib/x86_64-linux-gnu/libc.so.6"
+    },
+    {
+      "ref": "d93224d2b0dab4247598be683adca02f5cf00586f99c187579cd7e92058fb7cb",
+      "local-path": "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1"
+    },
+    {
+      "ref": "0ca2c28b026f0084661fbb0e69079436680f3b6dd1f4aa3436395442456a6d4c",
+      "local-path": "/usr/lib/x86_64-linux-gnu/libssl.so.3"
+    },
+    {
+      "ref": "0a079f958147699f7bb5bf228406a5d878dc2387fe9cdc5cce6f3e35e20380fc",
+      "local-path": "/usr/lib/x86_64-linux-gnu/libreadline.so.8.2"
+    },
+    {
+      "ref": "d2b95b42f1183f9309f342b1f82a6ec2cf4ddb866b59294040db630203534ac6",
+      "local-path": "/usr/local/bin/tarantool"
+    },
+    {
+      "ref": "3550b194eb2cf2e6f798f033eb9ca279d498c21296b4a18790ce158d2023e47b",
+      "local-path": "/usr/lib/x86_64-linux-gnu/libicui18n.so.74.2"
+    },
+    {
+      "ref": "61f693cd7f8e55ad3ab518b20a00c01adb46ef829cf90773c97615a73f99e09b",
+      "local-path": "/usr/lib/x86_64-linux-gnu/libtinfo.so.6.4"
+    },
+    {
+      "ref": "1fd75fe70354a416d75aef22bcae68c47bd25d20e2d0568c30b1a9838cf62f11",
+      "local-path": "/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.33"
+    },
+    {
+      "ref": "1cd555ac46b7887edeaf3c42aac5408c8135e52f6b37870da2cf82d5fe14e829",
+      "local-path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2"
+    },
+    {
+      "ref": "4cd12047e55a7b37f47293cca6dd2c2a317f0feaa3acfe7cfc4087942149f2fd",
+      "local-path": "/usr/lib/x86_64-linux-gnu/ossl-modules/legacy.so"
+    }
+  ]
+}

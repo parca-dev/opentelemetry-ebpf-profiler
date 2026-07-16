@@ -297,6 +297,52 @@ currently support adding maps in an  automated fashion. The best way to do this
 is to look through existing code in this package and to see where existing code 
 refers to particular BPF maps.
 
+## LuaJIT (Tarantool) coredumps
+
+The `luajit-tarantool-*` cases exercise the LuaJIT unwinder against a
+statically linked, GC64 Tarantool running a recursive Lua workload. They verify
+host-executable detection, hidden-symbol offset extraction, Lua frame recovery,
+and the native handback across a Tarantool fiber on amd64 and arm64.
+
+A few details are intentional:
+
+- The snapshots were captured with `jit.off(true, true)`, so the sampled thread
+  stays in the bytecode interpreter. Offline coredump replay is currently
+  single-pass and cannot perform the live `report_pid -> SynchronizeMappings`
+  cycle that associates an anonymous JIT-mcode mapping with `G`. The
+  interpreter path reads `L` from the saved VM frame and is deterministic. JIT
+  mcode is covered by live profiling and direct extractor tests.
+- Both cores embed byte-identical workloads and were independently captured
+  while executing recursive `fib`. The amd64 golden contains 20 active `fib`
+  frames and arm64 contains 24; their exact bytecode offsets differ with the
+  asynchronous sample points. Both recover the common `hot_loop -> main` Lua
+  root.
+- Tarantool statically links LuaJIT. These fixtures therefore depend on the
+  Tarantool host detection added by the parent PR rather than a separate
+  `libluajit-5.1.so` mapping.
+- On x64, standard LuaJIT and OpenResty store the previous-C-frame link at
+  `rsp+4*8`, while Tarantool's extended VM frame stores it at `rsp+6*8`. The
+  parent selects that offset per executable; treating both layouts as
+  OpenResty previously made amd64 read saved VM-state data as a pointer and
+  omit the final `main` frame. arm64 uses offset zero for both variants.
+- The single `?+0x0` frame at the native/Lua boundary is expected. The replay
+  symbolizer renders the synthetic LuaJIT interpreter-routing FileID this way;
+  live profiling resolves the corresponding location to `tarantool+offset`.
+  The Lua source frames themselves resolve normally.
+- Tarantool's arm64 `coro_startup` is a three-instruction assembly trampoline
+  installed as the root of a new fiber stack. In this binary it lies at
+  `0x4460d8` inside the uncovered `.eh_frame` interval
+  `0x446068..0x4460e4`, so generic extraction previously emitted
+  `native_stack_delta_invalid` after the otherwise complete stack. The parent
+  now requires both the `coro_startup` symbol and its instruction signature,
+  then marks only `0x4460d8..0x4460e4` as STOP. The golden retains the
+  `coro_startup` frame and terminates cleanly.
+
+The core and module bundles are stored outside Git. Upload them to the Parca
+coredump artifact bucket before expecting these cases to pass in CI. Their raw
+captures and regeneration notes are backed up on Shopify's
+`dale/luajit-coredump-data` branch.
+
 ## Parca extension: fallback GCS bucket
 
 Currently, we have a GCS bucket called `parca-coredump-artifacts` that we can fall back to

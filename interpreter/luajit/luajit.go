@@ -53,6 +53,22 @@ type luajitData struct {
 	g2Traces uint16
 	// Offset of cur_L field in the global_State struct.
 	currentLOffset uint16
+	// Offset of jit_base within global_State (relative to G). Extracted separately
+	// because it is not always adjacent to cur_L (tarantool inserts mem_L between).
+	g2jitbase uint16
+	// Used only while loading to reject Tarantool's known-wrong fallback.
+	jitBaseExtracted bool
+	// How to step over the interpreter C frame on the native handback, taken from
+	// the interpreter region's stack delta. cframeSizeInterp is the CFA offset;
+	// interpFP is 1 when frame-pointer based. Zero means use the default.
+	cframeSizeInterp uint16
+	interpFP         uint16
+	// Size to step over a JIT trace's C frame on the native handback. On x86 this
+	// is the extracted interpreter cframe plus the interp-to-trace transition.
+	cframeSizeJIT uint16
+	// Offset of the previous-C-frame link. Tarantool's x64 VM frame has two
+	// additional words before this link compared with OpenResty/standard LuaJIT.
+	cframePrevOffset uint16
 }
 
 type luajitInstance struct {
@@ -76,7 +92,8 @@ type luajitInstance struct {
 	traceHashes map[libpf.Address]uint64
 	cycle       int
 
-	g2Traces uint16
+	g2Traces      uint16
+	cframeSizeJIT uint16
 }
 
 var (
@@ -87,24 +104,29 @@ var (
 func (d *luajitData) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Address,
 	rm remotememory.RemoteMemory) (interpreter.Instance, error) {
 	cdata := support.LuaJITProcInfo{
-		G2dispatch:      d.g2Dispatch,
-		Cur_L_offset:    d.currentLOffset,
-		Cframe_size_jit: uint16(cframeSizeJIT),
+		G2dispatch:         d.g2Dispatch,
+		Cur_L_offset:       d.currentLOffset,
+		Cframe_size_jit:    d.cframeSizeJIT,
+		G2jitbase:          d.g2jitbase,
+		Cframe_size_interp: d.cframeSizeInterp,
+		Interp_fp:          d.interpFP,
+		Cframe_prev_offset: d.cframePrevOffset,
 	}
 	if err := ebpf.UpdateProcData(libpf.LuaJIT, pid, unsafe.Pointer(&cdata)); err != nil {
 		return nil, err
 	}
 
 	return &luajitInstance{rm: rm,
-		pid:         pid,
-		ebpf:        ebpf,
-		protos:      make(map[libpf.Address]*proto),
-		jitRegions:  make(regionMap),
-		prefixes:    make(map[regionKey][]lpm.Prefix),
-		prefixesByG: make(map[libpf.Address][]lpm.Prefix),
-		vms:         make(vmMap),
-		traceHashes: make(map[libpf.Address]uint64),
-		g2Traces:    d.g2Traces,
+		pid:           pid,
+		ebpf:          ebpf,
+		protos:        make(map[libpf.Address]*proto),
+		jitRegions:    make(regionMap),
+		prefixes:      make(map[regionKey][]lpm.Prefix),
+		prefixesByG:   make(map[libpf.Address][]lpm.Prefix),
+		vms:           make(vmMap),
+		traceHashes:   make(map[libpf.Address]uint64),
+		g2Traces:      d.g2Traces,
+		cframeSizeJIT: d.cframeSizeJIT,
 	}, nil
 }
 
@@ -128,9 +150,11 @@ func (l *luajitInstance) Detach(ebpf interpreter.EbpfHandler, pid libpf.PID) err
 
 func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpreter.Data, error) {
 	base := path.Base(info.FileName())
+	// Tarantool statically links LuaJIT into its main executable, so there is
+	// no separate libluajit-5.1.so mapping to match on.
 	if !strings.HasPrefix(base, "libluajit-5.1.so") &&
 		!strings.HasPrefix(base, "luajit") &&
-		base != "nginx" && base != "openresty" {
+		base != "nginx" && base != "openresty" && base != "tarantool" {
 		return nil, nil
 	}
 
@@ -139,16 +163,50 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		return nil, err
 	}
 
-	luaInterp, err := extractInterpreterBounds(info.Deltas(), cframeSize)
+	// When the binary is unstripped (e.g. tarantool), lj_vm_asm_begin marks the
+	// exact start of the VM interpreter. Anchor the interpreter-range detection
+	// to it: the stack-delta heuristic alone can match an unrelated large gap
+	// (observed on x86 tarantool — it matched 0x164469 instead of the real
+	// lj_vm_asm_begin 0x261ca0, then failed the start-address sanity check).
+	// lj_vm_asm_begin is a hidden .symtab symbol; raw ef.LookupSymbol only finds
+	// dynamic symbols, so use scanSymbols (which reads .symtab via VisitSymbols),
+	// matching how extractOffsets resolves it.
+	foundSymbols := scanSymbols(ef)
+	var asmBegin uint64
+	if sym, ok := foundSymbols[libpf.SymbolName("lj_vm_asm_begin")]; ok {
+		asmBegin = uint64(sym.Address)
+	}
+
+	luaInterp, err := extractInterpreterBounds(info.Deltas(), cframeSize, asmBegin)
 	if err != nil {
 		return nil, err
 	}
 	logf("lj: interp range %v", luaInterp)
 
-	ljd := &luajitData{}
+	ljd := &luajitData{
+		cframePrevOffset: cframePrevOffsetForExecutable(base),
+	}
+	// Derive the interpreter C-frame unwind from the VM region's own stack
+	// delta. The hardcoded LuaJIT constants do not match every embedding.
+	if param, fp, ok := interpCframeUnwind(info.Deltas(), luaInterp.Start); ok {
+		ljd.cframeSizeInterp = param
+		ljd.interpFP = fp
+		logf("lj: interp cframe size %d fp %d", param, fp)
+	}
+	// A JIT trace uses the VM gate's C frame plus a 16-byte transition frame.
+	// On SP-based x86 builds, derive that from the extracted interpreter frame;
+	// frame-pointer-based arm64 retains the architecture constant.
+	ljd.cframeSizeJIT = deriveJITCframeSize(ljd.cframeSizeInterp, ljd.interpFP)
+	logf("lj: cframe size jit %d", ljd.cframeSizeJIT)
 
-	if err = extractOffsets(ef, ljd, luaInterp); err != nil {
+	if err = extractOffsets(ef, ljd, luaInterp, foundSymbols); err != nil {
 		return nil, err
+	}
+	// Tarantool's global_State contains mem_L, so the OpenResty cur_L+8
+	// fallback is known to be wrong. Fail attachment rather than silently
+	// emitting corrupt JIT stacks if the hidden exit-handler symbol disappears.
+	if base == "tarantool" && !ljd.jitBaseExtracted {
+		return nil, errors.New("failed to extract jit_base offset required for Tarantool")
 	}
 
 	logf("lj: offsets %+v", ljd)
@@ -161,6 +219,15 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 	return ljd, nil
 }
 
+func cframePrevOffsetForExecutable(base string) uint16 {
+	// Match Loader's exact executable-name contract. A renamed binary is not
+	// recognized as Tarantool by the loader and must not receive its layout.
+	if base == "tarantool" {
+		return tarantoolCframePrevOffset
+	}
+	return defaultCframePrevOffset
+}
+
 // LuaJIT's interpreter isn't a function, its a raw chunk of assembly code with direct threaded
 // jumps at end of each opcode. The public entrypoints (lua_pcall/lua_resume) call the lj_vm_pcall
 // function at the end of this blob which set up the interpreter and starts executing.
@@ -168,8 +235,26 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 // big and has a somewhat unique FDE we can pick out. We could tighten this up by looking for
 // direct jumps to the start of the interpreter (one can be found lj_dispatch_update) but we'd
 // still need to consult the stack deltas to get the end of the interpreter.
-func extractInterpreterBounds(deltas sdtypes.StackDeltaArray, param int32) (util.Range,
-	error) {
+func extractInterpreterBounds(deltas sdtypes.StackDeltaArray, param int32,
+	asmBegin uint64) (util.Range, error) {
+	// If lj_vm_asm_begin is known (unstripped binary), the interpreter range
+	// starts exactly at that symbol. Return the delta gap that starts there
+	// rather than the first large gap matching the unwind pattern, which can be
+	// an unrelated function on some builds (x86 tarantool).
+	if asmBegin != 0 {
+		// The VM asm is one large delta interval, but its start can sit a few
+		// bytes below lj_vm_asm_begin (the preceding function's unwind info
+		// extends to just before the symbol). Match the interval that CONTAINS
+		// the symbol and is large (the interpreter), then start the range exactly
+		// at the symbol so it matches the lj_vm_asm_begin sanity check.
+		for i := 0; i < len(deltas)-1; i++ {
+			if deltas[i].Address <= asmBegin && asmBegin < deltas[i+1].Address &&
+				deltas[i+1].Address-asmBegin > 10_000 {
+				return util.Range{Start: asmBegin, End: deltas[i+1].Address}, nil
+			}
+		}
+		// Fall through to the heuristic if the symbol isn't in a large interval.
+	}
 	for i := 0; i < len(deltas)-1; i++ {
 		d, next := &deltas[i], &deltas[i+1]
 		if next.Address-d.Address > 10_000 {
@@ -183,6 +268,39 @@ func extractInterpreterBounds(deltas sdtypes.StackDeltaArray, param int32) (util
 	}
 
 	return util.Range{}, errors.New("failed to find interpreter range")
+}
+
+// deriveJITCframeSize adds LuaJIT's transition frame to SP-based interpreter
+// frames. FP-based or unavailable unwind data retains the architecture default.
+func deriveJITCframeSize(interpSize, interpFP uint16) uint16 {
+	if interpSize != 0 && interpFP == 0 &&
+		interpSize <= uint16(0xffff-cframeJITTransitionSize) {
+		return interpSize + cframeJITTransitionSize
+	}
+	return uint16(cframeSizeJIT)
+}
+
+// interpCframeUnwind returns how to step over the interpreter's C frame when
+// handing back to the native unwinder. It uses the stack delta covering the VM
+// assembly: param is the CFA offset and fp is one for frame-pointer-based CFA.
+func interpCframeUnwind(deltas sdtypes.StackDeltaArray, interpStart uint64) (param, fp uint16, ok bool) {
+	for i := 0; i < len(deltas)-1; i++ {
+		if deltas[i].Address <= interpStart && interpStart < deltas[i+1].Address {
+			p := deltas[i].Info.Param
+			if p <= 0 || p > 0xffff {
+				return 0, 0, false
+			}
+			switch deltas[i].Info.BaseReg {
+			case support.UnwindRegFp:
+				return uint16(p), 1, true
+			case support.UnwindRegSp:
+				return uint16(p), 0, true
+			default:
+				return 0, 0, false
+			}
+		}
+	}
+	return 0, 0, false
 }
 
 func (l *luajitInstance) getVMList() []libpf.Address {
@@ -324,12 +442,12 @@ func (l *luajitInstance) processVMs(ebpf interpreter.EbpfHandler, pid libpf.PID)
 				continue
 			}
 
-			stackDelta := uint64(t.spadjust) + uint64(cframeSizeJIT)
+			stackDelta := uint64(t.spadjust) + uint64(l.cframeSizeJIT)
 			// If this is a side trace, we need to add the spadjust of the root trace but
 			// only if they are different.
 			//https://github.com/openresty/luajit2/blob/7952882d/src/lj_gdbjit.c#L597
 			if t.root != 0 && traces[t.root].spadjust != t.spadjust {
-				stackDelta += uint64(traces[t.root].spadjust) + uint64(cframeSizeJIT)
+				stackDelta += uint64(traces[t.root].spadjust) + uint64(l.cframeSizeJIT)
 			}
 			p, err := l.addTrace(ebpf, pid, t, uint64(g), stackDelta)
 			if err != nil {

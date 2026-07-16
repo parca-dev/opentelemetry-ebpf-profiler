@@ -147,6 +147,7 @@ const (
 	sizeof_DotnetProcInfo = C.sizeof_DotnetProcInfo
 	sizeof_PHPProcInfo    = C.sizeof_PHPProcInfo
 	sizeof_RubyProcInfo   = C.sizeof_RubyProcInfo
+	sizeof_LuaJITProcInfo = C.sizeof_LuaJITProcInfo
 )
 
 const (

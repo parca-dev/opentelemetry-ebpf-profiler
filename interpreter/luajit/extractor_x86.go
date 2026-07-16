@@ -222,6 +222,56 @@ func (x *x86Extractor) findG2DispatchOffsetFromLjDispatchUpdate(b []byte) (uint6
 	return uint64(leas[0].disp), nil
 }
 
+// findG2JitBaseFromExitHandler extracts the offset of jit_base from G.
+//
+// On trace exit, lj_vm_exit_handler restores BASE/L from G and then clears
+// G->jit_base. These accesses are relative to the DISPATCH register (r14 on
+// x86, where DISPATCH = G + g2dispatch), for example:
+//
+//	movq -0xE30(%r14), %rbp   ; rbp = G->cur_L
+//	movq -0xE20(%r14), %rdx   ; rdx = G->jit_base
+//	movq $0,  -0xE20(%r14)    ; G->jit_base = NULL
+//
+// The clear is a 64-bit store of immediate zero to DISPATCH+disp, so
+// g2jitbase = g2dispatch + disp. Validate that the candidate sits just after
+// cur_L to distinguish it from other zeroed fields.
+func (x *x86Extractor) findG2JitBaseFromExitHandler(
+	b []byte, g2dispatch, curLOffset uint64) (uint64, error) {
+	it := amd.NewInterpreterWithCode(b)
+	// LuaJIT dedicates R14 to DISPATCH on x86-64. Retain the interpreter's
+	// initial symbolic value so stores through a clobbered R14 cannot match.
+	dispatch := it.Regs.GetX86(x86asm.R14)
+
+	for {
+		inst, err := it.Step()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return 0, fmt.Errorf("scanning lj_vm_exit_handler for jit_base store: %w", err)
+		}
+		if inst.Op != x86asm.MOV || !isZeroOperand(inst.Args[1], &it.Regs) {
+			continue
+		}
+		dst, ok := inst.Args[0].(x86asm.Mem)
+		if !ok || dst.Index != 0 {
+			continue
+		}
+
+		// asm/amd sign-extends disp32 and preserves R14's provenance, so match
+		// the destination as DISPATCH+disp rather than repeating decoder logic.
+		disp := expression.NewImmediateCapture("jit_base displacement")
+		if !it.MemArg(dst).Match(expression.Add(dispatch, disp)) {
+			continue
+		}
+		candidate := g2dispatch + disp.CapturedValue()
+		if candidate > curLOffset && candidate <= curLOffset+maxJitBaseOffsetFromCurL {
+			return candidate, nil
+		}
+	}
+	return 0, nil
+}
+
 // Find first or second call address, the one whose first argument is 0x10 off of
 // sym's first argument.
 // libluajit-5.1.so`luaopen_jit:

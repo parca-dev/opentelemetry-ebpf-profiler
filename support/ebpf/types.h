@@ -608,6 +608,20 @@ typedef struct LuaJITProcInfo {
   u16 g2dispatch;
   u16 cur_L_offset;
   u16 cframe_size_jit;
+  // Offset of jit_base within global_State (relative to G). NOT necessarily
+  // adjacent to cur_L: some LuaJIT builds (e.g. tarantool) insert a mem_L field
+  // between cur_L and jit_base. OpenResty/luajit2 has jit_base right after cur_L.
+  u16 g2jitbase;
+  // How to step over the interpreter's C frame on the native handback, taken
+  // from the interpreter region's own stack delta (.eh_frame) instead of the
+  // hardcoded LUAJIT_CFRAME_SPACE (which is wrong for tarantool). cframe_size_interp
+  // is the CFA offset (param); interp_fp is 1 when it is frame-pointer based
+  // (arm64: CFA = fp + param) vs SP based (x86: CFA = sp + param). 0 = use default.
+  u16 cframe_size_interp;
+  u16 interp_fp;
+  // Offset of the previous-C-frame link. Zero uses the architecture default.
+  // On x64, standard LuaJIT/OpenResty use 4*8 while Tarantool uses 6*8.
+  u16 cframe_prev_offset;
 } LuaJITProcInfo;
 
 // COMM_LEN defines the maximum length we will receive for the comm of a task.
