@@ -19,7 +19,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/asm/amd"
 	"go.opentelemetry.io/ebpf-profiler/asm/expression"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
-	xh "go.opentelemetry.io/ebpf-profiler/x86helpers"
 	"golang.org/x/arch/x86/x86asm"
 )
 
@@ -493,7 +492,6 @@ func skipCallsAABA(it *amd.Interpreter, baseAddr int64) error {
 // 6d973:	48 8d 35 1c a2 00 00 	lea    0xa21c(%rip),%rsi     # 77b96 <lj_lib_init_debug+0x236>
 // 6d97a:	e8 a1 28 ff ff       	call   60220 <lj_lib_prereg>
 func (x *x86Extractor) find3rdArgToLibPreregCall(b []byte, baseAddr int64) (uint64, error) {
-	b, ip := xh.SkipEndBranch(b)
 	// Skip the lua_push* call sequence (and all the preceding calls which varies depending on
 	// inlining).
 	// libluajit-5.1.so[0x700a5] <+133>: movq   %rbx, %rdi
@@ -511,13 +509,12 @@ func (x *x86Extractor) find3rdArgToLibPreregCall(b []byte, baseAddr int64) (uint
 	// libluajit-5.1.so[0x700dd] <+189>: movl   $0x12, %edx
 	// libluajit-5.1.so[0x700e2] <+194>: leaq   0x9b0a(%rip), %rsi
 	// libluajit-5.1.so[0x700e9] <+201>: callq  0x9af0         ; symbol stub for: lua_pushlstring
-	b, ip, err := skipCallsAABA(b, ip, baseAddr)
+	it := amd.NewInterpreterWithCode(b)
+	it.CodeAddress = expression.Imm(uint64(baseAddr))
+	err := skipCallsAABA(it, baseAddr)
 	if err != nil {
 		return 0, err
 	}
-
-	it := amd.NewInterpreterWithCode(b)
-	it.CodeAddress = expression.Imm(uint64(baseAddr + ip))
 	callsLeft := 3
 
 	for {
