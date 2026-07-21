@@ -14,6 +14,7 @@ package luajit // import "go.opentelemetry.io/ebpf-profiler/interpreter/luajit"
 import (
 	"errors"
 	"unicode/utf8"
+	"unsafe"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
@@ -78,8 +79,11 @@ type proto struct {
 	lineinfo16   []uint16
 	lineinfo32   []uint32
 	upvalueNames []string
-	varinforaw   []byte
-	constants    []string
+	// the underlying byte array is used as a
+	// backing store for `string` objects, so
+	// it must not be mutated!
+	varinforaw []byte
+	constants  []string
 }
 
 // newProto creates a proto from a GCproto* by reading memory remotely.
@@ -169,7 +173,9 @@ func newProto(rm remotememory.RemoteMemory, pt libpf.Address) (*proto, error) {
 		p.upvalueNames = []string{}
 		for len(b) > 0 {
 			var name string
-			b, name = parseString(b)
+			// this is safe: b never escapes the containing block and
+			// within that block is never mutated.
+			b, name = unsafeParseString(b)
 			b = b[1:] // skip null terminator
 			p.upvalueNames = append(p.upvalueNames, name)
 		}
@@ -316,12 +322,16 @@ func parseULEB128(b []byte) ([]byte, uint32) {
 	return b, v
 }
 
-//nolint:gocritic
-func parseString(b []byte) ([]byte, string) {
+// unsafeParseString gets the first null-terminated
+// string from the buffer, and returns the rest of the buffer (starting with the null byte)
+// along with the string.
+//
+// The original buffer is used as a backing store, so it must never be modified
+// as long as the returned string is alive.
+func unsafeParseString(b []byte) ([]byte, string) {
 	for i, c := range b {
 		if c == 0 {
-			// FIXME: allocation
-			return b[i:], string(b[:i])
+			return b[i:], unsafe.String(unsafe.SliceData(b), i)
 		}
 	}
 	panic("no null terminator")
@@ -345,7 +355,10 @@ func parseVarinfo(b []byte, pc, slot uint32) string {
 				break
 			}
 		} else {
-			b, name = parseString(b)
+			// This is safe as long as the backing storage
+			// of `b` is never mutated.  Currently we're
+			// calling it on `proto.varinforaw` which is indeed never mutated.
+			b, name = unsafeParseString(b)
 		}
 		b = b[1:]
 		var pcdelta uint32
