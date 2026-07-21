@@ -54,7 +54,8 @@ func TestParseVarinfo(t *testing.T) {
 		{"ka", 172, 180, 16},
 		{"b", 186, 201, 16},
 	} {
-		s := parseVarinfo(b, tc.startpc, tc.slot)
+		s, err := parseVarinfo(b, tc.startpc, tc.slot)
+		require.NoError(t, err)
 		require.Equal(t, s, tc.name)
 	}
 }
