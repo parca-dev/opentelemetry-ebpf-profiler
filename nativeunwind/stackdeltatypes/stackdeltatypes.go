@@ -54,7 +54,7 @@ var UnwindInfoLR = UnwindInfo{
 
 // UnwindInfoGoMorestack contains the description to unwind past the Go
 // "runtime.morestack" function.
-var UnwindInfoGoMorestack = UnwindInfo{
+var UnwindInfoGoMorestack = UnwindInfo{Flags: support.UnwindFlagCommand,
 	Param: support.UnwindCommandGoMorestack,
 }
 

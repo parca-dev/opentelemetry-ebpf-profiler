@@ -79,6 +79,8 @@ func (emc *ebpfMapsCoredump) UpdateProcData(t libpf.InterpreterType, pid libpf.P
 		emc.ctx.addMap(unsafe.Pointer(&C.beam_procs), C.u32(pid), sliceBuffer(ptr, C.sizeof_BEAMProcInfo))
 	case libpf.LuaJIT:
 		emc.ctx.addMap(unsafe.Pointer(&C.luajit_procs), C.u32(pid), sliceBuffer(ptr, C.sizeof_LuaJITProcInfo))
+	case libpf.GoLabels:
+		emc.ctx.addMap(unsafe.Pointer(&C.go_labels_procs), C.u32(pid), sliceBuffer(ptr, C.sizeof_GoLabelsOffsets))
 	}
 	return nil
 }
