@@ -13,7 +13,9 @@ package luajit // import "go.opentelemetry.io/ebpf-profiler/interpreter/luajit"
 
 import (
 	"errors"
+	"fmt"
 	"unicode/utf8"
+	"unsafe"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
@@ -78,8 +80,11 @@ type proto struct {
 	lineinfo16   []uint16
 	lineinfo32   []uint32
 	upvalueNames []string
-	varinforaw   []byte
-	constants    []string
+	// the underlying byte array is used as a
+	// backing store for `string` objects, so
+	// it must not be mutated!
+	varinforaw []byte
+	constants  []string
 }
 
 // newProto creates a proto from a GCproto* by reading memory remotely.
@@ -169,7 +174,13 @@ func newProto(rm remotememory.RemoteMemory, pt libpf.Address) (*proto, error) {
 		p.upvalueNames = []string{}
 		for len(b) > 0 {
 			var name string
-			b, name = parseString(b)
+			var err error
+			// this is safe: b never escapes the containing block and
+			// within that block is never mutated.
+			b, name, err = unsafeParseString(b)
+			if err != nil {
+				return nil, fmt.Errorf("malformed data while parsing upvalue names: %w", err)
+			}
 			b = b[1:] // skip null terminator
 			p.upvalueNames = append(p.upvalueNames, name)
 		}
@@ -220,7 +231,7 @@ func (p *proto) getLine(pc uint32) uint32 {
 	return first + p.lineinfo32[pc]
 }
 
-func (p *proto) getVarname(slot, pc uint32) string {
+func (p *proto) getVarname(slot, pc uint32) (string, error) {
 	return parseVarinfo(p.varinforaw, pc, slot)
 }
 
@@ -233,14 +244,17 @@ func (p *proto) getConstant(idx uint32) string {
 }
 
 // https://github.com/openresty/luajit2/blob/7952882d/src/lj_debug.c#L259
-func (p *proto) getSlotName(pc, slot uint32) string {
+func (p *proto) getSlotName(pc, slot uint32) (string, error) {
 restart:
 	if pc == 0 || pc >= p.sizebc {
-		return ""
+		return "", nil
 	}
-	name := p.getVarname(slot, pc)
+	name, err := p.getVarname(slot, pc)
+	if err != nil {
+		return "", err
+	}
 	if name != "" {
-		return name
+		return name, nil
 	}
 	// Walk the lua instructions backwards to find the name used to put the function in the slot
 	pc--
@@ -250,7 +264,7 @@ restart:
 		ra := bcA(ins)
 		if bcModeAIsBase(op) {
 			if slot >= ra && (op != BC_KNIL || slot <= bcD(ins)) {
-				return ""
+				return "", nil
 			}
 		} else if bcModeAIsDst(op) && ra == slot {
 			switch op {
@@ -260,28 +274,31 @@ restart:
 					goto restart
 				}
 			case BC_GGET:
-				return p.getConstant(bcD(ins))
+				return p.getConstant(bcD(ins)), nil
 			case BC_TGETS:
 				method := p.getConstant(bcC(ins))
-				table := p.getSlotName(pc, bcB(ins))
-				if table != "" {
-					return table + ":" + method
+				table, err := p.getSlotName(pc, bcB(ins))
+				if err != nil {
+					return "", err
 				}
-				return method
+				if table != "" {
+					return table + ":" + method, nil
+				}
+				return method, nil
 			case BC_UGET:
-				return p.getUpvalueName(bcD(ins))
+				return p.getUpvalueName(bcD(ins)), nil
 			default:
-				return ""
+				return "", nil
 			}
 		}
 	}
 
-	return ""
+	return "", nil
 }
 
-func (p *proto) getFunctionName(pc uint32) string {
+func (p *proto) getFunctionName(pc uint32) (string, error) {
 	if p == nil {
-		return "main"
+		return "main", nil
 	}
 	if pc >= p.sizebc {
 		// TODO: can we get a better pc for JIT frames?
@@ -289,7 +306,7 @@ func (p *proto) getFunctionName(pc uint32) string {
 	}
 	slot, metaname := getSlotOrMetaname(p.bc[pc])
 	if metaname != "" {
-		return metaname
+		return metaname, nil
 	}
 	return p.getSlotName(pc, slot)
 }
@@ -316,15 +333,19 @@ func parseULEB128(b []byte) ([]byte, uint32) {
 	return b, v
 }
 
-//nolint:gocritic
-func parseString(b []byte) ([]byte, string) {
+// unsafeParseString gets the first null-terminated
+// string from the buffer, and returns the rest of the buffer (starting with the null byte)
+// along with the string.
+//
+// The original buffer is used as a backing store, so it must never be modified
+// as long as the returned string is alive.
+func unsafeParseString(b []byte) ([]byte, string, error) {
 	for i, c := range b {
 		if c == 0 {
-			// FIXME: allocation
-			return b[i:], string(b[:i])
+			return b[i:], unsafe.String(unsafe.SliceData(b), i), nil
 		}
 	}
-	panic("no null terminator")
+	return nil, "", errors.New("no null terminator in string")
 }
 
 var varnames = []string{
@@ -335,7 +356,7 @@ var varnames = []string{
 	"(for state)",
 	"(for control)"}
 
-func parseVarinfo(b []byte, pc, slot uint32) string {
+func parseVarinfo(b []byte, pc, slot uint32) (string, error) {
 	var lastpc uint32
 	for {
 		var name string
@@ -345,7 +366,14 @@ func parseVarinfo(b []byte, pc, slot uint32) string {
 				break
 			}
 		} else {
-			b, name = parseString(b)
+			// This is safe as long as the backing storage
+			// of `b` is never mutated.  Currently we're
+			// calling it on `proto.varinforaw` which is indeed never mutated.
+			var err error
+			b, name, err = unsafeParseString(b)
+			if err != nil {
+				return "", fmt.Errorf("malformed data while parsing varinfo: %w", err)
+			}
 		}
 		b = b[1:]
 		var pcdelta uint32
@@ -360,12 +388,12 @@ func parseVarinfo(b []byte, pc, slot uint32) string {
 		if pc < endpc {
 			if slot == 0 {
 				if vn <= len(varnames) {
-					return varnames[vn-1]
+					return varnames[vn-1], nil
 				}
-				return name
+				return name, nil
 			}
 			slot--
 		}
 	}
-	return ""
+	return "", nil
 }
