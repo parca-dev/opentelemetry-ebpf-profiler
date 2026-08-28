@@ -148,6 +148,7 @@ const (
 	sizeof_PHPProcInfo     = C.sizeof_PHPProcInfo
 	sizeof_RubyProcInfo    = C.sizeof_RubyProcInfo
 	sizeof_GoLabelsOffsets = C.sizeof_GoLabelsOffsets
+	sizeof_LuaJITProcInfo  = C.sizeof_LuaJITProcInfo
 )
 
 const (

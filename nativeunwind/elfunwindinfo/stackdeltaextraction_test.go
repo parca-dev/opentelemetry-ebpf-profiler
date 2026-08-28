@@ -157,6 +157,147 @@ func TestExtractStackDeltasFromFilename(t *testing.T) {
 	require.Equal(t, data.Deltas[:len(firstDeltas)], firstDeltas)
 }
 
+func TestCoroStartupDetection(t *testing.T) {
+	code := []byte{
+		0xe0, 0x03, 0x14, 0xaa, // mov x0, x20
+		0x60, 0x02, 0x3f, 0xd6, // blr x19
+		0x94, 0x0f, 0xf0, 0x17, // b coro_abort
+	}
+	require.Equal(t, coroStartupSize, detectCoroStartupARM(code))
+
+	t.Run("wrong-registers", func(t *testing.T) {
+		changed := append([]byte(nil), code...)
+		changed[0] = 0xe1
+		require.Zero(t, detectCoroStartupARM(changed))
+	})
+	t.Run("return-instead-of-abort-branch", func(t *testing.T) {
+		changed := append([]byte(nil), code...)
+		copy(changed[8:], []byte{0xc0, 0x03, 0x5f, 0xd6}) // ret
+		require.Zero(t, detectCoroStartupARM(changed))
+	})
+	t.Run("call-instead-of-abort-branch", func(t *testing.T) {
+		changed := append([]byte(nil), code...)
+		copy(changed[8:], []byte{0x94, 0x0f, 0xf0, 0x97}) // bl coro_abort
+		require.Zero(t, detectCoroStartupARM(changed))
+	})
+	t.Run("invalid-third-instruction", func(t *testing.T) {
+		changed := append([]byte(nil), code...)
+		clear(changed[8:])
+		require.Zero(t, detectCoroStartupARM(changed))
+	})
+	t.Run("truncated", func(t *testing.T) {
+		require.Zero(t, detectCoroStartupARM(code[:8]))
+	})
+}
+
+func TestDetectStackRootRangesRequiresARM64SymbolTable(t *testing.T) {
+	require.Empty(t, detectStackRootRanges(&pfelf.File{Machine: elf.EM_X86_64}))
+	require.Empty(t, detectStackRootRanges(&pfelf.File{Machine: elf.EM_AARCH64}))
+}
+
+func TestOverlayStackRoot(t *testing.T) {
+	invalid := sdtypes.StackDelta{Address: 0x100, Info: sdtypes.UnwindInfoInvalid}
+	after := sdtypes.StackDelta{Address: 0x300, Info: deltaRSP(16, 0)}
+	deltas := sdtypes.StackDeltaArray{invalid, after}
+
+	// The root starts inside the interval between two existing deltas.
+	got := overlayStackRoot(deltas, stackRootRange{start: 0x200, end: 0x20c})
+	require.Equal(t, sdtypes.StackDeltaArray{
+		invalid,
+		{
+			Address: 0x200,
+			Hints:   sdtypes.UnwindHintKeep,
+			Info:    sdtypes.UnwindInfoStop,
+		},
+		{Address: 0x20c, Hints: sdtypes.UnwindHintKeep, Info: sdtypes.UnwindInfoInvalid},
+		after,
+	}, got)
+
+	t.Run("replaces-existing-start-delta", func(t *testing.T) {
+		atStart := sdtypes.StackDelta{Address: 0x200, Info: deltaRSP(24, 0)}
+		withStart := sdtypes.StackDeltaArray{invalid, atStart, after}
+		got := overlayStackRoot(withStart, stackRootRange{start: 0x200, end: 0x20c})
+		require.Equal(t, sdtypes.StackDeltaArray{
+			invalid,
+			{
+				Address: 0x200,
+				Hints:   sdtypes.UnwindHintKeep,
+				Info:    sdtypes.UnwindInfoStop,
+			},
+			{Address: 0x20c, Hints: sdtypes.UnwindHintKeep, Info: atStart.Info},
+			after,
+		}, got)
+	})
+
+	t.Run("root-starts-at-first-delta", func(t *testing.T) {
+		first := sdtypes.StackDelta{Address: 0x200, Info: deltaRSP(16, 0)}
+		got := overlayStackRoot(sdtypes.StackDeltaArray{first},
+			stackRootRange{start: 0x200, end: 0x20c})
+		require.Equal(t, sdtypes.StackDeltaArray{
+			{
+				Address: 0x200,
+				Hints:   sdtypes.UnwindHintKeep,
+				Info:    sdtypes.UnwindInfoStop,
+			},
+			{Address: 0x20c, Hints: sdtypes.UnwindHintKeep, Info: first.Info},
+		}, got)
+	})
+
+	t.Run("preserves-existing-end-delta", func(t *testing.T) {
+		end := sdtypes.StackDelta{Address: 0x20c, Info: deltaRSP(32, 8)}
+		keptEnd := end
+		keptEnd.Hints = sdtypes.UnwindHintKeep
+		withEnd := sdtypes.StackDeltaArray{
+			invalid,
+			{Address: 0x204, Info: deltaRSP(24, 0)},
+			end,
+			after,
+		}
+		got := overlayStackRoot(withEnd, stackRootRange{start: 0x200, end: 0x20c})
+		require.Equal(t, sdtypes.StackDeltaArray{
+			invalid,
+			{
+				Address: 0x200,
+				Hints:   sdtypes.UnwindHintKeep,
+				Info:    sdtypes.UnwindInfoStop,
+			},
+			keptEnd,
+			after,
+		}, got)
+	})
+
+	t.Run("before-first-covered-address", func(t *testing.T) {
+		require.Equal(t, deltas,
+			overlayStackRoot(deltas, stackRootRange{start: 0x80, end: 0x8c}))
+	})
+
+	t.Run("after-last-delta", func(t *testing.T) {
+		got := overlayStackRoot(deltas, stackRootRange{start: 0x400, end: 0x40c})
+		require.Equal(t, sdtypes.StackDeltaArray{
+			invalid,
+			after,
+			{
+				Address: 0x400,
+				Hints:   sdtypes.UnwindHintKeep,
+				Info:    sdtypes.UnwindInfoStop,
+			},
+			{Address: 0x40c, Hints: sdtypes.UnwindHintKeep, Info: after.Info},
+		}, got)
+	})
+
+	t.Run("empty-deltas", func(t *testing.T) {
+		require.Empty(t, overlayStackRoot(nil,
+			stackRootRange{start: 0x200, end: 0x20c}))
+	})
+
+	t.Run("degenerate-ranges", func(t *testing.T) {
+		require.Equal(t, deltas,
+			overlayStackRoot(deltas, stackRootRange{start: 0x200, end: 0x200}))
+		require.Equal(t, deltas,
+			overlayStackRoot(deltas, stackRootRange{start: 0x20c, end: 0x200}))
+	})
+}
+
 func TestEntryDetection(t *testing.T) {
 	testCases := map[string]struct {
 		machine elf.Machine

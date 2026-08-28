@@ -4,15 +4,26 @@
 package elfunwindinfo // import "go.opentelemetry.io/ebpf-profiler/nativeunwind/elfunwindinfo"
 
 import (
+	"bytes"
 	"debug/elf"
 	"fmt"
+	"math"
+	"sort"
 	"strings"
 
+	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	sdtypes "go.opentelemetry.io/ebpf-profiler/nativeunwind/stackdeltatypes"
 )
 
 const (
+	coroStartupSymbol = "coro_startup"
+	coroStartupSize   = 3 * 4 // Three fixed-width AArch64 instructions.
+
+	// Match pfelf.VisitSymbols' maximum string-table read. Besides bounding
+	// malformed files, this guarantees the prefilter and exact scan agree.
+	maxStackRootStringTableSize = 16 * 1024 * 1024
+
 	// Some DSOs have few limited .eh_frame FDEs (e.g. PLT), and additional
 	// FDEs are in .debug_frame or external debug file. This controls how many
 	// intervals are needed to not follow .gnu_debuglink.
@@ -172,6 +183,106 @@ func detectEntry(ef *pfelf.File) int {
 	return detectEntryCode(ef.Machine, code)
 }
 
+type stackRootRange struct {
+	start, end uint64
+}
+
+// detectStackRootRanges identifies assembly entry points that start synthetic
+// stacks but have no CFI. Symbol and instruction matching are both required so
+// an unrelated instruction sequence cannot truncate a native stack.
+func detectStackRootRanges(ef *pfelf.File) []stackRootRange {
+	symtab := ef.Section(".symtab")
+	if ef.Machine != elf.EM_AARCH64 || symtab == nil ||
+		symtab.Link >= uint32(len(ef.Sections)) {
+		return nil
+	}
+
+	// Avoid allocating a Go string for every symbol in unrelated unstripped
+	// arm64 binaries. VisitSymbols still performs the exact symbol match below.
+	strtab, err := ef.Sections[symtab.Link].Data(maxStackRootStringTableSize)
+	if err != nil || !bytes.Contains(strtab, []byte(coroStartupSymbol+"\x00")) {
+		return nil
+	}
+
+	var startup libpf.Symbol
+	if err := ef.VisitSymbols(func(sym libpf.Symbol) bool {
+		if sym.Name == coroStartupSymbol {
+			startup = sym
+			return false
+		}
+		return true
+	}); err != nil || startup.Address == 0 {
+		return nil
+	}
+
+	if uint64(startup.Address) > math.MaxInt64-coroStartupSize {
+		return nil
+	}
+	code, err := ef.VirtualMemory(int64(startup.Address), coroStartupSize, coroStartupSize)
+	if err != nil {
+		return nil
+	}
+	length := detectCoroStartupARM(code)
+	if length == 0 {
+		return nil
+	}
+	start := uint64(startup.Address)
+	return []stackRootRange{{start: start, end: start + uint64(length)}}
+}
+
+// overlayStackRoot marks [root.start, root.end) as an end-of-stack interval and
+// restores the delta that applies at root.end. The input must be sorted.
+func overlayStackRoot(deltas sdtypes.StackDeltaArray, root stackRootRange) sdtypes.StackDeltaArray {
+	if len(deltas) == 0 || root.start >= root.end {
+		return deltas
+	}
+
+	startIndex := sort.Search(len(deltas), func(i int) bool {
+		return deltas[i].Address >= root.start
+	})
+	if startIndex == 0 && deltas[0].Address > root.start {
+		return deltas
+	}
+
+	endIndex := sort.Search(len(deltas), func(i int) bool {
+		return deltas[i].Address >= root.end
+	})
+	var restore sdtypes.StackDelta
+	if endIndex < len(deltas) && deltas[endIndex].Address == root.end {
+		restore = deltas[endIndex]
+		restore.Hints |= sdtypes.UnwindHintKeep
+	} else {
+		// At least one delta starts before root.end: reaching this point means
+		// the first delta is at or below root.start, and root.start < root.end.
+		restore = sdtypes.StackDelta{
+			Address: root.end,
+			Hints:   sdtypes.UnwindHintKeep,
+			Info:    deltas[endIndex-1].Info,
+		}
+	}
+
+	result := make(sdtypes.StackDeltaArray, 0, len(deltas)+2)
+	result = append(result, deltas[:startIndex]...)
+	result = append(result, sdtypes.StackDelta{
+		Address: root.start,
+		Hints:   sdtypes.UnwindHintKeep,
+		Info:    sdtypes.UnwindInfoStop,
+	})
+	result = append(result, restore)
+	if endIndex < len(deltas) {
+		if deltas[endIndex].Address == root.end {
+			endIndex++
+		}
+		result = append(result, deltas[endIndex:]...)
+	}
+
+	// Do not run the synthesized boundaries back through StackDeltaArray.Add:
+	// its end-of-function gap folding is useful for compiler output, but these
+	// exact assembly-root addresses must remain explicit. The source array is
+	// already compacted, so this adds at most two entries.
+	return result
+}
+
 // ExtractELF takes a pfelf.Reference and provides the stack delta
 // intervals for it in the interval parameter.
 func ExtractELF(elfRef *pfelf.Reference, interval *sdtypes.IntervalData) error {
@@ -232,6 +343,11 @@ func extractFile(elfFile *pfelf.File, elfRef *pfelf.Reference,
 			dedup.Add(deltas[i])
 		}
 		deltas = dedup
+	}
+
+	// This currently recognizes only the AArch64 libcoro startup trampoline.
+	for _, root := range detectStackRootRanges(elfFile) {
+		deltas = overlayStackRoot(deltas, root)
 	}
 
 	*interval = sdtypes.IntervalData{

@@ -22,6 +22,8 @@ func TestSizeOfCGoStruct(t *testing.T) {
 			want: sizeof_PHPProcInfo},
 		{name: "RubyProcInfo", input: unsafe.Sizeof(RubyProcInfo{}),
 			want: sizeof_RubyProcInfo},
+		{name: "LuaJITProcInfo", input: unsafe.Sizeof(LuaJITProcInfo{}),
+			want: sizeof_LuaJITProcInfo},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -122,6 +122,43 @@ func (a *armExtractor) findG2DispatchOffsetFromLjDispatchUpdate(b []byte) (uint6
 	return 0, errors.New("g to dispatch offset not found")
 }
 
+// findG2JitBaseFromExitHandler extracts jit_base's offset from G on arm64.
+//
+// On trace exit lj_vm_exit_handler clears G->jit_base with a store of the zero
+// register, e.g.:
+//
+//	str xzr, [x22, #0x1f0]   ; G->jit_base = NULL
+//
+// Unlike x86 (where jit_base is addressed relative to DISPATCH), arm64 holds G
+// itself in a register (x22), so the store's immediate offset IS jit_base's
+// offset from G (g2dispatch is unused here). This is the same instruction shape
+// as setgcrefnull(g->cur_L) in lua_close. We validate the candidate sits just
+// after cur_L (cur_L+8 without mem_L, cur_L+0x10 with tarantool's mem_L) to
+// disambiguate from cur_L itself / any other zeroed field.
+func (a *armExtractor) findG2JitBaseFromExitHandler(
+	b []byte, _, curLOffset uint64) (uint64, error) {
+	const globalState = arm64asm.RegSP(arm64asm.X22)
+	for ; len(b) >= 4; b = b[4:] {
+		i, err := arm64asm.Decode(b)
+		if err != nil {
+			// Hand-written VM asm may contain forms arm64asm can't decode;
+			// skip (instructions are fixed 4 bytes, so we stay aligned).
+			continue
+		}
+		if i.Op == arm64asm.STR {
+			a1, ok := i.Args[1].(arm64asm.MemImmediate)
+			if ok && i.Args[0] == arm64asm.XZR &&
+				a1.Base == globalState && a1.Mode == arm64asm.AddrOffset {
+				disp := getImm(a1)
+				if disp > curLOffset && disp <= curLOffset+maxJitBaseOffsetFromCurL {
+					return disp, nil
+				}
+			}
+		}
+	}
+	return 0, nil
+}
+
 func (a *armExtractor) findLjDispatchUpdateAddr(b []byte, addr uint64) (uint64, error) {
 	var ip int64
 	for len(b) > 0 {
