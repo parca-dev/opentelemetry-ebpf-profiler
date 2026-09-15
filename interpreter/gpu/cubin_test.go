@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"testing"
 
+	sasstable "github.com/gnurizen/sass-table"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -187,4 +188,61 @@ func TestCubinProcessOpenMappingFileParses(t *testing.T) {
 	assert.Equal(t, text, sdata)
 
 	assert.Equal(t, original, data, "OpenMappingFile modified the backing buffer")
+}
+
+// TestSMVersionFromFlags covers both e_flags layouts NVIDIA uses. Reading bits
+// [8:15] unconditionally decoded a typical sm_90 cubin as 5, which is not a
+// real SM version -- the opcode table lookup then missed silently and PC
+// samples carried a stall reason but never an instruction mnemonic.
+func TestSMVersionFromFlags(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		flags uint32
+		want  int
+	}{
+		// Legacy layout: SM in the low byte, feature flags above it.
+		// 0x550 = TEXMODE_UNIFIED | 64BIT_ADDRESS | ACCELERATORS_V1.
+		{"sm_90_with_feature_flags", 0x0055055a, 90},
+		{"sm_90_bare", 0x0000005a, 90},
+		{"sm_90a_accelerated", 0x0000085a, 90},
+		{"sm_75", 0x0000054b, 75},
+		{"sm_80", 0x00000550, 80},
+		{"sm_89", 0x00000559, 89},
+		{"sm_20_lower_bound", 0x00000014, 20},
+
+		// Blackwell layout: SM at bits [8:15], low byte only ACCELERATORS.
+		{"sm_100", 0x00006400, 100},
+		{"sm_100a_accelerated", 0x00006408, 100},
+		{"sm_120", 0x00007800, 120},
+		{"sm_121", 0x00007900, 121},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, smVersionFromFlags(tc.flags))
+		})
+	}
+}
+
+// TestParseCubinELFSMVersion checks the version survives a full parse, and that
+// what comes out is a version the SASS decoder actually has a table for --
+// the property that actually matters for instruction mnemonics.
+func TestParseCubinELFSMVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		flags uint32
+		want  int
+	}{
+		{"sm_90_h100", 0x0055055a, 90},
+		{"sm_100_blackwell", 0x00006400, 100},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := buildCubin(t, cudaVersion, []byte("\x00\x00\x00\x00\x00\x00\x00\x00"))
+			binary.LittleEndian.PutUint32(data[elfFlagsOff:], tc.flags)
+
+			smVersion, _, err := ParseCubinELF(data)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, smVersion)
+			assert.Contains(t, sasstable.ArchTables, smVersion,
+				"no SASS opcode table for decoded SM version")
+		})
+	}
 }

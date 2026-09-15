@@ -148,6 +148,41 @@ func (r cubinVersionReader) ReadAt(p []byte, off int64) (int, error) {
 	return n, err
 }
 
+// elfFlagsOff is the offset of the e_flags field in an ELF64 header, and the
+// bounds below are the SM values NVIDIA has assigned under each e_flags ABI
+// (see EF_CUDA_SM* in LLVM's BinaryFormat/ELF.h).
+const (
+	elfFlagsOff = 0x30
+
+	// Lowest and highest SM values encoded in the low byte: sm_20 to sm_90.
+	minLegacySM = 0x14
+	maxLegacySM = 0x5a
+)
+
+// smVersionFromFlags extracts the SM version from a cubin's e_flags.
+//
+// NVIDIA uses two layouts. Up to sm_90 the version sits in the low byte
+// (EF_CUDA_SM = 0xff); from Blackwell on it moved to bits [8:15]
+// (EF_CUDA_SM_MASK = 0xff00, EF_CUDA_SM_OFFSET = 8).
+//
+// Reading bits [8:15] unconditionally is wrong for every pre-Blackwell cubin,
+// because that is where the older ABI keeps feature flags:
+// EF_CUDA_TEXMODE_UNIFIED (0x100), EF_CUDA_TEXMODE_INDEPENDANT (0x200),
+// EF_CUDA_64BIT_ADDRESS (0x400), EF_CUDA_ACCELERATORS_V1 (0x800). A typical
+// sm_90 cubin decodes to 5 that way, which is not a real SM version, so the
+// opcode table lookup silently misses and no instruction mnemonic is reported.
+//
+// The two encodings are distinguishable: assigned pre-Blackwell values run
+// 0x14..0x5a, while in the new ABI the low byte carries only
+// EF_CUDA_ACCELERATORS (0x8). So a low byte in the legacy range identifies the
+// old layout, and anything else means the version is in the high byte.
+func smVersionFromFlags(flags uint32) int {
+	if lo := int(flags & 0xFF); lo >= minLegacySM && lo <= maxLegacySM {
+		return lo
+	}
+	return int((flags >> 8) & 0xFF)
+}
+
 // ParseCubinELF parses a cubin ELF binary, extracting the SM version and
 // executable .text sections. Cubins are GPU ELF files — we use debug/elf
 // (not pfelf) since pfelf is host-architecture-specific.
@@ -164,12 +199,12 @@ func ParseCubinELF(data []byte) (int, []TextSection, error) {
 		}
 	}
 
-	// SM version is in e_flags bits [8:15]. Go's debug/elf doesn't expose
-	// e_flags, so we read it directly from the raw header (offset 48 for ELF64).
+	// The SM version lives in e_flags. Go's debug/elf doesn't expose e_flags,
+	// so we read it directly from the raw header (offset 48 for ELF64).
 	var smVersion int
-	if len(data) >= 52 {
-		flags := binary.LittleEndian.Uint32(data[48:52])
-		smVersion = int((flags >> 8) & 0xFF)
+	if len(data) >= elfFlagsOff+4 {
+		smVersion = smVersionFromFlags(binary.LittleEndian.Uint32(
+			data[elfFlagsOff : elfFlagsOff+4]))
 	}
 
 	var texts []TextSection
