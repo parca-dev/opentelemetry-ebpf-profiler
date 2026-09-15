@@ -201,8 +201,13 @@ type cubinProcess struct {
 	data []byte
 }
 
+// cubinReadAtCloser hands out the cubin with e_version normalized, exactly as
+// ParseCubinELF sees it. Everything downstream of OpenMappingFile parses these
+// bytes with debug/elf too -- parca-agent's symbol uploader runs them through
+// elfwriter to extract debuginfo -- and would otherwise hit the same
+// "mismatched ELF version" rejection that ParseCubinELF works around.
 type cubinReadAtCloser struct {
-	*bytes.Reader
+	cubinVersionReader
 }
 
 func (cubinReadAtCloser) Close() error { return nil }
@@ -214,7 +219,7 @@ func NewCubinProcess(pid uint32, data []byte) process.Process {
 }
 
 func (p *cubinProcess) OpenMappingFile(_ *process.RawMapping) (process.ReadAtCloser, error) {
-	return cubinReadAtCloser{bytes.NewReader(p.data)}, nil
+	return cubinReadAtCloser{cubinVersionReader{bytes.NewReader(p.data)}}, nil
 }
 
 func (p *cubinProcess) PID() libpf.PID                      { return libpf.PID(p.pid) }
