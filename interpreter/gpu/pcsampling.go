@@ -1,6 +1,7 @@
 package gpu // import "go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 
 import (
+	"sync"
 	"time"
 	"unique"
 
@@ -131,6 +132,19 @@ func buildGpuPCMeta(cpuTrace *SymbolizedCudaTrace, pid uint32,
 	return meta
 }
 
+// warnedUnknownSM keys cubin CRCs already reported, so a hot kernel does not
+// emit one line per PC sample.
+var warnedUnknownSM sync.Map
+
+func warnUnknownSMOnce(info *CubinInfo) {
+	if _, loaded := warnedUnknownSM.LoadOrStore(info.CRC, struct{}{}); loaded {
+		return
+	}
+	log.Warnf("[cuda] no SASS opcode table for sm_%d (cubin crc=0x%x); "+
+		"PC samples will carry stall reasons but no instruction mnemonics",
+		info.SMVersion, info.CRC)
+}
+
 // decodeInstruction decodes the SASS mnemonic of the instruction at pcOffset in
 // the cubin. CUPTI reports pcOffset relative to the start of functionName, and
 // ptxas emits one ".text.<mangled-name>" section per function starting at the
@@ -143,6 +157,14 @@ func buildGpuPCMeta(cpuTrace *SymbolizedCudaTrace, pid uint32,
 // offset into each section.
 func decodeInstruction(info *CubinInfo, functionName string, pcOffset uint64) string {
 	if info.SMVersion == 0 || len(info.Texts) == 0 {
+		return ""
+	}
+	// An SM version we have no opcode table for decodes to "" for every sample
+	// in the cubin, which is otherwise indistinguishable from a cubin whose
+	// instructions simply did not decode: the stall reason label still appears
+	// and the instruction one silently never does. Say so once per cubin.
+	if _, ok := sasstable.ArchTables[info.SMVersion]; !ok {
+		warnUnknownSMOnce(info)
 		return ""
 	}
 
