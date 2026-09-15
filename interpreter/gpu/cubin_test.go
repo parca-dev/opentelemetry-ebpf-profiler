@@ -156,3 +156,35 @@ func TestCubinVersionReaderPartialReads(t *testing.T) {
 		})
 	}
 }
+
+// TestCubinProcessOpenMappingFileParses covers the bytes handed to downstream
+// consumers rather than to ParseCubinELF. parca-agent's symbol uploader opens
+// the cubin through this path and runs it through elfwriter, which parses it
+// with debug/elf and failed the same way ParseCubinELF used to:
+//
+//	Failed to upload with fileName 'cubin-000000000ee1858b' and buildID '':
+//	extract debuginfo: initialize nullifying writer: error reading ELF file:
+//	mismatched ELF version 'EV_CURRENT+128' in record at byte 0x0
+func TestCubinProcessOpenMappingFileParses(t *testing.T) {
+	text := []byte("\x01\x02\x03\x04\x05\x06\x07\x08")
+	data := buildCubin(t, cudaVersion, text)
+	original := bytes.Clone(data)
+
+	p := NewCubinProcess(1234, data)
+	rac, err := p.OpenMappingFile(nil)
+	require.NoError(t, err)
+	defer rac.Close()
+
+	// debug/elf is what every downstream consumer reaches for.
+	ef, err := elf.NewFile(rac)
+	require.NoError(t, err)
+	defer ef.Close()
+
+	sec := ef.Section(".text")
+	require.NotNil(t, sec)
+	sdata, err := sec.Data()
+	require.NoError(t, err)
+	assert.Equal(t, text, sdata)
+
+	assert.Equal(t, original, data, "OpenMappingFile modified the backing buffer")
+}
