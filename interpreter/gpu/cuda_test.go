@@ -172,6 +172,72 @@ func TestAddTraceAndTimes(t *testing.T) {
 	assert.Equal(t, "_Z9myKernelPfS_i", cudaFrame.FunctionName.String())
 }
 
+// TestAddTimesMultiPIDBatch verifies that a single AddTimes batch mixing
+// events from several PIDs -- including a PID with no live fixer (e.g. its
+// process already exited and was cleaned up) -- still fast-forwards to the
+// first PID it finds a fixer for, bulk-processes that PID's events, and
+// correctly falls back to per-event handling for everything else, without
+// dropping events that belong to other still-live PIDs.
+func TestAddTimesMultiPIDBatch(t *testing.T) {
+	const (
+		pidA     = libpf.PID(510) // has a live fixer, appears first in the batch
+		pidB     = libpf.PID(511) // has a live fixer, but not the one AddTimes locks first
+		pidC     = libpf.PID(512) // no fixer registered -- simulates an exited process
+		corrIDA  = uint32(10)
+		corrIDB  = uint32(20)
+		corrIDC1 = uint32(98)
+		corrIDC2 = uint32(99)
+	)
+
+	gpu.RegisterTestFixer(pidA)
+	t.Cleanup(func() { gpu.UnregisterTestFixer(pidA) })
+	gpu.RegisterTestFixer(pidB)
+	t.Cleanup(func() { gpu.UnregisterTestFixer(pidB) })
+	// pidC is intentionally left unregistered.
+
+	// Traces for A and B arrive first and are stored pending timing info.
+	traceA := makeSymbolizedTrace(0, 1, corrIDA, 1)
+	assert.Empty(t, gpu.InterceptTrace(traceA, &samples.TraceEventMeta{PID: pidA}))
+	traceB := makeSymbolizedTrace(0, 1, corrIDB, 1)
+	assert.Empty(t, gpu.InterceptTrace(traceB, &samples.TraceEventMeta{PID: pidB}))
+
+	kernelName := func(name string) [256]byte {
+		var kn [256]byte
+		copy(kn[:], name)
+		return kn
+	}
+
+	// Order matters: pidC events lead the batch (no fixer yet, so AddTimes
+	// must fast-forward past them), then pidA is the first PID AddTimes
+	// finds a fixer for and locks, then pidB and a second pidC event arrive
+	// while pidA's fixer is still locked, so they must be deferred rather
+	// than dropped or merged into pidA's bulk pass.
+	events := []gpu.CuptiKernelEvent{
+		{Pid: uint32(pidC), Id: corrIDC1, KernelName: kernelName("orphanKernel1")},
+		{Pid: uint32(pidA), Id: corrIDA, Start: 1000, End: 1500, KernelName: kernelName("kernelA")},
+		{Pid: uint32(pidB), Id: corrIDB, Start: 2000, End: 2800, KernelName: kernelName("kernelB")},
+		{Pid: uint32(pidC), Id: corrIDC2, KernelName: kernelName("orphanKernel2")},
+	}
+
+	outputs := gpu.AddTimes(events)
+	require.Len(t, outputs, 2, "only pidA and pidB events should produce output; pidC has no fixer")
+
+	byPID := make(map[libpf.PID]gpu.CudaTraceOutput, 2)
+	for _, out := range outputs {
+		byPID[out.Meta.PID] = out
+	}
+
+	require.Contains(t, byPID, pidA)
+	outA := byPID[pidA]
+	assert.Equal(t, int64(500), outA.Meta.Value)
+	assert.Equal(t, "kernelA", outA.Trace.Frames[0].Value().FunctionName.String())
+
+	require.Contains(t, byPID, pidB)
+	outB := byPID[pidB]
+	assert.Equal(t, int64(800), outB.Meta.Value)
+	assert.Equal(t, "kernelB", outB.Trace.Frames[0].Value().FunctionName.String())
+}
+
 func TestAddTimeThenTrace(t *testing.T) {
 	const pid = libpf.PID(501)
 	gpu.RegisterTestFixer(pid)

@@ -1033,41 +1033,54 @@ func addTimeSingle(ev *CuptiKernelEvent) (CudaTraceOutput, bool) {
 	return fixer.addTime(ev)
 }
 
-// AddTimes processes a batch of timing events, taking the lock once per PID.
-// Returns all completed traces.
+// AddTimes processes a batch of timing events in a single pass. It skips
+// past any leading events whose PID has no live fixer, locks the fixer for
+// the first PID that does, and bulk-processes every event for that PID as
+// it goes (the common case is a batch from a single, live PID, needing only
+// one lookup and one lock/unlock for the whole batch). Events for any other
+// PID -- including ones seen before a fixer was found -- are set aside and
+// handled individually afterwards. Returns all completed traces.
 func AddTimes(events []CuptiKernelEvent) []CudaTraceOutput {
 	if len(events) == 0 {
 		return nil
 	}
 
 	var outputs []CudaTraceOutput
+	var pending []CuptiKernelEvent
 
-	// Fast path: assume all events from same PID (common case)
-	pid := libpf.PID(events[0].Pid)
-	value, ok := gpuFixers.Load(pid)
-	if !ok {
-		log.Warnf("no GPU fixer found for PID %d in AddTimes", pid)
-		return nil
-	}
-	fixer := value.(*gpuTraceFixer)
+	var fixer *gpuTraceFixer
+	var pid libpf.PID
 
-	var otherPID []CuptiKernelEvent
-	fixer.mu.Lock()
 	for i := range events {
 		ev := &events[i]
+
+		if fixer == nil {
+			p := libpf.PID(ev.Pid)
+			value, ok := gpuFixers.Load(p)
+			if !ok {
+				pending = append(pending, *ev)
+				continue
+			}
+			pid, fixer = p, value.(*gpuTraceFixer)
+			fixer.mu.Lock()
+		}
+
 		if libpf.PID(ev.Pid) != pid {
-			otherPID = append(otherPID, *ev)
+			pending = append(pending, *ev)
 			continue
 		}
 		if out, ok := fixer.addTime(ev); ok {
 			outputs = append(outputs, out)
 		}
 	}
-	fixer.mu.Unlock()
+	if fixer != nil {
+		fixer.mu.Unlock()
+	}
 
-	// Handle rare events from other PIDs
-	for i := range otherPID {
-		if out, ok := addTimeSingle(&otherPID[i]); ok {
+	// Handle events left over from before a fixer was found, or belonging
+	// to other PIDs -- rare, so a per-event lookup is fine here.
+	for i := range pending {
+		if out, ok := addTimeSingle(&pending[i]); ok {
 			outputs = append(outputs, out)
 		}
 	}
