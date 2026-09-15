@@ -113,15 +113,56 @@ func ReadCubinFromProcess(pid uint32, ptr, size uint64) ([]byte, error) {
 	return buf[:n], nil
 }
 
+// elfVersionOff is the offset of the 32-bit e_version field in an ELF64
+// header, and evCurrent the only value debug/elf accepts there.
+const (
+	elfVersionOff = 0x14
+	evCurrent     = 1
+)
+
+// cubinVersionReader presents a cubin with its e_version field normalized to
+// EV_CURRENT. NVIDIA stores a toolkit-specific value there (CUDA 12.9, as
+// shipped in nvcr.io/nvidia/pytorch:25.06-py3, emits 129) rather than
+// EV_CURRENT, and debug/elf rejects the header outright over it. nvdisasm and
+// the CUDA loader ignore the field, so normalizing it unconditionally is
+// safe and keeps us working across toolkit releases that bump the value.
+//
+// The substitution happens on the way out of ReadAt so the caller's buffer is
+// never modified: those bytes are hashed for the FileID and uploaded verbatim
+// as the debug file, and rewriting them in place would corrupt both.
+type cubinVersionReader struct{ base io.ReaderAt }
+
+func (r cubinVersionReader) ReadAt(p []byte, off int64) (int, error) {
+	n, err := r.base.ReadAt(p, off)
+	// Patch whatever part of [elfVersionOff, elfVersionOff+4) this read covers.
+	for i := int64(0); i < 4; i++ {
+		if idx := elfVersionOff + i - off; idx >= 0 && idx < int64(n) {
+			// Little-endian EV_CURRENT: 0x01 0x00 0x00 0x00.
+			if i == 0 {
+				p[idx] = evCurrent
+			} else {
+				p[idx] = 0
+			}
+		}
+	}
+	return n, err
+}
+
 // ParseCubinELF parses a cubin ELF binary, extracting the SM version and
 // executable .text sections. Cubins are GPU ELF files — we use debug/elf
 // (not pfelf) since pfelf is host-architecture-specific.
 func ParseCubinELF(data []byte) (int, []TextSection, error) {
-	ef, err := elf.NewFile(bytes.NewReader(data))
+	ef, err := elf.NewFile(cubinVersionReader{bytes.NewReader(data)})
 	if err != nil {
 		return 0, nil, fmt.Errorf("parse cubin ELF: %w", err)
 	}
 	defer ef.Close()
+
+	if len(data) >= elfVersionOff+4 {
+		if v := binary.LittleEndian.Uint32(data[elfVersionOff : elfVersionOff+4]); v != evCurrent {
+			log.Debugf("[cuda] cubin has non-standard ELF e_version %d (toolkit-specific)", v)
+		}
+	}
 
 	// SM version is in e_flags bits [8:15]. Go's debug/elf doesn't expose
 	// e_flags, so we read it directly from the raw header (offset 48 for ELF64).
