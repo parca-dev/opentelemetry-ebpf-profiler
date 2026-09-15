@@ -156,14 +156,19 @@ func LoadMaps(ctx context.Context, interpretersConfig interpreterconfig.Config,
 	return impl, nil
 }
 
-// deleteSpecIDs removes USDT spec map entries that won't be cleaned up
-// by a ProbeLinks (e.g. when multi-probe attach fails before returning a link).
-func (impl *ebpfMapsImpl) deleteSpecIDs(specIDs []uint32) {
-	for _, specID := range specIDs {
-		if specID != 0 {
-			if err := impl.usdtSpecsMap.Delete(unsafe.Pointer(&specID)); err != nil {
-				log.Warnf("failed to delete spec ID %d from map: %v", specID, err)
-			}
+// deleteSpecIDRange releases a contiguous block of reserved USDT spec IDs.
+// Only a subset of a reserved range is ever stored -- probes with no arguments
+// or unparseable ones are skipped, and a failed PopulateSpecMap stops early --
+// so a missing key is the normal case and not worth logging.
+func (impl *ebpfMapsImpl) deleteSpecIDRange(start, count uint32) {
+	for specID := start; specID < start+count; specID++ {
+		if specID == 0 {
+			// 0 means "no spec" on the BPF side and is never stored.
+			continue
+		}
+		err := impl.usdtSpecsMap.Delete(unsafe.Pointer(&specID))
+		if err != nil && !errors.Is(err, cebpf.ErrKeyNotExist) {
+			log.Warnf("failed to delete spec ID %d from map: %v", specID, err)
 		}
 	}
 }
@@ -196,6 +201,21 @@ func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName st
 		return id
 	}()
 
+	// Every exit below that does not hand ownership of the reserved spec IDs to
+	// a returned LinkCloser must release them again, or the entries stay in
+	// __bpf_usdt_specs for the lifetime of the agent. The map is a fixed-size
+	// hash, so leaked entries eventually fill it and every later attach fails
+	// with E2BIG ("key too big for map"). Rolling back the whole reserved range
+	// -- rather than the IDs PopulateSpecMap reports -- also covers the case
+	// where PopulateSpecMap itself fails partway through and returns none of
+	// the IDs it had already stored.
+	attached := false
+	defer func() {
+		if !attached {
+			impl.deleteSpecIDRange(startSpecID, uint32(len(probes)))
+		}
+	}()
+
 	specIDs, err := usdt.PopulateSpecMap(impl.usdtSpecsMap, probes, startSpecID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to populate USDT spec maps: %w", err)
@@ -208,10 +228,10 @@ func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName st
 		lc, multiErr := impl.attachMultiProbe(exe, path, pid, multiProgName,
 			probes, finalCookies, specIDs)
 		if multiErr == nil {
+			attached = true
 			return lc, nil
 		}
 		if singleProgNames == nil {
-			impl.deleteSpecIDs(specIDs)
 			return nil, multiErr
 		}
 		log.Warnf("multi-probe attach failed (%v), falling back to single-shot", multiErr)
@@ -243,6 +263,11 @@ func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName st
 	if err != nil {
 		return nil, err
 	}
+	// AttachUprobes does not populate SpecIDs, so the ProbeLinks it returns
+	// would detach the uprobes on Unload but leave the spec entries behind.
+	// Hand it the IDs so it cleans up after itself.
+	pl.SpecIDs = specIDs
+	attached = true
 
 	log.Infof("Attached %d individual probes to %s in PID %d", len(probes), path, pid)
 	return pl, nil
