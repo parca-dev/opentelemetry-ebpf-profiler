@@ -158,7 +158,7 @@ func LoadMaps(ctx context.Context, interpretersConfig interpreterconfig.Config,
 
 // deleteSpecIDRange releases a contiguous block of reserved USDT spec IDs.
 // Only a subset of a reserved range is ever stored -- probes with no arguments
-// or unparseable ones are skipped, and a failed PopulateSpecMap stops early --
+// are skipped, and a failed PopulateSpecMap stops early --
 // so a missing key is the normal case and not worth logging.
 func (impl *ebpfMapsImpl) deleteSpecIDRange(start, count uint32) {
 	for specID := start; specID < start+count; specID++ {
