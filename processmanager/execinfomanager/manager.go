@@ -140,14 +140,15 @@ func NewExecutableInfoManager(
 	}
 
 	loaders = append(loaders, apmint.Loader)
-	// customlabels is parca's native (non-Go) custom-labels pseudo-interpreter.
-	// Upstream #1564 folded the old `labels` config section into Go, so this is
-	// now gated on the Go labels toggle — the same knob that gated it before the
-	// fold. NB: native custom labels are not Go-specific, so this coupling is
-	// inherited rather than intended, and is worth revisiting separately.
+	// customlabels is parca's native (non-Go) custom-labels pseudo-interpreter,
+	// which upstream does not have. It gets its own toggle rather than riding on
+	// Go.Labels: go.Disabled wins over the Go sub-toggles, so gating it there
+	// would disable native custom labels for every process whenever the Go
+	// interpreter is off — including `--tracers=labels,v8`, which is exactly how
+	// the node integration test runs.
 	//
 	// The Go loader itself is appended above, whenever Go support is enabled.
-	if !interpretersConfig.Go.IsLabelsDisabled() {
+	if !interpretersConfig.CustomLabels.IsDisabled() {
 		loaders = append(loaders, customlabels.Loader)
 	}
 	loaders = append(loaders, oomwatcher.Loader, rtld.Loader)

@@ -222,5 +222,8 @@ func (t IncludedTracers) ToInterpretersConfig() interpreterconfig.Config {
 		BEAM:   beam.Config{BaseConfig: dis(t.Has(BEAMTracer))},
 		LuaJIT: luajit.Config{BaseConfig: dis(t.Has(LuaJITTracer))},
 		CUDA:   gpu.Config{BaseConfig: dis(t.Has(CUDATracer))},
+		// The Labels tracer drives both Go goroutine labels and parca's native
+		// custom labels; the latter is independent of whether Go is enabled.
+		CustomLabels: dis(t.Has(Labels)),
 	}
 }

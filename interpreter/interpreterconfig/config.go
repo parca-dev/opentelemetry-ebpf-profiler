@@ -37,6 +37,13 @@ type Config struct {
 	// parca-only extensions
 	LuaJIT luajit.Config `mapstructure:"luajit" json:"luajit,omitempty"`
 	CUDA   gpu.Config    `mapstructure:"cuda" json:"cuda,omitempty"`
+	// CustomLabels gates the native (non-Go) custom-labels pseudo-interpreter.
+	// It has its own toggle because it has nothing to do with Go: before
+	// upstream #1564 the fork gated it on the standalone `labels` section, and
+	// that section is now Go.Labels, whose Config documents that go.Disabled
+	// wins over the sub-toggles. Reusing it would switch native custom labels
+	// off for every process whenever the Go interpreter is disabled.
+	CustomLabels interpreter.BaseConfig `mapstructure:"custom_labels" json:"custom_labels,omitempty"`
 }
 
 // AllInterpreters returns a Config with all interpreters enabled.
@@ -56,8 +63,9 @@ func NoInterpreters() Config {
 		Go:      golang.Config{BaseConfig: disabled},
 		BEAM:    beam.Config{BaseConfig: disabled},
 		// parca-only extensions
-		LuaJIT: luajit.Config{BaseConfig: disabled},
-		CUDA:   gpu.Config{BaseConfig: disabled},
+		LuaJIT:       luajit.Config{BaseConfig: disabled},
+		CUDA:         gpu.Config{BaseConfig: disabled},
+		CustomLabels: disabled,
 	}
 }
 
