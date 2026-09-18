@@ -22,9 +22,12 @@ import (
 // They live here rather than in tracer because the import edge runs
 // tracer -> interpreterconfig -> gpu; gpu cannot import tracer.
 //
-// The sample-type strings are the profiler's own view. parca-agent may relabel
-// them (see its --merge-gpu-profiles flag), which is why callers match on
-// pointer identity rather than on the strings.
+// SampleType is the identifying field: it is unique across every profile type
+// the profiler produces, and nothing assigns to a TypeMetadata after it is
+// constructed. parca-agent keys off it rather than off pointer identity,
+// because the three types the tracer registers for itself are anonymous
+// literals it cannot reach. (--merge-gpu-profiles does relabel GPU samples,
+// but it rewrites the profile parca-agent emits, not the metadata here.)
 var (
 	ProfileTypeCuda = &samples.TypeMetadata{
 		SampleType:   "gpu_kernel_time",
