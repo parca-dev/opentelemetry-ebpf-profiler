@@ -68,7 +68,7 @@ func TestValidateFrameCacheSize(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := validConfig()
 			cfg.FrameCacheSize = tt.frameCacheSize
-			err := xconfmap.Validate(cfg)
+			err := confmap.Validate(cfg)
 			if tt.wantErr {
 				require.Error(t, err)
 				return
