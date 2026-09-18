@@ -14,3 +14,6 @@ cmd/otelcol-ebpf-profiler/*.go
 cmd/otelcol-ebpf-profiler/go.mod
 cmd/otelcol-ebpf-profiler/go.sum
 otelcol-ebpf-profiler
+
+# Mock CUDA/CUPTI libs downloaded by test/distro-qemu/download-parcagpu.sh
+/parcagpu-lib/
