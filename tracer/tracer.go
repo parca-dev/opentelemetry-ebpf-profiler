@@ -473,11 +473,11 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 		!cfg.InterpretersConfig.CUDA.IsDisabled() {
 		// Load the tail call destinations if any kind of event profiling is enabled.
 		// loadProbeUnwinders repoints this chain's per_cpu_records references to
-		// per_cpu_rec_kp so a perf sampler can't clobber an in-flight uprobe unwind;
+		// per_cpu_records_kp so a perf sampler can't clobber an in-flight uprobe unwind;
 		// the perf chain keeps per_cpu_records.
 		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], tailCallProgs,
 			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD(),
-			ebpfMaps["per_cpu_records"].FD(), ebpfMaps["per_cpu_rec_kp"]); err != nil {
+			ebpfMaps["per_cpu_records"].FD(), ebpfMaps["per_cpu_records_kp"]); err != nil {
 			return nil, nil, nil, nil, fmt.Errorf("failed to load kprobe eBPF programs: %v", err)
 		}
 	}
@@ -497,7 +497,7 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 		}
 		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], offCPUProgs,
 			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD(),
-			ebpfMaps["per_cpu_records"].FD(), ebpfMaps["per_cpu_rec_kp"]); err != nil {
+			ebpfMaps["per_cpu_records"].FD(), ebpfMaps["per_cpu_records_kp"]); err != nil {
 			return nil, nil, nil, nil, fmt.Errorf("failed to load kprobe eBPF programs: %v", err)
 		}
 	}
@@ -512,7 +512,7 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 		}
 		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], probeProgs,
 			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD(),
-			ebpfMaps["per_cpu_records"].FD(), ebpfMaps["per_cpu_rec_kp"]); err != nil {
+			ebpfMaps["per_cpu_records"].FD(), ebpfMaps["per_cpu_records_kp"]); err != nil {
 			return nil, nil, nil, nil, fmt.Errorf("failed to load uprobe eBPF programs: %v", err)
 		}
 	}

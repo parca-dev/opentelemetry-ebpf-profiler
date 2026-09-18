@@ -368,7 +368,7 @@ func (impl *ebpfMapsImpl) loadUSDTProgram(progName string, useMulti bool) error 
 
 	// Repoint per_cpu_records to the chain's own record map, as loadProbeUnwinders
 	// does for the kprobe unwinders.
-	if kprobeRec := impl.allMaps["per_cpu_rec_kp"]; kprobeRec != nil {
+	if kprobeRec := impl.allMaps["per_cpu_records_kp"]; kprobeRec != nil {
 		recInsns := util.ProgArrayReferences(impl.allMaps["per_cpu_records"].FD(), progSpec.Instructions)
 		for _, ins := range recInsns {
 			if assocErr := progSpec.Instructions[ins].AssociateMap(kprobeRec); assocErr != nil {
