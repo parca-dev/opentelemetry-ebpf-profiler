@@ -1212,5 +1212,4 @@ typedef struct NativeCustomLabelsProcInfo {
   u64 als_handle_tls_offset;
 } NativeCustomLabelsProcInfo;
 
-
 #endif // OPTI_TYPES_H

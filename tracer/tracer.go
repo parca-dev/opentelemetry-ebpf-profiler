@@ -513,9 +513,9 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config, origins *orig
 		cfg.LoadProbe ||
 		!cfg.InterpretersConfig.CUDA.IsDisabled() {
 		// Load the tail call destinations if any kind of event profiling is enabled.
-		// loadProbeUnwinders repoints this chain's per_cpu_records references to
-		// per_cpu_records_kp so a perf sampler can't clobber an in-flight uprobe unwind;
-		// the perf chain keeps per_cpu_records.
+		// loadProbeUnwinders repoints the probe unwinder's per_cpu_records references
+		// to per_cpu_records_kp so a perf sampler can't clobber an in-flight uprobe unwind;
+		// the perf unwinder keeps per_cpu_records.
 		if err = loadProbeUnwinders(coll, ebpfProgs, ebpfMaps["kprobe_progs"], tailCallProgs,
 			cfg.BPFVerifierLogLevel, ebpfMaps["perf_progs"].FD(),
 			ebpfMaps["per_cpu_records"].FD(), ebpfMaps["per_cpu_records_kp"]); err != nil {
@@ -913,7 +913,7 @@ func loadProbeUnwinders(coll *cebpf.CollectionSpec, ebpfProgs map[string]*cebpf.
 			}
 		}
 
-		// Repoint per_cpu_records to the chain's own record map.
+		// Repoint per_cpu_records to the probe unwinder's own record map.
 		recInsns := util.ProgArrayReferences(perCPURecordsFD, progSpec.Instructions)
 		for _, ins := range recInsns {
 			if err := progSpec.Instructions[ins].AssociateMap(perCPURecordsKprobeMap); err != nil {

@@ -976,13 +976,7 @@ get_usermode_regs(struct pt_regs *ctx, UnwindState *state, bool *has_usermode_re
 #endif // TESTING_COREDUMP
 
 static inline EBPF_INLINE int collect_trace(
-  struct pt_regs *ctx,
-  u16 origin,
-  u32 pid,
-  u32 tid,
-  u64 trace_timestamp,
-  u64 value,
-  u64 cuda_id)
+  struct pt_regs *ctx, u16 origin, u32 pid, u32 tid, u64 trace_timestamp, u64 value, u64 cuda_id)
 {
   // Only continue processing the trace with a valid origin.
   if (origin == 0) {
