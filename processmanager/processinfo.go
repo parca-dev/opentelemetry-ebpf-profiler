@@ -397,7 +397,7 @@ func (pm *ProcessManager) newFrameMapping(pr process.Process, m *process.RawMapp
 
 	elfSpaceVA, ok := info.addressMapper.FileOffsetToVirtualAddress(m.FileOffset)
 	if !ok {
-		log.Warnf("Failed to map file offset of PID %d, file %s, offset %d",
+		log.Debugf("Failed to map file offset of PID %d, file %s, offset %d",
 			pr.PID(), m.Path, m.FileOffset)
 		return libpf.FrameMapping{}, anonymousMappingsWanted, errInvalidVirtualAddress
 	}
@@ -745,7 +745,7 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 	collectAnonymousMappings = pm.processRemovedInterpreters(pid, interpretersValid)
 	if collectAnonymousMappings != previousAnonymousMappingsWanted {
 		if err := pm.updatePIDAnonymousMappingInterest(pid, collectAnonymousMappings); err != nil {
-			log.Errorf("Failed to update anonymous mapping interest for PID %d: %v", pid, err)
+			log.Debugf("Failed to update anonymous mapping interest for PID %d: %v", pid, err)
 		}
 	}
 	pm.mu.Unlock()
@@ -783,7 +783,7 @@ func (pm *ProcessManager) SynchronizeProcess(pr process.Process) {
 		err := instance.SynchronizeMappings(pm.ebpf, pm.exeReporter, pr, interpreterMappings.mappings())
 		if err != nil {
 			if alive, _ := isPIDLive(pid); alive {
-				log.Errorf("Failed to handle new anonymous mapping for PID %d: %v", pid, err)
+				log.Debugf("Failed to handle new anonymous mapping for PID %d: %v", pid, err)
 			} else {
 				log.Debugf("Failed to handle new anonymous mapping for PID %d: process exited",
 					pid)
