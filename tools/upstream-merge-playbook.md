@@ -106,10 +106,14 @@ When the script stops, the workflow at each stop is the same:
    `types_gen.go` over `types.go`. Never edit `support/types.go` directly.
 6. `git add -u` and verify with `CGO_ENABLED=1 go vet ./tracer ./support ...`
    (the packages touched by the merge).
-7. Commit with `git -c user.email=... -c user.name='...' commit -s --no-edit`
+7. Commit with `git -c user.email=... -c user.name='...' commit --no-edit`
    to preserve the auto-generated `Merge commit '<sha>' into upstream-merge`
    message. **No `Co-Authored-By: Claude` trailers** — this repo follows the
-   OTel community policy of human-only attribution.
+   OTel community policy of human-only attribution. Don't pass `-s` either:
+   this repo doesn't gate on DCO, so the `Signed-off-by` trailer is just noise.
+   Commits are signed cryptographically via `commit.gpgsign`, which is a
+   different thing from `-s` (`--signoff`) — verify with `git log --show-signature`
+   or `git log --format='%h %G?'`.
 
 ## Decision matrix for recurring conflicts
 
