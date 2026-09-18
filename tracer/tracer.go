@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unique"
 	"unsafe"
@@ -30,7 +31,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/internal/linux"
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
-	"go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 
@@ -156,6 +156,10 @@ type Tracer struct {
 	// tracks how many were dropped due to invalid UTF-8.
 	customLabels customLabelValidator
 
+	// origins is the tracer-wide registry origin IDs are assigned from and
+	// profile type metadata is looked up by.
+	origins *originRegistry
+
 	// done is closed when the tracer encounters an unrecoverable error.
 	// Use Done() to obtain a read-only channel for use in select statements.
 	done     chan libpf.Void
@@ -274,8 +278,10 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 		return nil, fmt.Errorf("failed to read kernel symbols: %v", err)
 	}
 
+	origins := &originRegistry{}
 	// Based on includeTracers we decide later which are loaded into the kernel.
-	ebpfMaps, ebpfProgs, stackdeltaInnerMapSpec, coll, err := initializeMapsAndPrograms(kmod, cfg)
+	ebpfMaps, ebpfProgs, stackdeltaInnerMapSpec, coll, err := initializeMapsAndPrograms(
+		kmod, cfg, origins)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load eBPF code: %v", err)
 	}
@@ -327,6 +333,7 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 		probabilisticInterval:     cfg.ProbabilisticInterval,
 		probabilisticThreshold:    cfg.ProbabilisticThreshold,
 		done:                      make(chan libpf.Void),
+		origins:                   origins,
 	}
 
 	return tracer, nil
@@ -355,7 +362,7 @@ func (t *Tracer) Close() {
 
 // initializeMapsAndPrograms loads the definitions for the eBPF maps and programs provided
 // by the embedded elf file and loads these into the kernel.
-func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
+func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config, origins *originRegistry) (
 	ebpfMaps map[string]*cebpf.Map, ebpfProgs map[string]*cebpf.Program,
 	stackdeltaInnerMapSpec *cebpf.MapSpec, coll *cebpf.CollectionSpec, err error,
 ) {
@@ -383,7 +390,7 @@ func initializeMapsAndPrograms(kmod *kallsyms.Module, cfg *Config) (
 	}
 
 	// Initialize eBPF variables before loading programs and maps.
-	if err = loadRodataVars(coll, kmod, cfg, major, minor); err != nil {
+	if err = loadRodataVars(coll, kmod, cfg, major, minor, origins); err != nil {
 		return nil, nil, nil, nil, fmt.Errorf("failed to set RODATA variables: %v", err)
 	}
 
@@ -1166,19 +1173,14 @@ func (t *Tracer) loadBpfTrace(raw []byte) (*libpf.EbpfTrace, error) {
 		APMTransactionID: *(*libpf.APMTransactionID)(unsafe.Pointer(&ptr.Apm_transaction_id)),
 		PID:              pid,
 		TID:              libpf.PID(ptr.Tid),
-		Origin:           libpf.Origin(ptr.Origin),
+		Origin:           ptr.Origin,
 		Value:            int64(ptr.Value),
 		KTime:            int64(ptr.Ktime),
 		CpuID:            ptr.Cpu_id,
 		EnvVars:          procMeta.EnvVariables,
 	}
 
-	switch trace.Origin {
-	case support.TraceOriginSampling:
-	case support.TraceOriginOffCPU:
-	case support.TraceOriginProbe:
-	case support.TraceOriginCuda:
-	default:
+	if t.origins.lookup(trace.Origin) == nil {
 		return nil, fmt.Errorf("origin %d: %w", trace.Origin, errOriginUnexpected)
 	}
 
@@ -1472,7 +1474,7 @@ func (t *Tracer) AttachProbes(probes []string) error {
 }
 
 func (t *Tracer) HandleTrace(bpfTrace *libpf.EbpfTrace) {
-	t.processManager.HandleTrace(bpfTrace, profileTypeForOrigin(bpfTrace.Origin))
+	t.processManager.HandleTrace(bpfTrace, t.origins.lookup(bpfTrace.Origin))
 
 	// Reclaim the EbpfTrace
 	bpfTrace.KernelFrames = bpfTrace.KernelFrames[0:0]
@@ -1502,41 +1504,35 @@ func (t *Tracer) ForceProcessPID(pid libpf.PID) {
 	t.pidEvents <- libpf.PIDTID(uint64(pid) + uint64(pid)<<32)
 }
 
-// profileTypeForOrigin maps a raw eBPF trace origin to the profile type
-// metadata reporters need to interpret and export it. Returns nil for
-// origins that have no known profile type.
-func profileTypeForOrigin(origin libpf.Origin) *samples.TypeMetadata {
-	switch origin {
-	case support.TraceOriginSampling:
-		return profileTypeSampling
-	case support.TraceOriginOffCPU:
-		return profileTypeOffCPU
-	case support.TraceOriginProbe:
-		return profileTypeProbe
-	case support.TraceOriginCuda:
-		return gpu.ProfileTypeCuda
-	case support.TraceOriginGpuPC:
-		return gpu.ProfileTypeGpuPC
-	default:
-		return nil
-	}
+// originRegistry is the tracer-wide registry origin IDs are assigned from
+// and profile type metadata is looked up by. IDs are handed out by
+// atomically incrementing lastID, which guarantees they never collide, even
+// when profile types are registered dynamically after load time.
+type originRegistry struct {
+	// lastID is the most recently assigned origin ID.
+	lastID atomic.Uint32
+
+	// types maps a trace origin (uint16) to its *samples.TypeMetadata.
+	types sync.Map
 }
 
-// Temporary list of well-known profile types.
-var (
-	profileTypeSampling = &samples.TypeMetadata{
-		PeriodType: "cpu",
-		PeriodUnit: "nanoseconds",
-		SampleType: "samples",
-		SampleUnit: "count",
+// register hands out a fresh origin ID and stores metadata for it, keyed by
+// that ID.
+func (r *originRegistry) register(metadata *samples.TypeMetadata) (uint16, error) {
+	if last := r.lastID.Load(); last >= math.MaxUint16 {
+		return 0, fmt.Errorf("maximum number of origin registry entries exceeded")
 	}
-	profileTypeOffCPU = &samples.TypeMetadata{
-		SampleType:   "off_cpu",
-		SampleUnit:   "nanoseconds",
-		ReportValues: true,
+	id := uint16(r.lastID.Add(1))
+	r.types.Store(id, metadata)
+	return id, nil
+}
+
+// lookup returns the profile type metadata registered for origin, or nil if
+// origin is unknown.
+func (r *originRegistry) lookup(origin uint16) *samples.TypeMetadata {
+	v, ok := r.types.Load(origin)
+	if !ok {
+		return nil
 	}
-	profileTypeProbe = &samples.TypeMetadata{
-		SampleType: "events",
-		SampleUnit: "count",
-	}
-)
+	return v.(*samples.TypeMetadata)
+}

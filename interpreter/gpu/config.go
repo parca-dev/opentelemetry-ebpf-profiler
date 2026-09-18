@@ -14,6 +14,11 @@ import (
 // against support.TraceOriginCuda/TraceOriginGpuPC now compare against these
 // pointers instead.
 //
+// ProfileTypeCuda is registered with the tracer's origin registry at load time
+// (upstream #1607), which assigns it the origin ID the cuda_correlation eBPF
+// probe stamps into Trace.origin. ProfileTypeGpuPC never reaches eBPF: PC
+// samples are synthesized in user space and carry this pointer directly.
+//
 // They live here rather than in tracer because the import edge runs
 // tracer -> interpreterconfig -> gpu; gpu cannot import tracer.
 //

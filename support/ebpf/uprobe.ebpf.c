@@ -2,6 +2,9 @@
 #include "tracemgmt.h"
 #include "types.h"
 
+// origin_id_probe is declared in generic_probe.ebpf.c
+extern u16 origin_id_probe;
+
 // uprobe__generic serves as entry point for uprobe based profiling.
 SEC("uprobe/generic")
 int uprobe__generic(void *ctx)
@@ -16,7 +19,7 @@ int uprobe__generic(void *ctx)
 
   u64 ts = bpf_ktime_get_ns();
 
-  return collect_trace(ctx, TRACE_PROBE, pid, tid, ts, 0, 0);
+  return collect_trace(ctx, origin_id_probe, pid, tid, ts, 0, 0);
 }
 
 SEC("uprobe/dlopen")
