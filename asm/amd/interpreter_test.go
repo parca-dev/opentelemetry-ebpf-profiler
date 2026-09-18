@@ -173,42 +173,70 @@ func TestMoveSignExtend(t *testing.T) {
 	require.True(t, i.Regs.Get(RAX).Match(pattern))
 }
 
-func TestSubImmediate(t *testing.T) {
-	// 0000 	48 BA 00 10 00 00 00 00 00 00 	mov rdx, 0x1000
-	// 000a 	48 83 EA 0C 	sub rdx, 0xC
-	// 000e 	48 8B 92 3C 04 00 00 	mov rdx, qword ptr [rdx + 0x43C]
-	//
-	// The CPU effectively executes mov rdx, [0x1000 - 0xc + 0x43c] = [0x1430].
-	// Symbolically we expect: prev + (-0xc) + 0x43c collapses to prev + 0x430,
-	// so RDX after the third instruction is Mem8(Imm(0x1000 + 0x430)) = Mem8(Imm(0x1430)).
-	it := NewInterpreterWithCode([]byte{
-		0x48, 0xba, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-		0x48, 0x83, 0xea, 0x0c,
-		0x48, 0x8b, 0x92, 0x3c, 0x04, 0x00, 0x00,
-	})
-	_, err := it.Loop()
-	require.ErrorIs(t, err, io.EOF)
-	assertEval(t, it.Regs.Get(RDX), expression.Mem8(expression.Imm(0x1430)))
-}
-
-func TestSubRegister(t *testing.T) {
-	// 0000 	48 B8 00 10 00 00 00 00 00 00 	mov rax, 0x1000
-	// 000a 	48 B9 0C 00 00 00 00 00 00 00 	mov rcx, 0xc
-	// 0014 	48 29 C8 	sub rax, rcx
-	// 0017 	48 8B 80 3C 04 00 00 	mov rax, qword ptr [rax + 0x43c]
-	//
-	// The register being subtracted (%rcx) holds a known immediate, so -1*rcx
-	// folds and rax collapses to [0x1000 - 0xc + 0x43c] = [0x1430] - same as
-	// the imm form, exercising the SUB Reg path.
-	it := NewInterpreterWithCode([]byte{
-		0x48, 0xb8, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-		0x48, 0xb9, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-		0x48, 0x29, 0xc8,
-		0x48, 0x8b, 0x80, 0x3c, 0x04, 0x00, 0x00,
-	})
-	_, err := it.Loop()
-	require.ErrorIs(t, err, io.EOF)
-	assertEval(t, it.Regs.Get(RAX), expression.Mem8(expression.Imm(0x1430)))
+func TestSub(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		code []byte
+		reg  x86asm.Reg
+		// want is a func so the mem case can build its expectation from the
+		// interpreter's own (pointer-identity) register expressions.
+		want     func(it *Interpreter) expression.Expression
+		symbolic bool // assert the result did not fold to a constant
+	}{
+		{
+			name: "imm",
+			// mov rdx,0x1000 ; sub rdx,0xc ; mov rdx,[rdx+0x43c]
+			// -> [0x1000 - 0xc + 0x43c] = [0x1430]
+			code: []byte{
+				0x48, 0xba, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+				0x48, 0x83, 0xea, 0x0c,
+				0x48, 0x8b, 0x92, 0x3c, 0x04, 0x00, 0x00,
+			},
+			reg: x86asm.RDX,
+			want: func(*Interpreter) expression.Expression {
+				return expression.Mem8(expression.Imm(0x1430))
+			},
+		},
+		{
+			name: "reg",
+			// mov rax,0x1000 ; mov rcx,0xc ; sub rax,rcx ; mov rax,[rax+0x43c]
+			// %rcx holds a known immediate, so -1*rcx folds to the same [0x1430].
+			code: []byte{
+				0x48, 0xb8, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+				0x48, 0xb9, 0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+				0x48, 0x29, 0xc8,
+				0x48, 0x8b, 0x80, 0x3c, 0x04, 0x00, 0x00,
+			},
+			reg: x86asm.RAX,
+			want: func(*Interpreter) expression.Expression {
+				return expression.Mem8(expression.Imm(0x1430))
+			},
+		},
+		{
+			name: "mem",
+			// mov rax,[rbx] ; sub rax,[rbx]. A memory operand is symbolic, so
+			// rax becomes X + (-1*X) with X = Mem8(rbx) and does not cancel.
+			code: []byte{0x48, 0x8b, 0x03, 0x48, 0x2b, 0x03},
+			reg:  x86asm.RAX,
+			want: func(it *Interpreter) expression.Expression {
+				x := expression.Mem8(it.Regs.GetX86(x86asm.RBX))
+				return expression.Add(x, expression.Multiply(expression.Imm(^uint64(0)), x))
+			},
+			symbolic: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			it := NewInterpreterWithCode(tc.code)
+			_, err := it.Loop()
+			require.ErrorIs(t, err, io.EOF)
+			got := it.Regs.GetX86(tc.reg)
+			assertEval(t, got, tc.want(it))
+			if tc.symbolic {
+				require.False(t, got.Match(expression.Imm(0)),
+					"X + (-1*X) with symbolic X must not fold to 0")
+			}
+		})
+	}
 }
 
 func TestRIPRelativeAddressing(t *testing.T) {
