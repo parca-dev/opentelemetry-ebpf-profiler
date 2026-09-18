@@ -5,6 +5,32 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
+	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
+)
+
+// ProfileTypeCuda and ProfileTypeGpuPC are the profile types carried by
+// TraceEventMeta.ProfileType for GPU traces. Upstream #1576 replaced
+// TraceEventMeta.Origin with ProfileType, so consumers that used to compare
+// against support.TraceOriginCuda/TraceOriginGpuPC now compare against these
+// pointers instead.
+//
+// They live here rather than in tracer because the import edge runs
+// tracer -> interpreterconfig -> gpu; gpu cannot import tracer.
+//
+// The sample-type strings are the profiler's own view. parca-agent may relabel
+// them (see its --merge-gpu-profiles flag), which is why callers match on
+// pointer identity rather than on the strings.
+var (
+	ProfileTypeCuda = &samples.TypeMetadata{
+		SampleType:   "gpu_kernel_time",
+		SampleUnit:   "nanoseconds",
+		ReportValues: true,
+	}
+	ProfileTypeGpuPC = &samples.TypeMetadata{
+		SampleType:   "gpu_pcsample",
+		SampleUnit:   "count",
+		ReportValues: true,
+	}
 )
 
 // Config is the enable/disable knob wired into interpreterconfig.Config.

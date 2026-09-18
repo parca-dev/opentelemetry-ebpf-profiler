@@ -11,7 +11,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
-	"go.opentelemetry.io/ebpf-profiler/support"
 
 	sasstable "github.com/gnurizen/sass-table"
 )
@@ -120,10 +119,10 @@ func gpuPCLabels(stallName libpf.String, mnemonic string, deviceID uint32,
 func buildGpuPCMeta(cpuTrace *SymbolizedCudaTrace, pid uint32,
 	sampleCount int64) *samples.TraceEventMeta {
 	meta := &samples.TraceEventMeta{
-		Timestamp: libpf.UnixTime64(time.Now().UnixNano()),
-		PID:       libpf.PID(pid),
-		Origin:    support.TraceOriginGpuPC,
-		Value:     sampleCount,
+		Timestamp:   libpf.UnixTime64(time.Now().UnixNano()),
+		PID:         libpf.PID(pid),
+		ProfileType: ProfileTypeGpuPC,
+		Value:       sampleCount,
 	}
 	if cpuTrace != nil && cpuTrace.Meta != nil {
 		meta.Timestamp = cpuTrace.Meta.Timestamp
