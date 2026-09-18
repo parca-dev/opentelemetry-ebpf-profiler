@@ -13,7 +13,7 @@ go 1.25.0
 require (
 	github.com/aws/aws-sdk-go-v2 v1.42.1
 	github.com/aws/aws-sdk-go-v2/config v1.32.30
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.105.1
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.105.2
 	github.com/aws/smithy-go v1.27.3
 	github.com/cilium/ebpf v0.22.0
 	github.com/coreos/pkg v0.0.0-20240122114842-bbd7aa9bf6fb
@@ -25,7 +25,7 @@ require (
 	github.com/mdlayher/kobject v0.0.0-20200520190114-19ca17470d7d
 	github.com/minio/sha256-simd v1.0.1
 	github.com/moby/moby/api v1.56.0
-	github.com/open-telemetry/sig-profiling/profcheck v0.0.0-20260714195516-06c6ecc58d48
+	github.com/open-telemetry/sig-profiling/profcheck v0.0.0-20260716133810-e741622ef952
 	github.com/parca-dev/oomprof v0.1.6
 	github.com/parca-dev/usdt v0.0.2
 	github.com/peterbourgon/ff/v3 v3.4.0
