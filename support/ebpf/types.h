@@ -422,17 +422,6 @@ typedef enum TracePrograms {
   NUM_TRACER_PROGS,
 } TracePrograms;
 
-// TraceOrigin describes the source of the trace. This enables
-// origin specific handling of traces in user space.
-typedef enum TraceOrigin {
-  TRACE_UNKNOWN,
-  TRACE_SAMPLING,
-  TRACE_OFF_CPU,
-  TRACE_PROBE,
-  TRACE_CUDA_LAUNCH,
-  TRACE_GPU_PC,
-} TraceOrigin;
-
 // Maximum number of unique stack deltas needed on a system. This is based on
 // normal desktop /usr/bin/* and /usr/lib/*.so having about 9700 unique deltas.
 // Can be increased up to 2^15, see also STACK_DELTA_COMMAND_FLAG.
@@ -717,8 +706,9 @@ typedef struct Trace {
   // These are raw u64 addresses from bpf_get_stack(), not encoded frames.
   u16 num_kernel_frames;
 
-  // origin indicates the source of the trace.
-  TraceOrigin origin;
+  // origin indicates the source of the trace and it is set as
+  // RODATA variable at load time.
+  u16 origin;
 
   // value stores context-specific data that was collected with the stack.
   // e.g. time in nanoseconds for off-CPU traces
@@ -946,6 +936,16 @@ typedef struct GoMapBucket {
   void *overflow;
 } GoMapBucket;
 
+typedef struct GoRuntimeOffsets {
+  u32 m_offset;
+  u32 curg;
+  u32 labels;
+  u32 hmap_count;
+  u32 hmap_log2_bucket_count;
+  u32 hmap_buckets;
+  s32 tls_offset;
+} GoRuntimeOffsets;
+
 typedef struct CustomLabelsState {
   void *go_m_ptr;
 } CustomLabelsState;
@@ -969,6 +969,9 @@ typedef struct PerCPURecord {
   LJUnwindState luajitUnwindState;
   // State for Go and Native custom labels
   CustomLabelsState customLabelsState;
+  // Per-process Go runtime offsets, preloaded once per trace from go_procs in
+  // collect_trace. m_offset is always non-zero for a Go process.
+  GoRuntimeOffsets goOffsets;
   union {
     // Scratch space for the Dotnet unwinder.
     DotnetUnwindScratchSpace dotnetUnwindScratch;
@@ -1208,15 +1211,5 @@ typedef struct NativeCustomLabelsProcInfo {
   u64 als_identity_hash_tls_offset;
   u64 als_handle_tls_offset;
 } NativeCustomLabelsProcInfo;
-
-typedef struct GoLabelsOffsets {
-  u32 m_offset;
-  u32 curg;
-  u32 labels;
-  u32 hmap_count;
-  u32 hmap_log2_bucket_count;
-  u32 hmap_buckets;
-  s32 tls_offset;
-} GoLabelsOffsets;
 
 #endif // OPTI_TYPES_H

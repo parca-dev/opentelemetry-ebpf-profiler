@@ -90,15 +90,6 @@ const (
 	HSTSIDSegMapMask      = 0xffffffffffffff
 )
 
-const (
-	TraceOriginUnknown  = 0x0
-	TraceOriginSampling = 0x1
-	TraceOriginOffCPU   = 0x2
-	TraceOriginProbe    = 0x3
-	TraceOriginCuda     = 0x4
-	TraceOriginGpuPC    = 0x5
-)
-
 type ApmSpanID [8]byte
 type ApmTraceID [16]byte
 type CustomLabel struct {
@@ -169,7 +160,7 @@ type Trace struct {
 	Frame_data_len     uint16
 	Num_frames         uint16
 	Num_kernel_frames  uint16
-	Origin             uint32
+	Origin             uint16
 	Value              uint64
 	Cpu_id             uint32
 	Frame_data         [3072]uint64
@@ -198,7 +189,7 @@ type BEAMProcInfo struct {
 type DotnetProcInfo struct {
 	Version uint32
 }
-type GoLabelsOffsets struct {
+type GoRuntimeOffsets struct {
 	M_offset               uint32
 	Curg                   uint32
 	Labels                 uint32
@@ -354,11 +345,11 @@ const (
 	Sizeof_StackDelta = 0x4
 	Sizeof_Trace      = 0x6378
 
-	sizeof_ApmIntProcInfo  = 0x8
-	sizeof_DotnetProcInfo  = 0x4
-	sizeof_PHPProcInfo     = 0x18
-	sizeof_RubyProcInfo    = 0x48
-	sizeof_GoLabelsOffsets = 0x1c
+	sizeof_ApmIntProcInfo   = 0x8
+	sizeof_DotnetProcInfo   = 0x4
+	sizeof_PHPProcInfo      = 0x18
+	sizeof_RubyProcInfo     = 0x48
+	sizeof_GoRuntimeOffsets = 0x1c
 )
 
 const (

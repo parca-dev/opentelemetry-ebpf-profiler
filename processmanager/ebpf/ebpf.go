@@ -57,9 +57,9 @@ type ebpfMapsImpl struct {
 	V8Procs            *cebpf.Map `name:"v8_procs"`
 	BeamProcs          *cebpf.Map `name:"beam_procs"`
 	ApmIntProcs        *cebpf.Map `name:"apm_int_procs"`
-	GoLabelsProcs      *cebpf.Map `name:"go_labels_procs"`
+	GoProcs            *cebpf.Map `name:"go_procs"`
 	ClProcs            *cebpf.Map `name:"cl_procs"`
-	LuajitProcs        *cebpf.Map `name:"luajit_procs"`
+	LuaJitProcs        *cebpf.Map `name:"luajit_procs"`
 
 	// Stackdelta and process related eBPF maps
 	ExeIDToStackDeltaMaps []*cebpf.Map
@@ -479,12 +479,12 @@ func (impl *ebpfMapsImpl) getInterpreterTypeMap(typ libpf.InterpreterType) (*ceb
 		return impl.BeamProcs, nil
 	case libpf.APMInt:
 		return impl.ApmIntProcs, nil
-	case libpf.GoLabels:
-		return impl.GoLabelsProcs, nil
+	case libpf.Go:
+		return impl.GoProcs, nil
 	case libpf.CustomLabels:
 		return impl.ClProcs, nil
 	case libpf.LuaJIT:
-		return impl.LuajitProcs, nil
+		return impl.LuaJitProcs, nil
 	default:
 		return nil, fmt.Errorf("type %d is not (yet) supported", typ)
 	}
@@ -671,54 +671,6 @@ func probeMapOperations[T constraints.Unsigned](mapType cebpf.MapType, probe fun
 	defer probeMap.Close()
 
 	return probe(probeMap, generateSlice[T](updates), generateSlice[uint64](updates))
-}
-
-// probeBatchLookupAndDeleteInner is the inner check to be used by probeBatchLookupAndDelete.
-func probeBatchLookupAndDeleteInner[T constraints.Unsigned](probeMap *cebpf.Map, keys ptrCastMarshaler[T], values ptrCastMarshaler[uint64]) error {
-	n, err := probeMap.BatchUpdate(keys, values, nil)
-	if err != nil {
-		// Older kernel do not support batch operations on maps.
-		// This is just fine and we return here.
-		return err
-	}
-
-	if n != len(keys) {
-		return fmt.Errorf("unexpected batch update return: expected %d but got %d",
-			len(keys), n)
-	}
-
-	batchKeys := make([]T, 16)
-	batchValues := make([]uint64, 16)
-
-	n, err = probeMap.BatchLookupAndDelete(&cebpf.MapBatchCursor{}, batchKeys, batchValues, nil)
-	if err != nil && !errors.Is(err, cebpf.ErrKeyNotExist) {
-		return err
-	}
-
-	if n != len(keys) {
-		return fmt.Errorf("unexpected batch lookup-and-delete return: expected %d but got %d",
-			len(keys), n)
-	}
-
-	for i := range n {
-		// Keys can come out of order, so we're checking them against returned values instead of input keys.
-		if uint64(batchKeys[i]) != batchValues[i] {
-			return fmt.Errorf("mismatched batch lookup-and-delete at index %d: expected %d but got %d",
-				i, batchKeys[i], batchValues[i])
-		}
-	}
-
-	return nil
-}
-
-// probeBatchLookupAndDelete tests if the BPF syscall supports batch lookup-and-delete operations.
-// It returns nil if batch operations are supported for mapType or an error otherwise.
-func probeBatchLookupAndDelete(mapType cebpf.MapType) error {
-	if mapType == cebpf.Array {
-		return probeMapOperations(mapType, probeBatchLookupAndDeleteInner[uint32])
-	}
-
-	return probeMapOperations(mapType, probeBatchLookupAndDeleteInner[uint64])
 }
 
 // probeBatchOperationsInner is the inner check to be used by probeBatchOperations.

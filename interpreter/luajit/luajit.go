@@ -133,6 +133,13 @@ func (l *luajitInstance) Detach(ebpf interpreter.EbpfHandler, pid libpf.PID) err
 	return ebpf.DeleteProcData(libpf.LuaJIT, pid)
 }
 
+// GetLoader matches the constructor shape upstream #1640 introduced for its LuaJIT
+// stub, so callers look identical to the other interpreters. parca's Loader takes no
+// configuration beyond the enable/disable toggle the caller already applied.
+func GetLoader(_ Config) interpreter.Loader {
+	return Loader
+}
+
 func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpreter.Data, error) {
 	base := path.Base(info.FileName())
 	if !strings.HasPrefix(base, "libluajit-5.1.so") &&

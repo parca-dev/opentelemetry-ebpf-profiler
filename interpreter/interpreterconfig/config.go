@@ -10,7 +10,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter/beam"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/dotnet"
 	golang "go.opentelemetry.io/ebpf-profiler/interpreter/go"
-	"go.opentelemetry.io/ebpf-profiler/interpreter/golabels"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/hotspot"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/luajit"
@@ -24,19 +23,27 @@ import (
 // Config holds configuration for all interpreters.
 // By default all interpreters are enabled.
 type Config struct {
-	Python  python.Config   `mapstructure:"python" json:"python,omitempty"`
-	Perl    perl.Config     `mapstructure:"perl" json:"perl,omitempty"`
-	PHP     php.Config      `mapstructure:"php" json:"php,omitempty"`
-	Hotspot hotspot.Config  `mapstructure:"hotspot" json:"hotspot,omitempty"`
-	Ruby    ruby.Config     `mapstructure:"ruby" json:"ruby,omitempty"`
-	V8      nodev8.Config   `mapstructure:"v8" json:"v8,omitempty"`
-	Dotnet  dotnet.Config   `mapstructure:"dotnet" json:"dotnet,omitempty"`
-	Go      golang.Config   `mapstructure:"go" json:"go,omitempty"`
-	Labels  golabels.Config `mapstructure:"labels" json:"labels,omitempty"`
-	BEAM    beam.Config     `mapstructure:"beam" json:"beam,omitempty"`
+	Python  python.Config  `mapstructure:"python" json:"python,omitempty"`
+	Perl    perl.Config    `mapstructure:"perl" json:"perl,omitempty"`
+	PHP     php.Config     `mapstructure:"php" json:"php,omitempty"`
+	Hotspot hotspot.Config `mapstructure:"hotspot" json:"hotspot,omitempty"`
+	Ruby    ruby.Config    `mapstructure:"ruby" json:"ruby,omitempty"`
+	V8      nodev8.Config  `mapstructure:"v8" json:"v8,omitempty"`
+	Dotnet  dotnet.Config  `mapstructure:"dotnet" json:"dotnet,omitempty"`
+	// Go carries both the runtime-offset and the custom-label knobs since
+	// upstream #1564 folded the former `labels` section into it.
+	Go   golang.Config `mapstructure:"go" json:"go,omitempty"`
+	BEAM beam.Config   `mapstructure:"beam" json:"beam,omitempty"`
 	// parca-only extensions
 	LuaJIT luajit.Config `mapstructure:"luajit" json:"luajit,omitempty"`
 	CUDA   gpu.Config    `mapstructure:"cuda" json:"cuda,omitempty"`
+	// CustomLabels gates the native (non-Go) custom-labels pseudo-interpreter.
+	// It has its own toggle because it has nothing to do with Go: before
+	// upstream #1564 the fork gated it on the standalone `labels` section, and
+	// that section is now Go.Labels, whose Config documents that go.Disabled
+	// wins over the sub-toggles. Reusing it would switch native custom labels
+	// off for every process whenever the Go interpreter is disabled.
+	CustomLabels interpreter.BaseConfig `mapstructure:"custom_labels" json:"custom_labels,omitempty"`
 }
 
 // AllInterpreters returns a Config with all interpreters enabled.
@@ -54,11 +61,11 @@ func NoInterpreters() Config {
 		V8:      nodev8.Config{BaseConfig: disabled},
 		Dotnet:  dotnet.Config{BaseConfig: disabled},
 		Go:      golang.Config{BaseConfig: disabled},
-		Labels:  golabels.Config{BaseConfig: disabled},
 		BEAM:    beam.Config{BaseConfig: disabled},
 		// parca-only extensions
-		LuaJIT: luajit.Config{BaseConfig: disabled},
-		CUDA:   gpu.Config{BaseConfig: disabled},
+		LuaJIT:       luajit.Config{BaseConfig: disabled},
+		CUDA:         gpu.Config{BaseConfig: disabled},
+		CustomLabels: disabled,
 	}
 }
 
@@ -82,13 +89,12 @@ func (cfg *Config) IsMapEnabled(mapName string) bool {
 		return !cfg.BEAM.IsDisabled()
 	case luajit.BPFMapName:
 		return !cfg.LuaJIT.IsDisabled()
-	case golabels.BPFMapName, apmint.BPFMapName, nodev8.BPFMapName:
-		// go_labels_procs, apm_int_procs and v8_procs are called from
-		// unwind_stop (or referenced by perf_unwind_stop) and therefore
-		// need to be available all the time. v8_procs is a parca fork
-		// addition to this list — the reference lives in a parca-side
-		// eBPF change to unwind_stop and would otherwise break the
-		// verifier when v8 is disabled.
+	case golang.BPFMapName, apmint.BPFMapName, nodev8.BPFMapName:
+		// go_procs is read from collect_trace (preloaded into the PerCPURecord)
+		// and apm_int_procs from unwind_stop, so both must always be loaded.
+		// v8_procs is a parca fork addition to this list — the reference lives
+		// in a parca-side eBPF change to unwind_stop and would otherwise break
+		// the verifier when v8 is disabled.
 		return true
 	default:
 		return true // Not an interpreter map, so it should be loaded

@@ -54,6 +54,9 @@ extern u32 vma_vm_file_offset;
 // vma_vm_flags_offset is declared in native_stack_trace.ebpf.c
 extern u32 vma_vm_flags_offset;
 
+// origin_id_sampling is declared in native_stack_trace.ebpf.c
+extern u16 origin_id_sampling;
+
 // Strips the PAC tag from a pointer.
 //
 // While all pointers can contain PAC tags, we only apply this function to code pointers, because
@@ -284,6 +287,7 @@ static inline EBPF_INLINE PerCPURecord *get_pristine_per_cpu_record()
   record->ratelimitAction                   = RATELIMIT_ACTION_DEFAULT;
   record->usesAnonymousMappings             = false;
   record->customLabelsState.go_m_ptr        = NULL;
+  record->goOffsets.m_offset                = 0;
 
   Trace *trace             = &record->trace;
   trace->frame_data_len    = 0;
@@ -397,8 +401,10 @@ static inline EBPF_INLINE bool unwinder_unwind_frame_pointer(UnwindState *state)
 
 static inline EBPF_INLINE bool unwinder_unwind_go_morestack(PerCPURecord *record)
 {
-  GoLabelsOffsets *offs = bpf_map_lookup_elem(&go_labels_procs, &record->trace.pid);
-  if (!offs) {
+  // goOffsets is preloaded once per trace by collect_trace; m_offset == 0 means
+  // this PID has no go_procs entry, i.e. it is not a Go binary.
+  GoRuntimeOffsets *offs = &record->goOffsets;
+  if (offs->m_offset == 0) {
     DEBUG_PRINT("morestack: failed to read go labels offsets");
     return false;
   }
@@ -970,14 +976,13 @@ get_usermode_regs(struct pt_regs *ctx, UnwindState *state, bool *has_usermode_re
 #endif // TESTING_COREDUMP
 
 static inline EBPF_INLINE int collect_trace(
-  struct pt_regs *ctx,
-  TraceOrigin origin,
-  u32 pid,
-  u32 tid,
-  u64 trace_timestamp,
-  u64 value,
-  u64 cuda_id)
+  struct pt_regs *ctx, u16 origin, u32 pid, u32 tid, u64 trace_timestamp, u64 value, u64 cuda_id)
 {
+  // Only continue processing the trace with a valid origin.
+  if (origin == 0) {
+    return -1;
+  }
+
   // The trace is reused on each call to this function so we have to reset the
   // variables used to maintain state.
   DEBUG_PRINT("Resetting CPU record");
@@ -1011,6 +1016,12 @@ static inline EBPF_INLINE int collect_trace(
     if (!data)
       return ERR_STACK_LENGTH_EXCEEDED;
     data[0] = cuda_id;
+  }
+
+  // Preload this trace's go_procs entry into record->goOffsets.
+  GoRuntimeOffsets *go_offsets = bpf_map_lookup_elem(&go_procs, &pid);
+  if (go_offsets) {
+    record->goOffsets = *go_offsets;
   }
 
   // Recursive unwind frames

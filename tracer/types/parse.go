@@ -12,7 +12,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter/beam"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/dotnet"
 	golang "go.opentelemetry.io/ebpf-profiler/interpreter/go"
-	"go.opentelemetry.io/ebpf-profiler/interpreter/golabels"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/hotspot"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
@@ -85,7 +84,7 @@ func IsMapEnabled(mapName string, includeTracers IncludedTracers) bool {
 		return includeTracers.Has(DotnetTracer)
 	case "beam_procs":
 		return includeTracers.Has(BEAMTracer)
-	case "go_labels_procs", "apm_int_procs", "v8_procs":
+	case "go_procs", "apm_int_procs", "v8_procs":
 		// these are called from
 		// unwind_stop and therefore need to be available all the time.
 		return true
@@ -214,10 +213,17 @@ func (t IncludedTracers) ToInterpretersConfig() interpreterconfig.Config {
 		Ruby:    ruby.Config{BaseConfig: dis(t.Has(RubyTracer))},
 		V8:      nodev8.Config{BaseConfig: dis(t.Has(V8Tracer))},
 		Dotnet:  dotnet.Config{BaseConfig: dis(t.Has(DotnetTracer))},
-		Go:      golang.Config{BaseConfig: dis(t.Has(GoTracer))},
-		Labels:  golabels.Config{BaseConfig: dis(t.Has(Labels))},
-		BEAM:    beam.Config{BaseConfig: dis(t.Has(BEAMTracer))},
-		LuaJIT:  luajit.Config{BaseConfig: dis(t.Has(LuaJITTracer))},
-		CUDA:    gpu.Config{BaseConfig: dis(t.Has(CUDATracer))},
+		// Upstream #1564 folded the standalone `labels` interpreter into Go, so
+		// the Labels tracer type now drives Go.Labels rather than its own config.
+		Go: golang.Config{
+			BaseConfig: dis(t.Has(GoTracer)),
+			Labels:     dis(t.Has(Labels)),
+		},
+		BEAM:   beam.Config{BaseConfig: dis(t.Has(BEAMTracer))},
+		LuaJIT: luajit.Config{BaseConfig: dis(t.Has(LuaJITTracer))},
+		CUDA:   gpu.Config{BaseConfig: dis(t.Has(CUDATracer))},
+		// The Labels tracer drives both Go goroutine labels and parca's native
+		// custom labels; the latter is independent of whether Go is enabled.
+		CustomLabels: dis(t.Has(Labels)),
 	}
 }

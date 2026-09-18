@@ -100,15 +100,6 @@ const (
 	HSTSIDSegMapMask      = C.HS_TSID_SEG_MAP_MASK
 )
 
-const (
-	TraceOriginUnknown  = C.TRACE_UNKNOWN
-	TraceOriginSampling = C.TRACE_SAMPLING
-	TraceOriginOffCPU   = C.TRACE_OFF_CPU
-	TraceOriginProbe    = C.TRACE_PROBE
-	TraceOriginCuda     = C.TRACE_CUDA_LAUNCH
-	TraceOriginGpuPC    = C.TRACE_GPU_PC
-)
-
 type ApmSpanID C.ApmSpanID
 type ApmTraceID C.ApmTraceID
 type CustomLabel C.CustomLabel
@@ -129,7 +120,7 @@ type UnwindInfo C.UnwindInfo
 type ApmIntProcInfo C.ApmIntProcInfo
 type BEAMProcInfo C.BEAMProcInfo
 type DotnetProcInfo C.DotnetProcInfo
-type GoLabelsOffsets C.GoLabelsOffsets
+type GoRuntimeOffsets C.GoRuntimeOffsets
 type HotspotProcInfo C.HotspotProcInfo
 type PHPProcInfo C.PHPProcInfo
 type PerlProcInfo C.PerlProcInfo
@@ -143,11 +134,11 @@ const (
 	Sizeof_StackDelta = C.sizeof_StackDelta
 	Sizeof_Trace      = C.sizeof_Trace
 
-	sizeof_ApmIntProcInfo  = C.sizeof_ApmIntProcInfo
-	sizeof_DotnetProcInfo  = C.sizeof_DotnetProcInfo
-	sizeof_PHPProcInfo     = C.sizeof_PHPProcInfo
-	sizeof_RubyProcInfo    = C.sizeof_RubyProcInfo
-	sizeof_GoLabelsOffsets = C.sizeof_GoLabelsOffsets
+	sizeof_ApmIntProcInfo   = C.sizeof_ApmIntProcInfo
+	sizeof_DotnetProcInfo   = C.sizeof_DotnetProcInfo
+	sizeof_PHPProcInfo      = C.sizeof_PHPProcInfo
+	sizeof_RubyProcInfo     = C.sizeof_RubyProcInfo
+	sizeof_GoRuntimeOffsets = C.sizeof_GoRuntimeOffsets
 )
 
 const (

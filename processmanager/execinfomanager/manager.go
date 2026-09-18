@@ -22,7 +22,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter/customlabels"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/dotnet"
 	golang "go.opentelemetry.io/ebpf-profiler/interpreter/go"
-	"go.opentelemetry.io/ebpf-profiler/interpreter/golabels"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/hotspot"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
@@ -127,6 +126,9 @@ func NewExecutableInfoManager(
 	if !interpretersConfig.Dotnet.IsDisabled() {
 		loaders = append(loaders, dotnet.GetLoader(interpretersConfig.Dotnet))
 	}
+	// The Go runtime offsets are needed for native stack unwinding across the
+	// Go runtime and by the labels program. Load them whenever Go support is
+	// enabled, independent of the labels and symbolization sub-toggles.
 	if !interpretersConfig.Go.IsDisabled() {
 		loaders = append(loaders, golang.GetLoader(interpretersConfig.Go))
 	}
@@ -134,14 +136,20 @@ func NewExecutableInfoManager(
 		loaders = append(loaders, beam.GetLoader(interpretersConfig.BEAM))
 	}
 	if !interpretersConfig.LuaJIT.IsDisabled() {
-		loaders = append(loaders, luajit.Loader)
+		loaders = append(loaders, luajit.GetLoader(interpretersConfig.LuaJIT))
 	}
 
 	loaders = append(loaders, apmint.Loader)
-	if !interpretersConfig.Labels.IsDisabled() {
-		loaders = append(loaders,
-			golabels.GetLoader(interpretersConfig.Labels),
-			customlabels.Loader)
+	// customlabels is parca's native (non-Go) custom-labels pseudo-interpreter,
+	// which upstream does not have. It gets its own toggle rather than riding on
+	// Go.Labels: go.Disabled wins over the Go sub-toggles, so gating it there
+	// would disable native custom labels for every process whenever the Go
+	// interpreter is off — including `--tracers=labels,v8`, which is exactly how
+	// the node integration test runs.
+	//
+	// The Go loader itself is appended above, whenever Go support is enabled.
+	if !interpretersConfig.CustomLabels.IsDisabled() {
+		loaders = append(loaders, customlabels.Loader)
 	}
 	loaders = append(loaders, oomwatcher.Loader, rtld.Loader)
 
