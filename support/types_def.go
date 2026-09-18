@@ -129,7 +129,7 @@ type UnwindInfo C.UnwindInfo
 type ApmIntProcInfo C.ApmIntProcInfo
 type BEAMProcInfo C.BEAMProcInfo
 type DotnetProcInfo C.DotnetProcInfo
-type GoLabelsOffsets C.GoLabelsOffsets
+type GoRuntimeOffsets C.GoRuntimeOffsets
 type HotspotProcInfo C.HotspotProcInfo
 type PHPProcInfo C.PHPProcInfo
 type PerlProcInfo C.PerlProcInfo
@@ -143,11 +143,11 @@ const (
 	Sizeof_StackDelta = C.sizeof_StackDelta
 	Sizeof_Trace      = C.sizeof_Trace
 
-	sizeof_ApmIntProcInfo  = C.sizeof_ApmIntProcInfo
-	sizeof_DotnetProcInfo  = C.sizeof_DotnetProcInfo
-	sizeof_PHPProcInfo     = C.sizeof_PHPProcInfo
-	sizeof_RubyProcInfo    = C.sizeof_RubyProcInfo
-	sizeof_GoLabelsOffsets = C.sizeof_GoLabelsOffsets
+	sizeof_ApmIntProcInfo   = C.sizeof_ApmIntProcInfo
+	sizeof_DotnetProcInfo   = C.sizeof_DotnetProcInfo
+	sizeof_PHPProcInfo      = C.sizeof_PHPProcInfo
+	sizeof_RubyProcInfo     = C.sizeof_RubyProcInfo
+	sizeof_GoRuntimeOffsets = C.sizeof_GoRuntimeOffsets
 )
 
 const (

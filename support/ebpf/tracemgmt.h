@@ -284,6 +284,7 @@ static inline EBPF_INLINE PerCPURecord *get_pristine_per_cpu_record()
   record->ratelimitAction                   = RATELIMIT_ACTION_DEFAULT;
   record->usesAnonymousMappings             = false;
   record->customLabelsState.go_m_ptr        = NULL;
+  record->goOffsets.m_offset                = 0;
 
   Trace *trace             = &record->trace;
   trace->frame_data_len    = 0;
@@ -397,8 +398,10 @@ static inline EBPF_INLINE bool unwinder_unwind_frame_pointer(UnwindState *state)
 
 static inline EBPF_INLINE bool unwinder_unwind_go_morestack(PerCPURecord *record)
 {
-  GoLabelsOffsets *offs = bpf_map_lookup_elem(&go_labels_procs, &record->trace.pid);
-  if (!offs) {
+  // goOffsets is preloaded once per trace by collect_trace; m_offset == 0 means
+  // this PID has no go_procs entry, i.e. it is not a Go binary.
+  GoRuntimeOffsets *offs = &record->goOffsets;
+  if (offs->m_offset == 0) {
     DEBUG_PRINT("morestack: failed to read go labels offsets");
     return false;
   }
@@ -1011,6 +1014,12 @@ static inline EBPF_INLINE int collect_trace(
     if (!data)
       return ERR_STACK_LENGTH_EXCEEDED;
     data[0] = cuda_id;
+  }
+
+  // Preload this trace's go_procs entry into record->goOffsets.
+  GoRuntimeOffsets *go_offsets = bpf_map_lookup_elem(&go_procs, &pid);
+  if (go_offsets) {
+    record->goOffsets = *go_offsets;
   }
 
   // Recursive unwind frames

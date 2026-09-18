@@ -5,7 +5,7 @@
 #include "tsd.h"
 #include "types.h"
 
-static EBPF_INLINE void *get_go_m_ptr(struct GoLabelsOffsets *offs, UNUSED UnwindState *state)
+static EBPF_INLINE void *get_go_m_ptr(struct GoRuntimeOffsets *offs, UNUSED UnwindState *state)
 {
   u64 g_addr     = 0;
   void *tls_base = NULL;

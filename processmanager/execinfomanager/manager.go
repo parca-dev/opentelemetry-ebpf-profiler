@@ -22,7 +22,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter/customlabels"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/dotnet"
 	golang "go.opentelemetry.io/ebpf-profiler/interpreter/go"
-	"go.opentelemetry.io/ebpf-profiler/interpreter/golabels"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/hotspot"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
@@ -127,6 +126,9 @@ func NewExecutableInfoManager(
 	if !interpretersConfig.Dotnet.IsDisabled() {
 		loaders = append(loaders, dotnet.GetLoader(interpretersConfig.Dotnet))
 	}
+	// The Go runtime offsets are needed for native stack unwinding across the
+	// Go runtime and by the labels program. Load them whenever Go support is
+	// enabled, independent of the labels and symbolization sub-toggles.
 	if !interpretersConfig.Go.IsDisabled() {
 		loaders = append(loaders, golang.GetLoader(interpretersConfig.Go))
 	}
@@ -138,10 +140,15 @@ func NewExecutableInfoManager(
 	}
 
 	loaders = append(loaders, apmint.Loader)
-	if !interpretersConfig.Labels.IsDisabled() {
-		loaders = append(loaders,
-			golabels.GetLoader(interpretersConfig.Labels),
-			customlabels.Loader)
+	// customlabels is parca's native (non-Go) custom-labels pseudo-interpreter.
+	// Upstream #1564 folded the old `labels` config section into Go, so this is
+	// now gated on the Go labels toggle — the same knob that gated it before the
+	// fold. NB: native custom labels are not Go-specific, so this coupling is
+	// inherited rather than intended, and is worth revisiting separately.
+	//
+	// The Go loader itself is appended above, whenever Go support is enabled.
+	if !interpretersConfig.Go.IsLabelsDisabled() {
+		loaders = append(loaders, customlabels.Loader)
 	}
 	loaders = append(loaders, oomwatcher.Loader, rtld.Loader)
 

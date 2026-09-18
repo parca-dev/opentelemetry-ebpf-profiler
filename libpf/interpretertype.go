@@ -51,10 +51,10 @@ const (
 	// APMInt identifies the pseudo-interpreter for the APM integration.
 	APMInt InterpreterType = 0x100
 
-	// GoLabels identifies the pseudo-interpreter for Go custom labels support.
-	GoLabels InterpreterType = 0x101
-
 	// CustomLabels identifies the pseudo-interpreter for native custom labels support.
+	//
+	// NB: the former GoLabels pseudo-interpreter (0x101) was folded into Go by
+	// upstream #1564; Go runtime offsets now live in the go_procs map.
 	CustomLabels InterpreterType = 0x102
 )
 
@@ -86,7 +86,6 @@ var interpreterTypeToString = map[InterpreterType]string{
 	APMInt:       "apm-integration",
 	LuaJIT:       "luajit",
 	Go:           "go",
-	GoLabels:     "go-labels",
 	CustomLabels: "custom-labels",
 }
 

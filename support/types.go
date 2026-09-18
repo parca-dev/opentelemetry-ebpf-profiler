@@ -198,7 +198,7 @@ type BEAMProcInfo struct {
 type DotnetProcInfo struct {
 	Version uint32
 }
-type GoLabelsOffsets struct {
+type GoRuntimeOffsets struct {
 	M_offset               uint32
 	Curg                   uint32
 	Labels                 uint32
@@ -354,11 +354,11 @@ const (
 	Sizeof_StackDelta = 0x4
 	Sizeof_Trace      = 0x6378
 
-	sizeof_ApmIntProcInfo  = 0x8
-	sizeof_DotnetProcInfo  = 0x4
-	sizeof_PHPProcInfo     = 0x18
-	sizeof_RubyProcInfo    = 0x48
-	sizeof_GoLabelsOffsets = 0x1c
+	sizeof_ApmIntProcInfo   = 0x8
+	sizeof_DotnetProcInfo   = 0x4
+	sizeof_PHPProcInfo      = 0x18
+	sizeof_RubyProcInfo     = 0x48
+	sizeof_GoRuntimeOffsets = 0x1c
 )
 
 const (
