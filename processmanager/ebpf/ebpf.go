@@ -59,7 +59,7 @@ type ebpfMapsImpl struct {
 	ApmIntProcs        *cebpf.Map `name:"apm_int_procs"`
 	GoProcs            *cebpf.Map `name:"go_procs"`
 	ClProcs            *cebpf.Map `name:"cl_procs"`
-	LuajitProcs        *cebpf.Map `name:"luajit_procs"`
+	LuaJitProcs        *cebpf.Map `name:"luajit_procs"`
 
 	// Stackdelta and process related eBPF maps
 	ExeIDToStackDeltaMaps []*cebpf.Map
@@ -484,7 +484,7 @@ func (impl *ebpfMapsImpl) getInterpreterTypeMap(typ libpf.InterpreterType) (*ceb
 	case libpf.CustomLabels:
 		return impl.ClProcs, nil
 	case libpf.LuaJIT:
-		return impl.LuajitProcs, nil
+		return impl.LuaJitProcs, nil
 	default:
 		return nil, fmt.Errorf("type %d is not (yet) supported", typ)
 	}

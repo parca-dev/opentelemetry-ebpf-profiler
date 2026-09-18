@@ -136,7 +136,7 @@ func NewExecutableInfoManager(
 		loaders = append(loaders, beam.GetLoader(interpretersConfig.BEAM))
 	}
 	if !interpretersConfig.LuaJIT.IsDisabled() {
-		loaders = append(loaders, luajit.Loader)
+		loaders = append(loaders, luajit.GetLoader(interpretersConfig.LuaJIT))
 	}
 
 	loaders = append(loaders, apmint.Loader)
