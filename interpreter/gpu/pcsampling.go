@@ -61,10 +61,7 @@ func buildGpuPCTrace(cpuTrace *SymbolizedCudaTrace, cubinMapping libpf.FrameMapp
 	// Count CPU frames (exclude the original CUDAKernelFrame).
 	cpuFrameCount := 0
 	if cpuTrace != nil {
-		cpuFrameCount = len(cpuTrace.Trace.Frames) - 1
-		if cpuFrameCount < 0 {
-			cpuFrameCount = 0
-		}
+		cpuFrameCount = max(len(cpuTrace.Trace.Frames)-1, 0)
 	}
 
 	trace := &libpf.Trace{

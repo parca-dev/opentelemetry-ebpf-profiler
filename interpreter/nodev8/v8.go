@@ -2420,7 +2420,7 @@ func findJsDispatchTableOffset(ef *pfelf.File, syms relevantSymbols) (uint64, er
 		if offset, ok := GetJsDispatchTableOffsetAarch64(code); ok {
 			return offset, nil
 		}
-		return 0, errors.New("Failed to find js_dispatch_table_ field offset")
+		return 0, errors.New("failed to find js_dispatch_table_ field offset")
 	case elf.EM_X86_64:
 		return GetJsDispatchTableOffsetX64(code)
 	default:
@@ -2433,11 +2433,11 @@ func (d *v8Data) loadNodeClData(ef *pfelf.File, syms relevantSymbols) error {
 	sym := syms.NodeVersion
 
 	if sym == nil {
-		return errors.New("Node version symbol not found")
+		return errors.New("version symbol not found in Node binary")
 	}
 
 	if sym.Size < 12 {
-		return fmt.Errorf("Node version symbol size too small: %d", sym.Size)
+		return fmt.Errorf("version symbol in Node binary too small: %d", sym.Size)
 	}
 
 	versBuf := make([]byte, 12)
@@ -2462,7 +2462,7 @@ func (d *v8Data) loadNodeClData(ef *pfelf.File, syms relevantSymbols) error {
 			d.wrappedObjectOffset = 32
 		}
 	} else {
-		return fmt.Errorf("Unsupported Node major version: %d", major)
+		return fmt.Errorf("unsupported Node major version: %d", major)
 	}
 
 	var offset int64

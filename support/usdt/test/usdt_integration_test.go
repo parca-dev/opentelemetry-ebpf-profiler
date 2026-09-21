@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	cebpf "github.com/cilium/ebpf"
+
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
@@ -49,6 +50,7 @@ type testSetup struct {
 
 // setupTest performs all common initialization for USDT integration tests
 func setupTest(t *testing.T) *testSetup {
+	t.Helper()
 	if os.Getuid() != 0 {
 		t.Skip("This test requires root privileges to load eBPF programs")
 	}
@@ -171,7 +173,7 @@ func (s *testSetup) triggerProbes() {
 	s.t.Logf("About to call CallTestProbes() - if probes are instrumented, they should fire")
 
 	// Call probes multiple times to ensure they fire
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		CallTestProbes()
 		time.Sleep(10 * time.Millisecond)
 	}

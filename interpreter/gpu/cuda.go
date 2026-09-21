@@ -899,8 +899,8 @@ func init() {
 // the result beyond the lifetime of b must copy it (e.g. via string()); callers
 // that only use it transiently can avoid the copy with pfunsafe.ToString.
 func nullTerm(b []byte) []byte {
-	if i := bytes.IndexByte(b, 0); i >= 0 {
-		return b[:i]
+	if before, _, ok := bytes.Cut(b, []byte{0}); ok {
+		return before
 	}
 	return b
 }

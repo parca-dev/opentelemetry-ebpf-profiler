@@ -77,7 +77,7 @@ func TestGetJsDispatchTableOffsetAarch64(t *testing.T) {
 	}
 	off, ok := GetJsDispatchTableOffsetAarch64(code)
 	assert.True(t, ok)
-	assert.Equal(t, off, uint64(0x3268))
+	assert.Equal(t, uint64(0x3268), off)
 
 	// This is from a debug build.
 	// 0x11780ac: stp x29, x30, [sp, #-0x20]!
@@ -131,7 +131,7 @@ func TestGetJsDispatchTableOffsetAarch64(t *testing.T) {
 	}
 	off, ok = GetJsDispatchTableOffsetAarch64(code)
 	assert.True(t, ok)
-	assert.Equal(t, off, uint64(0x3270))
+	assert.Equal(t, uint64(0x3270), off)
 }
 
 func newTestV8Instance() *v8Instance {

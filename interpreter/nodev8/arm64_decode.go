@@ -1,8 +1,9 @@
 package nodev8 // import "go.opentelemetry.io/ebpf-profiler/interpreter/nodev8"
 
 import (
-	"go.opentelemetry.io/ebpf-profiler/asm/arm"
 	aa "golang.org/x/arch/arm64/arm64asm"
+
+	"go.opentelemetry.io/ebpf-profiler/asm/arm"
 )
 
 // GetJsDispatchTableOffsetAarch64 finds the offset of `js_dispatch_table_` within `IsolateGroup`

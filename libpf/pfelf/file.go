@@ -1325,7 +1325,7 @@ func (f *File) visitSymbolTable(name string, visitor func(libpf.Symbol) bool) er
 // VisitSymbols iterates through the symbol table until visitor returns false.
 func (f *File) VisitSymbols(visitor func(libpf.Symbol) bool) error {
 	if err := f.visitSymbolTable(".symtab", visitor); err != nil {
-		return fmt.Errorf("Failed to visit .symtab: %w", err)
+		return fmt.Errorf("failed to visit .symtab: %w", err)
 	}
 	return nil
 }
@@ -1333,7 +1333,7 @@ func (f *File) VisitSymbols(visitor func(libpf.Symbol) bool) error {
 // VisitDynamicSymbols iterates through the dynamic symbol table until visitor returns false.
 func (f *File) VisitDynamicSymbols(visitor func(libpf.Symbol) bool) error {
 	if err := f.visitSymbolTable(".dynsym", visitor); err != nil {
-		return fmt.Errorf("Failed to visit .dynsym: %w", err)
+		return fmt.Errorf("failed to visit .dynsym: %w", err)
 	}
 	return nil
 }

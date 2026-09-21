@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/parca-dev/oomprof/oomprof"
+
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 )

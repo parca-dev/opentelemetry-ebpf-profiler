@@ -19,8 +19,9 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/testsupport"
 
-	"go.opentelemetry.io/ebpf-profiler/libpf"
 	xx "golang.org/x/arch/x86/x86asm"
+
+	"go.opentelemetry.io/ebpf-profiler/libpf"
 )
 
 func getPFELF(t *testing.T, path string) *File {
