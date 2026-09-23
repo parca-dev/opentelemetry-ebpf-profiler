@@ -227,9 +227,8 @@ type linkEntry struct {
 }
 
 type data struct {
-	path           string
-	probes         []pfelf.USDTProbe
-	kernelFallback *pfelf.USDTProbe // kernel_executed probe, kept as fallback if activity_batch fails
+	path   string
+	probes []pfelf.USDTProbe
 
 	links map[util.OnDiskFileIdentifier]*linkEntry // uprobe attachments keyed by inode
 }
@@ -347,17 +346,10 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 
 		log.Debugf("Found parcagpu USDT probes in %s: %v", info.FileName(), parcagpuProbes)
 
-		d := &data{
+		return &data{
 			path:   info.FileName(),
 			probes: parcagpuProbes,
-		}
-		// If using activity_batch, keep kernel_executed as fallback in case
-		// the tail-call prog array setup fails (e.g. verifier rejection).
-		if batchProbe != nil && kernelProbe != nil {
-			d.kernelFallback = kernelProbe
-		}
-
-		return d, nil
+		}, nil
 	}
 	return nil, nil
 }
@@ -366,37 +358,26 @@ func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Addre
 	_ remotememory.RemoteMemory) (interpreter.Instance, error) {
 	// Populate the cuda_progs tail-call array. UpdateProgArray is idempotent
 	// (programs are cached, map updates are atomic), so it is safe to call on
-	// every Attach. activity_batch failure falls back to kernel_executed;
-	// pc_sample_batch failure just drops the pc sample probe.
-	for i, probe := range d.probes {
+	// every Attach.
+	for _, probe := range d.probes {
 		if probe.Name != "activity_batch" {
 			continue
 		}
 		if err := ebpf.UpdateProgArray(cudaProgsMap, 0,
 			USDTProgCudaActivityBatchTail); err != nil {
-			log.Errorf("[cuda] activity_batch tail call failed: %v", err)
-			if d.kernelFallback != nil {
-				d.probes[i] = *d.kernelFallback
-				log.Warnf("[cuda] falling back to kernel_executed mode")
-			} else {
-				log.Errorf("[cuda] activity_batch failed and no kernel_executed fallback")
-				d.probes = append(d.probes[:i], d.probes[i+1:]...)
-			}
+			return nil, fmt.Errorf("[cuda] activity_batch tail call setup failed: %w", err)
 		}
 		break
 	}
-	for i := 0; i < len(d.probes); {
-		if d.probes[i].Name != "pc_sample_batch" {
-			i++
+	for _, probe := range d.probes {
+		if probe.Name != "pc_sample_batch" {
 			continue
 		}
 		if err := ebpf.UpdateProgArray(cudaProgsMap, 1,
 			USDTProgCudaPCSampleBatchTail); err != nil {
-			log.Errorf("[cuda] pc_sample_batch tail call failed: %v — dropping pc_sample_batch", err)
-			d.probes = append(d.probes[:i], d.probes[i+1:]...)
-			continue
+			return nil, fmt.Errorf("[cuda] pc_sample_batch tail call setup failed: %w", err)
 		}
-		i++
+		break
 	}
 
 	// Map USDT probe names to eBPF program names and cookies.
