@@ -103,6 +103,10 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 
 	// Wait until the GPU interpreter instance appears, confirming the USDT
 	// probes were attached by the process manager.
+	//
+	// Attach fails outright if either tail-called program is rejected by the
+	// verifier, so an eBPF program that outgrows a kernel's complexity cap shows
+	// up here as the GPU instance never appearing, with the verifier log above.
 	require.Eventually(t, func() bool {
 		instances := trc.GetInterpretersForPID(pid)
 		for _, inst := range instances {
