@@ -161,8 +161,18 @@ struct cuda_scratch_heap_t {
 // older kernels (e.g. 6.1) because each iteration has stall-reason +
 // function-name reads.  We chain up to BPF_PC_MAX_TAIL_CALLS chunks via
 // bpf_tail_call to handle batches up to BPF_PC_TOTAL_LIMIT records.
-#define BPF_PC_BATCH_LIMIT    128
-#define BPF_PC_MAX_TAIL_CALLS 8
+//
+// 128 per call is also over the cap on 5.15, but only for the continuation
+// program: cuda_pc_sample_batch verifies fine, while cuda_pc_sample_batch_tail
+// -- same inlined body, but entered with ptrs_base/count/start_offset read back
+// out of the scratch map rather than as literals -- hits 1000001 processed
+// insns and fails to load. (Folding the start offset into ptrs_base so both
+// flavors start at index 0 was tried and does not close the gap; the
+// continuation is simply the more expensive one to verify.) Halve the per-call
+// work and restore the total capacity via chain depth, as commit 3cfc66ac did
+// for activity_batch.
+#define BPF_PC_BATCH_LIMIT    64
+#define BPF_PC_MAX_TAIL_CALLS 16
 #define BPF_PC_TOTAL_LIMIT    (BPF_PC_BATCH_LIMIT * BPF_PC_MAX_TAIL_CALLS)
 
 // Tail-call prog array for cuda_probe and the pc_sample_batch chunk chain.
