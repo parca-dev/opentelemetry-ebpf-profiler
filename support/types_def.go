@@ -342,5 +342,7 @@ var MetricsTranslation = []metrics.MetricID{
 	C.metricID_UnwindNativeErrUnsupportedAnonymousMapping: metrics.IDUnwindNativeErrUnsupportedAnonymousMapping,
 	C.metricID_UnwindNativeErrNonExecutableVMA:            metrics.IDUnwindNativeErrNonExecutableVMA,
 	C.metricID_SamplesSkippedProcessTooNew:                metrics.IDSamplesSkippedProcessTooNew,
+	C.metricID_NumSyncsFromPrctl:                          metrics.IDNumSyncsFromPrctl,
+	C.metricID_NumPriorityEventDeferred:                   metrics.IDNumPriorityEventDeferred,
 	C.metricID_CUPTIEventsRingbufFull:                     metrics.IDCUPTIEventsRingbufFull,
 }
