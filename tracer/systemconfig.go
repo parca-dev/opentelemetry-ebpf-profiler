@@ -31,8 +31,9 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// sysConfigVars supports collecting system configuration information.
-type sysConfigVars struct {
+// SysConfigVars supports collecting system configuration information.
+type SysConfigVars struct {
+	inverse_pac_mask         uint64
 	tpbase_offset            uint64
 	task_stack_offset        uint32
 	stack_ptregs_offset      uint32
@@ -113,7 +114,7 @@ func getTSDBaseFieldSpec() string {
 	}
 }
 
-func parseVMAOffsets(spec *btf.Spec, vars *sysConfigVars) {
+func parseVMAOffsets(spec *btf.Spec, vars *SysConfigVars) {
 	var vmaStruct *btf.Struct
 	if err := spec.TypeByName("vm_area_struct", &vmaStruct); err != nil {
 		log.Debugf("Unable to resolve vm_area_struct from BTF: %v", err)
@@ -140,7 +141,7 @@ func parseVMAOffsets(spec *btf.Spec, vars *sysConfigVars) {
 }
 
 // parseBTF resolves the SystemConfig data from kernel BTF
-func parseBTF(vars *sysConfigVars, needTPBase, needProcessStartTime bool) error {
+func parseBTF(vars *SysConfigVars, needTPBase, needProcessStartTime bool) error {
 	fh, err := os.Open("/sys/kernel/btf/vmlinux")
 	if err != nil {
 		return err
@@ -288,7 +289,7 @@ func readTaskStruct(coll *cebpf.CollectionSpec, maps map[string]*cebpf.Map,
 // determineStackPtregs determines the offset of `struct pt_regs` within the entry stack
 // when the `stack` field offset within `task_struct` is already known.
 func determineStackPtregs(coll *cebpf.CollectionSpec, maps map[string]*cebpf.Map,
-	vars *sysConfigVars,
+	vars *SysConfigVars,
 ) error {
 	data, ptregs, err := readTaskStruct(coll, maps, libpf.SymbolValue(vars.task_stack_offset))
 	if err != nil {
@@ -302,7 +303,7 @@ func determineStackPtregs(coll *cebpf.CollectionSpec, maps map[string]*cebpf.Map
 // determineStackLayout scans `task_struct` for offset of the `stack` field, and using
 // its value determines the offset of `struct pt_regs` within the entry stack.
 func determineStackLayout(coll *cebpf.CollectionSpec, maps map[string]*cebpf.Map,
-	vars *sysConfigVars,
+	vars *SysConfigVars,
 ) error {
 	const maxTaskStructSize = 8 * 1024
 	const maxStackSize = 64 * 1024
@@ -380,7 +381,7 @@ func getCurrentNS(filename string) (dev, ino uint64, err error) {
 
 func determineSysConfig(coll *cebpf.CollectionSpec, maps map[string]*cebpf.Map,
 	kmod *kallsyms.Module, interpretersConfig interpreterconfig.Config, needProcessStartTime bool,
-	vars *sysConfigVars,
+	vars *SysConfigVars,
 ) error {
 	needTPBase := !interpretersConfig.Perl.IsDisabled() ||
 		!interpretersConfig.Python.IsDisabled() ||
@@ -436,7 +437,7 @@ func determineSysConfig(coll *cebpf.CollectionSpec, maps map[string]*cebpf.Map,
 	return nil
 }
 
-func configureVMALookup(coll *cebpf.CollectionSpec, cfg *Config, vars *sysConfigVars) {
+func configureVMALookup(coll *cebpf.CollectionSpec, cfg *Config, vars *SysConfigVars) {
 	enabled, reason := probeVMALookupSupport(cfg)
 	vars.vma_lookup_enabled = enabled
 	if enabled {
@@ -556,7 +557,7 @@ func stripProgramExtInfos(insns asm.Instructions) {
 
 // loadRodataVars initializes RODATA variables for the eBPF programs.
 func loadRodataVars(coll *cebpf.CollectionSpec, kmod *kallsyms.Module, cfg *Config,
-	major, minor uint32, origins *originRegistry,
+	major, minor uint32, origins *originRegistry, out *SysConfigVars,
 ) error {
 	if cfg.FilterMinProcessAge < 0 {
 		return fmt.Errorf("filter minimum process age must be non-negative: %s", cfg.FilterMinProcessAge)
@@ -634,7 +635,7 @@ func loadRodataVars(coll *cebpf.CollectionSpec, kmod *kallsyms.Module, cfg *Conf
 		return fmt.Errorf("failed to set inverse_pac_mask: %v", err)
 	}
 
-	rodataVars := sysConfigVars{}
+	rodataVars := SysConfigVars{inverse_pac_mask: ^pacMask}
 	configureVMALookup(coll, cfg, &rodataVars)
 
 	systemAnalysisColl, maps, err := prepareAnalysis(coll)
@@ -673,6 +674,7 @@ func loadRodataVars(coll *cebpf.CollectionSpec, kmod *kallsyms.Module, cfg *Conf
 		return fmt.Errorf("failed to set task_start_time_offset: %v", err)
 	}
 
+	*out = rodataVars
 	return nil
 }
 
@@ -683,7 +685,7 @@ func loadRodataVars(coll *cebpf.CollectionSpec, kmod *kallsyms.Module, cfg *Conf
 // TODO: this is a temporary helper and will be removed once tracer manages
 // custom probes.
 func setOriginIDs(coll *cebpf.CollectionSpec, cfg *Config, origins *originRegistry) error {
-	sampling, err := origins.register(&samples.TypeMetadata{
+	sampling, err := origins.Register(&samples.TypeMetadata{
 		PeriodType: "cpu",
 		PeriodUnit: "nanoseconds",
 		SampleType: "samples",
@@ -697,7 +699,7 @@ func setOriginIDs(coll *cebpf.CollectionSpec, cfg *Config, origins *originRegist
 	}
 
 	if cfg.OffCPUThreshold > 0 {
-		offCPU, err := origins.register(&samples.TypeMetadata{
+		offCPU, err := origins.Register(&samples.TypeMetadata{
 			SampleType:   "off_cpu",
 			SampleUnit:   "nanoseconds",
 			ReportValues: true,
@@ -710,8 +712,12 @@ func setOriginIDs(coll *cebpf.CollectionSpec, cfg *Config, origins *originRegist
 		}
 	}
 
-	if len(cfg.ProbeLinks) > 0 || cfg.LoadProbe {
-		probe, err := origins.register(&samples.TypeMetadata{
+	// ProbeLinks use the generic eBPF program loaded at startup and need their
+	// origin ID baked into RODATA here. Custom probes (the Enable path) skip
+	// this block: they register their own origin IDs dynamically in Tracer.Enable
+	// before calling Probe.Load, so LoadProbe alone does not require a static ID.
+	if len(cfg.ProbeLinks) > 0 {
+		probe, err := origins.Register(&samples.TypeMetadata{
 			SampleType: "events",
 			SampleUnit: "count",
 		})
