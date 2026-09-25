@@ -19,7 +19,7 @@ int uprobe__generic(void *ctx)
 
   u64 ts = bpf_ktime_get_ns();
 
-  return collect_trace(ctx, origin_id_probe, pid, tid, ts, 0, 0);
+  return collect_trace(ctx, origin_id_probe, pid, tid, 0, ts, 0, 0);
 }
 
 SEC("uprobe/dlopen")

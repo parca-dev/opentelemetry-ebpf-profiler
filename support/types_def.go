@@ -108,6 +108,7 @@ type Event C.Event
 type OffsetRange C.OffsetRange
 type PIDPage C.PIDPage
 type PIDPageMappingInfo C.PIDPageMappingInfo
+type PIDNamespaceLayout C.PIDNamespaceLayout
 type StackDelta C.StackDelta
 type StackDeltaPageInfo C.StackDeltaPageInfo
 type StackDeltaPageKey C.StackDeltaPageKey
