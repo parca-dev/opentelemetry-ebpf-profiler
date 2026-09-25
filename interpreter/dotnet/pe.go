@@ -326,6 +326,11 @@ type peInfo struct {
 	methodSpecs []peMethodSpec
 	sizeOfImage uint32
 
+	// hash is this PE's peInfoCache key. A peInfo is re-parsed whenever its cache
+	// entry expires or is evicted, which yields a new pointer for the same file,
+	// so anything outliving one parse must key on this and not on the pointer.
+	hash peHash
+
 	// stringsHeapFileOffset is the offset of the ECMA-335 II.24.2.3 #Strings heap
 	// in the on-disk PE file. The absolute process address is computed at attach
 	// time from the process.RawMapping that covers this file offset (see
@@ -886,6 +891,20 @@ func (pp *peParser) parseNestedClass() {
 				i, nestedClass, enclosingClass, numTypeDefs)
 			return
 		}
+		if enclosingClass >= nestedClass {
+			// ECMA-335 II.22 requires that "the definition of an enclosing class
+			// shall precede the definition of all classes it encloses". This data
+			// comes from the profiled process' PE file and is untrusted, so the
+			// constraint is enforced rather than assumed: it keeps every
+			// enclosing-class edge pointing at a strictly lower TypeDef index,
+			// which makes the chains walked by resolveMethodName acyclic by
+			// construction. A crafted PE could otherwise form a cycle and spin
+			// that walk forever, growing the type name without bound.
+			pp.err = fmt.Errorf("invalid NestedClass row %d: "+
+				"enclosing class %d does not precede nested class %d",
+				i, enclosingClass, nestedClass)
+			return
+		}
 		pp.info.typeSpecs[nestedClass-1].enclosingClass = enclosingClass
 	}
 }
@@ -1250,6 +1269,9 @@ func (pi *peInfo) resolveMethodName(methodIdx uint32,
 
 	typeSpec := &pi.typeSpecs[idx]
 	typeName := lookup(typeSpec.typeNameIdx).String()
+	// parseNestedClass enforces the ECMA-335 II.22 rule that an enclosing class
+	// precedes the classes it encloses, so each step here strictly decreases the
+	// TypeDef index and the walk always terminates.
 	for typeSpec.enclosingClass != 0 {
 		enclosingSpec := &pi.typeSpecs[typeSpec.enclosingClass-1]
 		typeName = fmt.Sprintf("%s/%s", lookup(enclosingSpec.typeNameIdx), typeName)
@@ -1384,7 +1406,7 @@ func (pc *peCache) Get(pr process.Process, mapping *process.RawMapping) *peInfo 
 	}
 	pc.peInfoCacheMiss.Add(1)
 
-	info := &peInfo{}
+	info := &peInfo{hash: key}
 	info.err = info.parse(file)
 	if info.err != nil {
 		pc.peInfoErrCache.Add(odk, peErrEntry{info.err, lastModified})
