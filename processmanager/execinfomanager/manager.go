@@ -403,7 +403,7 @@ func (state *executableInfoManagerState) detectAndLoadInterpData(
 				log.Debugf("Failed to load %v (%#016x) [%s]: file not found",
 					loaderInfo.FileName(), loaderInfo.FileID(), loaderName)
 			} else {
-				log.Errorf("Failed to load %v (%#016x) [%s]: %v",
+				log.Warnf("Failed to load %v (%#016x) [%s]: %v",
 					loaderInfo.FileName(), loaderInfo.FileID(), loaderName, err)
 			}
 			// Continue checking other loaders even if one fails
