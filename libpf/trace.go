@@ -134,7 +134,6 @@ type Trace struct {
 // EbpfTrace represents a stack trace from Ebpf code.
 type EbpfTrace struct {
 	EnvVars          map[String]String
-	ProcessName      String
 	ExecutablePath   String
 	ContainerID      String
 	CustomLabels     map[String]String
