@@ -273,6 +273,7 @@ jobs:
     name: Interpreter integration (${{ matrix.target_arch }}, ${{ matrix.test_type }})
     runs-on: ubuntu-24.04
     strategy:
+      fail-fast: false
       matrix:
         target_arch: [amd64, arm64]
         test_type: [stable, known-failing]
@@ -339,6 +340,7 @@ jobs:
     needs: build-distro-qemu-initramfs
     timeout-minutes: 10
     strategy:
+      fail-fast: false
       matrix:
         include:
           - { target_arch: amd64, kernel: 5.10.217 }
