@@ -218,9 +218,6 @@ type Config struct {
 	// IncludeEnvVars holds a list of environment variables that should be captured and reported
 	// from processes
 	IncludeEnvVars libpf.Set[string]
-	// LoadProbe indicates whether the generic eBPF program should be loaded
-	// without being attached to something.
-	LoadProbe bool
 	// BPFFSRoot is the root path to BPF filesystem for pinned maps and programs.
 	BPFFSRoot string
 	// OBIProcessCtx enable the use of a known shared eBPF map with OBI.
@@ -378,8 +375,7 @@ func (t *Tracer) Close() {
 func kprobeChainRequired(cfg *Config) bool {
 	// parca: the CUDA correlation probes are attached as kprobes and tail-call
 	// into the same unwinder chain, so enabling CUDA requires it too.
-	return cfg.OffCPUThreshold > 0 || cfg.LoadProbe ||
-		!cfg.InterpretersConfig.CUDA.IsDisabled()
+	return cfg.OffCPUThreshold > 0 || !cfg.InterpretersConfig.CUDA.IsDisabled()
 }
 
 // initializeMapsAndPrograms loads the definitions for the eBPF maps and programs provided
