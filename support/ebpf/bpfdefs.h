@@ -237,4 +237,10 @@ static long (*bpf_get_attach_cookie)(void *ctx) = (void *)BPF_FUNC_get_attach_co
 
 #define MIN(a, b) (((a) < (b)) ? (a) : (b))
 
+// parca: barrier_var emits no instructions but makes `var`'s value opaque to
+// the optimizer, so a mask applied afterwards cannot be folded away as
+// redundant. Needed to re-assert a bound for verifiers that cannot re-derive
+// it; see the use in native_custom_labels.h for the concrete case.
+#define barrier_var(var) asm volatile("" : "+r"(var))
+
 #endif // OPTI_BPFDEFS_H
