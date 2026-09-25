@@ -25,7 +25,7 @@ require (
 	github.com/mdlayher/kobject v0.0.0-20200520190114-19ca17470d7d
 	github.com/minio/sha256-simd v1.0.1
 	github.com/moby/moby/api v1.56.0
-	github.com/open-telemetry/sig-profiling/profcheck v0.0.0-20260805131857-4f606986f205
+	github.com/open-telemetry/sig-profiling/profcheck v0.0.0-20260810060053-2c029b56bcad
 	github.com/parca-dev/oomprof v0.1.6
 	github.com/parca-dev/usdt v0.0.2
 	github.com/peterbourgon/ff/v3 v3.4.0
@@ -49,7 +49,7 @@ require (
 	go.opentelemetry.io/proto/otlp/profiles/v1development v0.4.0
 	go.uber.org/goleak v1.3.0
 	go.uber.org/zap/exp v0.3.0
-	golang.org/x/arch v0.29.0
+	golang.org/x/arch v0.30.0
 	golang.org/x/exp v0.0.0-20260727155853-b88d891fe743
 	golang.org/x/mod v0.38.0
 	golang.org/x/sync v0.22.0
