@@ -160,9 +160,11 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 	}
 	logf("lj: interp range %v", luaInterp)
 
-	ljd := &luajitData{}
-
-	if err = extractOffsets(ef, ljd, luaInterp); err != nil {
+	// Upstream #1648 replaced extractOffsets(ef, ljd, ir) with this constructor,
+	// which fills the same three luajitData fields and additionally checks the
+	// interpreter start against lj_vm_asm_begin when symbols are available.
+	ljd, err := newLuajitData(ef, luaInterp)
+	if err != nil {
 		return nil, err
 	}
 
@@ -527,7 +529,7 @@ func (l *luajitInstance) Symbolize(frame libpf.EbpfFrame, frames *libpf.Frames, 
 		}
 		return nil
 	default:
-		return fmt.Errorf("Unrecognized LuaJIT frame kind: %d", ljkind)
+		return fmt.Errorf("unrecognized LuaJIT frame kind: %d", ljkind)
 	}
 
 	return nil
