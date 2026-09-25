@@ -7,7 +7,6 @@ package test
 
 import (
 	"context"
-	"math"
 	"os"
 	"testing"
 	"time"
@@ -128,7 +127,6 @@ func setupTest(t *testing.T) *testSetup {
 		BPFVerifierLogLevel:    0,
 		ProbabilisticInterval:  100,
 		ProbabilisticThreshold: 100,
-		OffCPUThreshold:        1 * math.MaxUint32,
 		VerboseMode:            true, // Enable debug output
 	})
 	require.NoError(t, err)

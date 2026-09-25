@@ -7,8 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"reflect"
-	"runtime"
 	"time"
 
 	lru "github.com/elastic/go-freelru"
@@ -95,7 +93,7 @@ func NewExecutableInfoManager(
 ) (*ExecutableInfoManager, error) {
 	loaders := interpretersConfig.Loaders()
 
-	loaders = append(loaders, apmint.Loader)
+	loaders = append(loaders, apmint.GetLoader(apmint.Config{}))
 	// customlabels is parca's native (non-Go) custom-labels pseudo-interpreter,
 	// which upstream does not have. It gets its own toggle rather than riding on
 	// Go.Labels: go.Disabled wins over the Go sub-toggles, so gating it there
@@ -106,14 +104,16 @@ func NewExecutableInfoManager(
 	// The Go loader itself comes from interpreterconfig.Loaders(), whenever Go
 	// support is enabled.
 	if !interpretersConfig.CustomLabels.IsDisabled() {
-		loaders = append(loaders, customlabels.Loader)
+		loaders = append(loaders, interpreter.NewLoader(customlabels.Loader, nil))
 	}
-	loaders = append(loaders, oomwatcher.Loader, rtld.Loader)
+	loaders = append(loaders,
+		interpreter.NewLoader(oomwatcher.Loader, nil),
+		interpreter.NewLoader(rtld.Loader, nil))
 
 	if !interpretersConfig.CUDA.IsDisabled() {
 		// USDT support requires cookies
 		if util.HasBpfGetAttachCookie() {
-			loaders = append(loaders, gpu.Loader)
+			loaders = append(loaders, interpreter.NewLoader(gpu.Loader, nil))
 		} else {
 			log.Warn("CUDA USDT tracing is not supported on this kernel (missing bpf_get_attach_cookie)")
 		}
@@ -354,14 +354,13 @@ func (state *executableInfoManagerState) detectAndLoadInterpData(
 	for _, loader := range state.interpreterLoaders {
 		data, err := loader.Load(state.ebpf, loaderInfo)
 		if err != nil {
-			loaderName := runtime.FuncForPC(reflect.ValueOf(load).Pointer()).Name()
 			if errors.Is(err, os.ErrNotExist) {
 				// Very common if the process exited when we tried to analyze it.
-				log.Debugf("Failed to load %v (%#016x) [%s]: file not found",
-					loaderInfo.FileName(), loaderInfo.FileID(), loaderName)
+				log.Debugf("Failed to load %v (%#016x): file not found",
+					loaderInfo.FileName(), loaderInfo.FileID())
 			} else {
-				log.Warnf("Failed to load %v (%#016x) [%s]: %v",
-					loaderInfo.FileName(), loaderInfo.FileID(), loaderName, err)
+				log.Warnf("Failed to load %v (%#016x): %v",
+					loaderInfo.FileName(), loaderInfo.FileID(), err)
 			}
 			// Continue checking other loaders even if one fails
 			continue

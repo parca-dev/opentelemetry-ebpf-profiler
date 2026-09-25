@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"math"
 	"os"
 	"strings"
 	"testing"
@@ -75,7 +74,6 @@ func StartTracer(ctx context.Context, t *testing.T, et tracertypes.IncludedTrace
 		SamplesPerSecond:       20,
 		ProbabilisticInterval:  100,
 		ProbabilisticThreshold: 100,
-		OffCPUThreshold:        uint32(math.MaxUint32 / 100),
 		VerboseMode:            true,
 	})
 	require.NoError(t, err)
@@ -86,7 +84,7 @@ func StartTracer(ctx context.Context, t *testing.T, et tracertypes.IncludedTrace
 
 	trc.StartPIDEventProcessor(ctx)
 
-	err = trc.AttachTracer()
+	err = trc.AttachTracer(nil)
 	require.NoError(t, err)
 	log.Info("Attached tracer program")
 

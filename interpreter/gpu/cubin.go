@@ -259,8 +259,8 @@ func (p *cubinProcess) OpenMappingFile(_ *process.RawMapping) (process.ReadAtClo
 
 func (p *cubinProcess) PID() libpf.PID                      { return libpf.PID(p.pid) }
 func (p *cubinProcess) GetMachineData() process.MachineData { return process.MachineData{} }
-func (p *cubinProcess) GetProcessMeta(process.MetaConfig) process.ProcessMeta {
-	return process.ProcessMeta{}
+func (p *cubinProcess) GetProcessMeta([]process.MetaEnricher) process.Meta {
+	return process.Meta{}
 }
 func (p *cubinProcess) GetExe() (libpf.String, error) { return libpf.NullString, nil }
 func (p *cubinProcess) IterateMappings(_ func(m process.RawMapping) bool) (uint32, error) {
