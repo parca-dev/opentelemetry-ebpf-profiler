@@ -23,27 +23,27 @@ import (
 // Config holds configuration for all interpreters.
 // By default all interpreters are enabled.
 type Config struct {
-	Python  python.Config  `mapstructure:"python" json:"python,omitempty"`
-	Perl    perl.Config    `mapstructure:"perl" json:"perl,omitempty"`
-	PHP     php.Config     `mapstructure:"php" json:"php,omitempty"`
-	Hotspot hotspot.Config `mapstructure:"hotspot" json:"hotspot,omitempty"`
-	Ruby    ruby.Config    `mapstructure:"ruby" json:"ruby,omitempty"`
-	V8      nodev8.Config  `mapstructure:"v8" json:"v8,omitempty"`
-	Dotnet  dotnet.Config  `mapstructure:"dotnet" json:"dotnet,omitempty"`
+	Python  python.Config  `mapstructure:"python" json:"python"`
+	Perl    perl.Config    `mapstructure:"perl" json:"perl"`
+	PHP     php.Config     `mapstructure:"php" json:"php"`
+	Hotspot hotspot.Config `mapstructure:"hotspot" json:"hotspot"`
+	Ruby    ruby.Config    `mapstructure:"ruby" json:"ruby"`
+	V8      nodev8.Config  `mapstructure:"v8" json:"v8"`
+	Dotnet  dotnet.Config  `mapstructure:"dotnet" json:"dotnet"`
 	// Go carries both the runtime-offset and the custom-label knobs since
 	// upstream #1564 folded the former `labels` section into it.
-	Go   golang.Config `mapstructure:"go" json:"go,omitempty"`
-	BEAM beam.Config   `mapstructure:"beam" json:"beam,omitempty"`
+	Go     golang.Config `mapstructure:"go" json:"go"`
+	BEAM   beam.Config   `mapstructure:"beam" json:"beam"`
+	LuaJIT luajit.Config `mapstructure:"luajit" json:"luajit"`
 	// parca-only extensions
-	LuaJIT luajit.Config `mapstructure:"luajit" json:"luajit,omitempty"`
-	CUDA   gpu.Config    `mapstructure:"cuda" json:"cuda,omitempty"`
+	CUDA gpu.Config `mapstructure:"cuda" json:"cuda"`
 	// CustomLabels gates the native (non-Go) custom-labels pseudo-interpreter.
 	// It has its own toggle because it has nothing to do with Go: before
 	// upstream #1564 the fork gated it on the standalone `labels` section, and
 	// that section is now Go.Labels, whose Config documents that go.Disabled
 	// wins over the sub-toggles. Reusing it would switch native custom labels
 	// off for every process whenever the Go interpreter is disabled.
-	CustomLabels interpreter.BaseConfig `mapstructure:"custom_labels" json:"custom_labels,omitempty"`
+	CustomLabels interpreter.BaseConfig `mapstructure:"custom_labels" json:"custom_labels"`
 }
 
 // AllInterpreters returns a Config with all interpreters enabled.
