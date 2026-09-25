@@ -233,6 +233,9 @@ func parseTracers(tracers string) (interpreterconfig.Config, error) {
 			cfg.Go.Labels.Disabled = false
 		case "beam":
 			cfg.BEAM.Disabled = false
+		case "thread_context":
+			log.Warn("The thread context interpreter is a stub and does not do anything yet")
+			cfg.ThreadContext.Disabled = false
 		case "luajit":
 			cfg.LuaJIT.Disabled = false
 		case "cuda":

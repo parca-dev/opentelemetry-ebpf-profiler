@@ -19,6 +19,7 @@ extern struct go_procs_t go_procs;
 extern struct custom_labels_procs_t cl_procs;
 extern struct v8_procs_t v8_procs;
 extern struct beam_procs_t beam_procs;
+extern struct thread_context_procs_t thread_context_procs;
 extern struct exe_id_to_8_stack_deltas_t exe_id_to_8_stack_deltas;
 extern struct exe_id_to_9_stack_deltas_t exe_id_to_9_stack_deltas;
 extern struct exe_id_to_10_stack_deltas_t exe_id_to_10_stack_deltas;

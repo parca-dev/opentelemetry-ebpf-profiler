@@ -18,6 +18,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter/php"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/python"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/ruby"
+	"go.opentelemetry.io/ebpf-profiler/interpreter/threadcontext"
 )
 
 // Config holds configuration for all interpreters.
@@ -43,7 +44,8 @@ type Config struct {
 	// that section is now Go.Labels, whose Config documents that go.Disabled
 	// wins over the sub-toggles. Reusing it would switch native custom labels
 	// off for every process whenever the Go interpreter is disabled.
-	CustomLabels interpreter.BaseConfig `mapstructure:"custom_labels" json:"custom_labels"`
+	CustomLabels  interpreter.BaseConfig `mapstructure:"custom_labels" json:"custom_labels"`
+	ThreadContext threadcontext.Config   `mapstructure:"thread_context" json:"thread_context"`
 }
 
 // AllInterpreters returns a Config with all interpreters enabled.
@@ -63,15 +65,16 @@ func NoInterpreters() Config {
 		Go:      golang.Config{BaseConfig: disabled},
 		BEAM:    beam.Config{BaseConfig: disabled},
 		// parca-only extensions
-		LuaJIT:       luajit.Config{BaseConfig: disabled},
-		CUDA:         gpu.Config{BaseConfig: disabled},
-		CustomLabels: disabled,
+		LuaJIT:        luajit.Config{BaseConfig: disabled},
+		CUDA:          gpu.Config{BaseConfig: disabled},
+		CustomLabels:  disabled,
+		ThreadContext: threadcontext.Config{BaseConfig: disabled},
 	}
 }
 
 // Loaders returns active loaders for all enabled interpreters.
 func (cfg *Config) Loaders() []interpreter.Loader {
-	loaders := make([]interpreter.Loader, 0, 11)
+	loaders := make([]interpreter.Loader, 0, 12)
 	if !cfg.Perl.IsDisabled() {
 		loaders = append(loaders, perl.GetLoader(cfg.Perl))
 	}
@@ -102,6 +105,9 @@ func (cfg *Config) Loaders() []interpreter.Loader {
 	}
 	if !cfg.Go.IsDisabled() {
 		loaders = append(loaders, golang.GetLoader(cfg.Go))
+	}
+	if !cfg.ThreadContext.IsDisabled() {
+		loaders = append(loaders, threadcontext.GetLoader(cfg.ThreadContext))
 	}
 	return loaders
 }

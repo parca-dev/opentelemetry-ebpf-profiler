@@ -704,63 +704,75 @@ const (
 	// Number of Go asmcgocall unwind failures
 	IDUnwindGoAsmcgocallUnwindFailure = 305
 
+	// Number of failures to read the thread context buffer pointer out of TLS
+	IDUnwindThreadContextErrReadTlsPtr = 306
+
+	// Number of failures to read the thread context buffer, header or payload
+	IDUnwindThreadContextErrReadThreadCtxBuf = 307
+
+	// Number of successful reads of thread context info
+	IDUnwindThreadContextReadSuccesses = 308
+
+	// Number of thread context attribute payloads truncated to fit the buffer
+	IDUnwindThreadContextAttrsTruncated = 309
+
 	// Number of successes adding native custom labels
-	IDUnwindNativeCustomLabelsAddSuccesses = 306
+	IDUnwindNativeCustomLabelsAddSuccesses = 310
 
 	// Number of attempts to read Node.js custom labels
-	IDUnwindNodeCustomLabelsAttempts = 307
+	IDUnwindNodeCustomLabelsAttempts = 311
 
 	// Number of successful reads of Node.js custom labels
-	IDUnwindNodeCustomLabelsSuccesses = 308
+	IDUnwindNodeCustomLabelsSuccesses = 312
 
 	// Number of failed attempts to read Node.js custom labels
-	IDUnwindNodeCustomLabelsFailures = 309
+	IDUnwindNodeCustomLabelsFailures = 313
 
 	// Number of times dlopen uprobe was fired
-	IDDlopenUprobeHits = 310
+	IDDlopenUprobeHits = 314
 
 	// Number of GPU timing events waiting for matching traces
-	IDCudaTimesAwaitingTraces = 311
+	IDCudaTimesAwaitingTraces = 315
 
 	// Number of GPU traces waiting for matching timing events
-	IDCudaTracesAwaitingTimes = 312
+	IDCudaTracesAwaitingTimes = 316
 
 	// Number of GPU timing entries cleared due to threshold
-	IDCudaTimesCleared = 313
+	IDCudaTimesCleared = 317
 
 	// Number of GPU trace entries cleared due to threshold
-	IDCudaTracesCleared = 314
+	IDCudaTracesCleared = 318
 
 	// Number of failures to read LuaJIT context pointer
-	IDUnwindLuaJITErrNoContext = 315
+	IDUnwindLuaJITErrNoContext = 319
 
 	// Number of failures in context pointer validity check
-	IDUnwindLuaJITErrLMismatch = 316
+	IDUnwindLuaJITErrLMismatch = 320
 
 	// Number of pending PC sample events dropped at retention-window eviction (correlation trace never arrived)
-	IDCudaPendingPCSamplesEvicted = 317
+	IDCudaPendingPCSamplesEvicted = 321
 
 	// Number of failures to get TSD base for native custom labels
-	IDUnwindNativeCustomLabelsErrReadTsdBase = 318
+	IDUnwindNativeCustomLabelsErrReadTsdBase = 322
 
 	// Number of failures to read native custom labels thread-local object
-	IDUnwindNativeCustomLabelsErrReadData = 319
+	IDUnwindNativeCustomLabelsErrReadData = 323
 
 	// Number of failures to read native custom labels key buffer
-	IDUnwindNativeCustomLabelsErrReadKey = 320
+	IDUnwindNativeCustomLabelsErrReadKey = 324
 
 	// Number of failures to read native custom labels value buffer
-	IDUnwindNativeCustomLabelsErrReadValue = 321
+	IDUnwindNativeCustomLabelsErrReadValue = 325
 
 	// Number of successful reads of native custom labels
-	IDUnwindNativeCustomLabelsReadSuccesses = 322
+	IDUnwindNativeCustomLabelsReadSuccesses = 326
 
 	// Total number of failures to add native custom labels
-	IDUnwindNativeCustomLabelsAddErrors = 323
+	IDUnwindNativeCustomLabelsAddErrors = 327
 
 	// Number of cupti_events ringbuf reserve failures (GPU events dropped)
-	IDCUPTIEventsRingbufFull = 324
+	IDCUPTIEventsRingbufFull = 328
 
 	// max number of ID values, keep this as *last entry*
-	IDMax = 325
+	IDMax = 329
 )

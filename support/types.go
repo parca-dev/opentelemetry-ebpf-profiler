@@ -64,7 +64,7 @@ const (
 const UnwindInfoMaxEntries = 0x4000
 
 const (
-	MetricIDBeginCumulative = 0x83
+	MetricIDBeginCumulative = 0x87
 )
 
 const (
@@ -312,6 +312,9 @@ type RubyProcInfo struct {
 	Running_ec                   uint16
 	Pad_cgo_0                    [4]byte
 }
+type ThreadContextProcInfo struct {
+	Tls TLSVarInfo
+}
 type V8ProcInfo struct {
 	Version                      uint32
 	Type_JSFunction_first        uint16
@@ -356,11 +359,12 @@ const (
 	Sizeof_StackDelta = 0x4
 	Sizeof_Trace      = 0x6378
 
-	sizeof_ApmIntProcInfo   = 0x8
-	sizeof_DotnetProcInfo   = 0x4
-	sizeof_PHPProcInfo      = 0x18
-	sizeof_RubyProcInfo     = 0x60
-	sizeof_GoRuntimeOffsets = 0x24
+	sizeof_ApmIntProcInfo        = 0x8
+	sizeof_DotnetProcInfo        = 0x4
+	sizeof_PHPProcInfo           = 0x18
+	sizeof_RubyProcInfo          = 0x60
+	sizeof_ThreadContextProcInfo = 0xc
+	sizeof_GoRuntimeOffsets      = 0x24
 )
 
 const (
@@ -564,5 +568,9 @@ var MetricsTranslation = []metrics.MetricID{
 	0x80: metrics.IDUnwindGoAsmcgocallAttempts,
 	0x81: metrics.IDUnwindGoAsmcgocallSuccess,
 	0x82: metrics.IDUnwindGoAsmcgocallUnwindFailure,
+	0x83: metrics.IDUnwindThreadContextErrReadTlsPtr,
+	0x84: metrics.IDUnwindThreadContextErrReadThreadCtxBuf,
+	0x85: metrics.IDUnwindThreadContextReadSuccesses,
+	0x86: metrics.IDUnwindThreadContextAttrsTruncated,
 	0x7c: metrics.IDCUPTIEventsRingbufFull,
 }

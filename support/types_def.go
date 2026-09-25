@@ -127,6 +127,7 @@ type PHPProcInfo C.PHPProcInfo
 type PerlProcInfo C.PerlProcInfo
 type PyProcInfo C.PyProcInfo
 type RubyProcInfo C.RubyProcInfo
+type ThreadContextProcInfo C.ThreadContextProcInfo
 type V8ProcInfo C.V8ProcInfo
 type NativeCustomLabelsProcInfo C.NativeCustomLabelsProcInfo
 type LuaJITProcInfo C.LuaJITProcInfo
@@ -135,11 +136,12 @@ const (
 	Sizeof_StackDelta = C.sizeof_StackDelta
 	Sizeof_Trace      = C.sizeof_Trace
 
-	sizeof_ApmIntProcInfo   = C.sizeof_ApmIntProcInfo
-	sizeof_DotnetProcInfo   = C.sizeof_DotnetProcInfo
-	sizeof_PHPProcInfo      = C.sizeof_PHPProcInfo
-	sizeof_RubyProcInfo     = C.sizeof_RubyProcInfo
-	sizeof_GoRuntimeOffsets = C.sizeof_GoRuntimeOffsets
+	sizeof_ApmIntProcInfo        = C.sizeof_ApmIntProcInfo
+	sizeof_DotnetProcInfo        = C.sizeof_DotnetProcInfo
+	sizeof_PHPProcInfo           = C.sizeof_PHPProcInfo
+	sizeof_RubyProcInfo          = C.sizeof_RubyProcInfo
+	sizeof_ThreadContextProcInfo = C.sizeof_ThreadContextProcInfo
+	sizeof_GoRuntimeOffsets      = C.sizeof_GoRuntimeOffsets
 )
 
 const (
@@ -349,5 +351,9 @@ var MetricsTranslation = []metrics.MetricID{
 	C.metricID_UnwindGoAsmcgocallAttempts:                 metrics.IDUnwindGoAsmcgocallAttempts,
 	C.metricID_UnwindGoAsmcgocallSuccess:                  metrics.IDUnwindGoAsmcgocallSuccess,
 	C.metricID_UnwindGoAsmcgocallUnwindFailure:            metrics.IDUnwindGoAsmcgocallUnwindFailure,
+	C.metricID_UnwindThreadContextErrReadTlsPtr:           metrics.IDUnwindThreadContextErrReadTlsPtr,
+	C.metricID_UnwindThreadContextErrReadThreadCtxBuf:     metrics.IDUnwindThreadContextErrReadThreadCtxBuf,
+	C.metricID_UnwindThreadContextReadSuccesses:           metrics.IDUnwindThreadContextReadSuccesses,
+	C.metricID_UnwindThreadContextAttrsTruncated:          metrics.IDUnwindThreadContextAttrsTruncated,
 	C.metricID_CUPTIEventsRingbufFull:                     metrics.IDCUPTIEventsRingbufFull,
 }
