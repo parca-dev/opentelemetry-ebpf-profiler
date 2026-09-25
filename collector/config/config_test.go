@@ -145,7 +145,7 @@ func TestValidateTargetCPUIDs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := validConfig()
 			cfg.TargetCPUIDs = tt.targetCPUIDs
-			err := xconfmap.Validate(cfg)
+			err := confmap.Validate(cfg)
 			if tt.wantErr {
 				require.Error(t, err)
 				return
@@ -202,6 +202,6 @@ func TestValidateFilterMinProcessAge(t *testing.T) {
 	cfg := validConfig()
 	cfg.FilterMinProcessAge = -1 * time.Second
 
-	err := xconfmap.Validate(cfg)
+	err := confmap.Validate(cfg)
 	require.Error(t, err)
 }
