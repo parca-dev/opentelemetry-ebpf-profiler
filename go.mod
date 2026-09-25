@@ -25,7 +25,7 @@ require (
 	github.com/mdlayher/kobject v0.0.0-20200520190114-19ca17470d7d
 	github.com/minio/sha256-simd v1.0.1
 	github.com/moby/moby/api v1.56.0
-	github.com/open-telemetry/sig-profiling/profcheck v0.0.0-20260826135623-e4135eebc9d9
+	github.com/open-telemetry/sig-profiling/profcheck v0.0.0-20260828212049-854821e3ec25
 	github.com/parca-dev/oomprof v0.1.6
 	github.com/parca-dev/usdt v0.0.2
 	github.com/peterbourgon/ff/v3 v3.4.0
