@@ -3,6 +3,7 @@
 // perf event and will call the appropriate tracer for a given process
 
 #include "bpfdefs.h"
+#include "go_runtime.h"
 #include "go_support.h"
 #include "kernel.h"
 #include "tracemgmt.h"
@@ -167,9 +168,10 @@ BPF_RODATA_VAR(bool, filter_error_frames, false)
 // independently whenever Go support is enabled.
 BPF_RODATA_VAR(bool, go_labels_disabled, true)
 
-// NB: upstream #1564 also adds go_get_g_register/go_get_g_ptr/go_get_m_ptr here.
-// parca keeps its equivalent in go_support.h (get_go_m_ptr), so those additions
-// are intentionally dropped — see tools/upstream-merge-playbook.md.
+// NB: upstream keeps go_get_g_register/go_get_g_ptr/go_get_m_ptr in go_runtime.h
+// (moved there by #1626, previously inline here via #1564). parca keeps its own
+// equivalent, get_go_m_ptr in go_support.h, and calls that instead — see
+// tools/upstream-merge-playbook.md.
 static EBPF_INLINE void maybe_add_go_custom_labels(struct pt_regs *ctx, PerCPURecord *record)
 {
   if (go_labels_disabled) {

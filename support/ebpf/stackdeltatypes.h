@@ -26,8 +26,11 @@
 #define UNWIND_COMMAND_SIGNAL        3
 // Unwind using standard frame pointer
 #define UNWIND_COMMAND_FRAME_POINTER 4
+// Cross the Go runtime.asmcgocall stack-switch boundary (arm64) by reading the
+// goroutine saved context from gobuf
+#define UNWIND_COMMAND_GO_ASMCGOCALL 5
 // Unwind past the Go runtime.morestack function
-#define UNWIND_COMMAND_GO_MORESTACK  5
+#define UNWIND_COMMAND_GO_MORESTACK  6
 
 // If opcode has UNWIND_OPCODEF_DEREF set, the lowest bits of 'param' are used
 // as second adder as post-deref operation. This contains the mask for that.

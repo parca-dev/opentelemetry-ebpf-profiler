@@ -246,7 +246,16 @@ typedef enum ErrorCode {
   ERR_LUAJIT_L_MISMATCH = 8003,
 
   // LuaJIT: PC exceeds 24 bits
-  ERR_LUAJIT_INVALID_PC = 8004
+  ERR_LUAJIT_INVALID_PC = 8004,
+
+  // Go: required runtime offsets or layout are missing or invalid
+  ERR_GO_NO_OFFSETS = 9000,
+
+  // Go: asmcgocall unwind could not recover the caller frame
+  ERR_GO_ASMCGOCALL_UNWIND_FAILURE = 9001,
+
+  // Go: failed to read g and runtime.m prefix
+  ERR_GO_RUNTIME_LOAD_FAILURE = 9002
 } ErrorCode;
 
 #endif // OPTI_ERRORS_H

@@ -64,7 +64,7 @@ const (
 const UnwindInfoMaxEntries = 0x4000
 
 const (
-	MetricIDBeginCumulative = 0x80
+	MetricIDBeginCumulative = 0x83
 )
 
 const (
@@ -191,12 +191,14 @@ type DotnetProcInfo struct {
 }
 type GoRuntimeOffsets struct {
 	M_offset               uint32
+	M_gsignal              uint32
 	Curg                   uint32
 	Labels                 uint32
 	Hmap_count             uint32
 	Hmap_log2_bucket_count uint32
 	Hmap_buckets           uint32
 	Tls_offset             int32
+	Sched_bp_off           uint32
 }
 type HotspotProcInfo struct {
 	Codecache_start        uint64
@@ -349,7 +351,7 @@ const (
 	sizeof_DotnetProcInfo   = 0x4
 	sizeof_PHPProcInfo      = 0x18
 	sizeof_RubyProcInfo     = 0x48
-	sizeof_GoRuntimeOffsets = 0x1c
+	sizeof_GoRuntimeOffsets = 0x24
 )
 
 const (
@@ -378,7 +380,8 @@ const (
 	UnwindCommandPLT          int32 = 0x2
 	UnwindCommandSignal       int32 = 0x3
 	UnwindCommandFramePointer int32 = 0x4
-	UnwindCommandGoMorestack  int32 = 0x5
+	UnwindCommandGoAsmcgocall int32 = 0x5
+	UnwindCommandGoMorestack  int32 = 0x6
 
 	UnwindDerefMask       int32 = 0x7
 	UnwindDerefMultiplier int32 = 0x8
@@ -549,5 +552,8 @@ var MetricsTranslation = []metrics.MetricID{
 	0x7d: metrics.IDSamplesSkippedProcessTooNew,
 	0x7e: metrics.IDNumSyncsFromPrctl,
 	0x7f: metrics.IDNumPriorityEventDeferred,
+	0x80: metrics.IDUnwindGoAsmcgocallAttempts,
+	0x81: metrics.IDUnwindGoAsmcgocallSuccess,
+	0x82: metrics.IDUnwindGoAsmcgocallUnwindFailure,
 	0x7c: metrics.IDCUPTIEventsRingbufFull,
 }

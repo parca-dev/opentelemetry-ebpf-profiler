@@ -1,6 +1,11 @@
 #ifndef OPTI_NATIVE_STACK_TRACE_H
 #define OPTI_NATIVE_STACK_TRACE_H
 
+#include "bpfdefs.h"
+#include "extmaps.h"
+#include "go_runtime.h"
+#include "tracemgmt.h"
+
 // Unwind info value for invalid stack delta
 #define STACK_DELTA_INVALID (STACK_DELTA_COMMAND_FLAG | UNWIND_COMMAND_INVALID)
 #define STACK_DELTA_STOP    (STACK_DELTA_COMMAND_FLAG | UNWIND_COMMAND_STOP)
@@ -225,8 +230,13 @@ unwind_calc_register_with_deref(UnwindState *state, u8 baseReg, s32 param, bool 
 // if the main ebpf unwinder should exit. This is the case if the current PC
 // is marked with UNWIND_COMMAND_STOP which marks entry points (main function,
 // thread spawn function, signal handlers, ...).
+//
+// delegate_go selects the flavor: NULL unwinds Go frames, non-NULL reports them
+// through the flag instead, leaving state and trace untouched so the caller can
+// hand the frame to the Go capable flavor.
 #if defined(__x86_64__)
-static EBPF_INLINE ErrorCode unwind_one_frame(PerCPURecord *record, bool *stop)
+static EBPF_INLINE ErrorCode
+unwind_one_frame(PerCPURecord *record, bool *stop, UNUSED bool *delegate_go)
 {
   UnwindState *state = &record->state;
   *stop              = false;
@@ -342,7 +352,7 @@ frame_ok:
   return ERR_OK;
 }
 #elif defined(__aarch64__)
-static EBPF_INLINE ErrorCode unwind_one_frame(PerCPURecord *record, bool *stop)
+static EBPF_INLINE ErrorCode unwind_one_frame(PerCPURecord *record, bool *stop, bool *delegate_go)
 {
   UnwindState *state = &record->state;
   *stop              = false;
@@ -398,6 +408,19 @@ static EBPF_INLINE ErrorCode unwind_one_frame(PerCPURecord *record, bool *stop)
         goto err_native_pc_read;
       }
       goto frame_ok;
+    case UNWIND_COMMAND_GO_ASMCGOCALL: {
+      if (delegate_go) {
+        *delegate_go = true;
+        return ERR_OK;
+      }
+      error = go_unwind_asmcgocall(record, state);
+      if (error == ERR_OK) {
+        goto frame_ok;
+      }
+      DEBUG_PRINT("go asmcgocall unwind failed: %d", error);
+      *stop = true;
+      return ERR_OK;
+    }
     default: return ERR_UNREACHABLE;
     }
   }
