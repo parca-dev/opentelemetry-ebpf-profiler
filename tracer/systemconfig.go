@@ -505,7 +505,9 @@ func determineSysConfig(coll *cebpf.CollectionSpec, maps map[string]*cebpf.Map,
 	needTPBase := !interpretersConfig.Perl.IsDisabled() ||
 		!interpretersConfig.Python.IsDisabled() ||
 		!interpretersConfig.Ruby.IsDisabled() ||
-		!interpretersConfig.Go.IsLabelsDisabled()
+		!interpretersConfig.Go.IsLabelsDisabled() ||
+		// parca-only: resolves its label set through TLS.
+		!interpretersConfig.CustomLabels.IsDisabled()
 	err := parseBTF(vars, needTPBase, needProcessStartTime, pidNamespaceMode)
 	if err != nil {
 		if pidNamespaceMode == PIDNamespaceTranslationModeRecursive {
