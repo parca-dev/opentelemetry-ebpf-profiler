@@ -69,6 +69,43 @@ func NoInterpreters() Config {
 	}
 }
 
+// Loaders returns active loaders for all enabled interpreters.
+func (cfg *Config) Loaders() []interpreter.Loader {
+	loaders := make([]interpreter.Loader, 0, 11)
+	if !cfg.Perl.IsDisabled() {
+		loaders = append(loaders, perl.GetLoader(cfg.Perl))
+	}
+	if !cfg.Python.IsDisabled() {
+		loaders = append(loaders, python.GetLoader(cfg.Python))
+	}
+	if !cfg.PHP.IsDisabled() {
+		loaders = append(loaders, php.GetLoader(cfg.PHP))
+		loaders = append(loaders, php.GetOpcacheLoader(cfg.PHP))
+	}
+	if !cfg.Hotspot.IsDisabled() {
+		loaders = append(loaders, hotspot.GetLoader(cfg.Hotspot))
+	}
+	if !cfg.Ruby.IsDisabled() {
+		loaders = append(loaders, ruby.GetLoader(cfg.Ruby))
+	}
+	if !cfg.V8.IsDisabled() {
+		loaders = append(loaders, nodev8.GetLoader(cfg.V8))
+	}
+	if !cfg.Dotnet.IsDisabled() {
+		loaders = append(loaders, dotnet.GetLoader(cfg.Dotnet))
+	}
+	if !cfg.BEAM.IsDisabled() {
+		loaders = append(loaders, beam.GetLoader(cfg.BEAM))
+	}
+	if !cfg.LuaJIT.IsDisabled() {
+		loaders = append(loaders, luajit.GetLoader(cfg.LuaJIT))
+	}
+	if !cfg.Go.IsDisabled() {
+		loaders = append(loaders, golang.GetLoader(cfg.Go))
+	}
+	return loaders
+}
+
 // IsMapEnabled returns true if for the given mapName the respective
 // configuration is enabled.
 func (cfg *Config) IsMapEnabled(mapName string) bool {
@@ -91,7 +128,8 @@ func (cfg *Config) IsMapEnabled(mapName string) bool {
 		return !cfg.LuaJIT.IsDisabled()
 	case golang.BPFMapName, apmint.BPFMapName, nodev8.BPFMapName:
 		// go_procs is read from collect_trace (preloaded into the PerCPURecord)
-		// and apm_int_procs from unwind_stop, so both must always be loaded.
+		// and apm_int_procs from unwind_stop, so both must always be loaded
+		// regardless of interpreter configuration.
 		// v8_procs is a parca fork addition to this list — the reference lives
 		// in a parca-side eBPF change to unwind_stop and would otherwise break
 		// the verifier when v8 is disabled.

@@ -138,7 +138,9 @@ func (l *luajitInstance) Detach(ebpf interpreter.EbpfHandler, pid libpf.PID) err
 // stub, so callers look identical to the other interpreters. parca's Loader takes no
 // configuration beyond the enable/disable toggle the caller already applied.
 func GetLoader(_ Config) interpreter.Loader {
-	return Loader
+	return interpreter.NewLoader(Loader, []interpreter.InterpreterResource{
+		{MapName: BPFMapName, ProgID: uint32(support.ProgUnwindLuaJIT), ProgName: "unwind_luajit"},
+	})
 }
 
 func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpreter.Data, error) {
