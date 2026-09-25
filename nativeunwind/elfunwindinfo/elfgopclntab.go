@@ -693,10 +693,6 @@ func getFunctionUnwindInfo(sourceFile string, arch elf.Machine, useFP bool) *sdt
 	case "runtime.sigreturn", "runtime.sigreturn__sigaction":
 		// signal frame restorers
 		return &sdtypes.UnwindInfoSignal
-	case "runtime.morestack":
-		// unwinder finds the goroutine via Go custom-labels infrastructure and
-		// grabs saved registers (parca #184).
-		return &sdtypes.UnwindInfoGoMorestack
 	}
 	return nil
 }
