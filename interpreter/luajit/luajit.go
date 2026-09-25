@@ -12,6 +12,7 @@
 package luajit // import "go.opentelemetry.io/ebpf-profiler/interpreter/luajit"
 
 import (
+	"debug/elf"
 	"errors"
 	"fmt"
 	"path"
@@ -153,7 +154,7 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		return nil, err
 	}
 
-	luaInterp, err := extractInterpreterBounds(info.Deltas(), cframeSize)
+	luaInterp, err := extractInterpreterBounds(ef.Machine, info.Deltas(), cframeSize)
 	if err != nil {
 		return nil, err
 	}
@@ -182,15 +183,22 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 // big and has a somewhat unique FDE we can pick out. We could tighten this up by looking for
 // direct jumps to the start of the interpreter (one can be found lj_dispatch_update) but we'd
 // still need to consult the stack deltas to get the end of the interpreter.
-func extractInterpreterBounds(deltas sdtypes.StackDeltaArray, param int32) (util.Range,
-	error) {
+func extractInterpreterBounds(machine elf.Machine, deltas sdtypes.StackDeltaArray,
+	param int32) (util.Range, error) {
 	for i := 0; i < len(deltas)-1; i++ {
 		d, next := &deltas[i], &deltas[i+1]
 		if next.Address-d.Address > 10_000 {
 			// The first case covers x86 w/ dwarf and old versions of luajit ARM that used dwarf and
 			// the second covers more recent arm versions that use frame pointers.
-			if d.Info.BaseReg == support.UnwindRegSp && d.Info.Param == param ||
-				d.Info.BaseReg == support.UnwindRegFp && d.Info.Param == 16 {
+			//
+			// The frame pointer case must stay gated on aarch64. CFA = fp+16 is what an
+			// ordinary `push rbp; mov rbp,rsp` prologue produces on x86-64, so it carries no
+			// LuaJIT signal there and matches any sufficiently large DWARF-described region.
+			// In a statically linked luajit the VM blob is emitted last and two such regions
+			// precede it, so an ungated match picks a decoy range that excludes lj_vm_cpcall.
+			if (d.Info.BaseReg == support.UnwindRegSp && d.Info.Param == param) ||
+				(machine == elf.EM_AARCH64 && d.Info.BaseReg == support.UnwindRegFp &&
+					d.Info.Param == 16) {
 				return util.Range{Start: d.Address, End: next.Address}, nil
 			}
 		}
