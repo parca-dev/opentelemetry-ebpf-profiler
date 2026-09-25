@@ -97,13 +97,10 @@ func (rm RemoteMemory) Uint32(addr libpf.Address) uint32 {
 	return v
 }
 
-// Uint32Checked reads a 32-bit unsigned integer from remote memory
+// Uint32Checked reads a 32-bit unsigned integer from remote memory, reporting
+// read errors instead of folding them into the zero value.
 func (rm RemoteMemory) Uint32Checked(addr libpf.Address) (uint32, error) {
-	var buf [4]byte
-	if err := rm.Read(addr, buf[:]); err != nil {
-		return 0, err
-	}
-	return binary.LittleEndian.Uint32(buf[:]), nil
+	return readInt[uint32](rm, addr)
 }
 
 // Uint64 reads a 64-bit unsigned integer from remote memory
