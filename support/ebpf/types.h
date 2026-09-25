@@ -388,6 +388,9 @@ enum {
   // number of cupti_events ringbuf reserve failures (GPU events dropped)
   metricID_CUPTIEventsRingbufFull,
 
+  // number of samples skipped because the process is too new
+  metricID_SamplesSkippedProcessTooNew,
+
   //
   // Metric IDs above are for counters (cumulative values)
   //
