@@ -211,6 +211,7 @@ const (
 	RubyFrameTypeCmeCfunc = C.RUBY_FRAME_TYPE_CME_CFUNC
 	RubyFrameTypeIseq     = C.RUBY_FRAME_TYPE_ISEQ
 	RubyFrameTypeGc       = C.RUBY_FRAME_TYPE_GC
+	RubyFrameTypeJit      = C.RUBY_FRAME_TYPE_JIT
 
 	CustomLabelMaxKeyLen = C.CUSTOM_LABEL_MAX_KEY_LEN
 	CustomLabelMaxValLen = C.CUSTOM_LABEL_MAX_VAL_LEN

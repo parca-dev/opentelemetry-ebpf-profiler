@@ -408,6 +408,7 @@ static inline EBPF_INLINE PerCPURecord *get_pristine_per_cpu_record()
   record->luajitUnwindState.L_ptr           = 0;
   record->luajitUnwindState.cframe          = 0;
   record->luajitUnwindState.is_jit          = false;
+  record->rubyUnwindState.jit_detected      = false;
   record->unwindersDone                     = 0;
   record->tailCalls                         = 0;
   record->ratelimitAction                   = RATELIMIT_ACTION_DEFAULT;
