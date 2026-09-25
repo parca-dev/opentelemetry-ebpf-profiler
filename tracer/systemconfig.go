@@ -456,7 +456,7 @@ func probeVMALookupSupport(cfg *Config) (bool, string) {
 	defer restoreRlimit()
 
 	progTypes := []cebpf.ProgramType{cebpf.PerfEvent}
-	if cfg.OffCPUThreshold > 0 || len(cfg.ProbeLinks) > 0 || cfg.LoadProbe {
+	if cfg.OffCPUThreshold > 0 || cfg.LoadProbe {
 		progTypes = append(progTypes, cebpf.Kprobe)
 	}
 
@@ -712,29 +712,12 @@ func setOriginIDs(coll *cebpf.CollectionSpec, cfg *Config, origins *originRegist
 		}
 	}
 
-	// ProbeLinks use the generic eBPF program loaded at startup and need their
-	// origin ID baked into RODATA here. Custom probes (the Enable path) skip
-	// this block: they register their own origin IDs dynamically in Tracer.Enable
-	// before calling Probe.Load, so LoadProbe alone does not require a static ID.
-	if len(cfg.ProbeLinks) > 0 {
-		probe, err := origins.Register(&samples.TypeMetadata{
-			SampleType: "events",
-			SampleUnit: "count",
-		})
-		if err != nil {
-			return err
-		}
-		if err := coll.Variables["origin_id_probe"].Set(uint16(probe)); err != nil {
-			return fmt.Errorf("failed to set origin_id_probe: %v", err)
-		}
-	}
-
 	// parca: the cuda_correlation USDT probe is the only parca-side eBPF
 	// program that calls collect_trace with its own origin. GPU PC samples are
 	// synthesized in user space (interpreter/gpu) and carry their
 	// *samples.TypeMetadata directly, so they need no origin ID here.
 	if !cfg.InterpretersConfig.CUDA.IsDisabled() {
-		cuda, err := origins.register(gpu.ProfileTypeCuda)
+		cuda, err := origins.Register(gpu.ProfileTypeCuda)
 		if err != nil {
 			return err
 		}
