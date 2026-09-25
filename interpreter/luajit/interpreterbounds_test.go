@@ -21,7 +21,6 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/nativeunwind/elfunwindinfo"
-	sdtypes "go.opentelemetry.io/ebpf-profiler/nativeunwind/stackdeltatypes"
 	"go.opentelemetry.io/ebpf-profiler/support"
 	"go.opentelemetry.io/ebpf-profiler/tools/coredump/cloudstore"
 	"go.opentelemetry.io/ebpf-profiler/tools/coredump/modulestore"
@@ -77,14 +76,14 @@ var interpreterBoundsCases = []struct {
 		ref:        "b783336ff24a35b10022a737f18500e39e68eb5ff2a208579ee88ceddaf4ea29",
 		machine:    elf.EM_AARCH64,
 		cframeSize: support.LJCframeSpaceArm,
-		want:       util.Range{Start: 0x75ac0, End: 0x79924},
+		want:       util.Range{Start: 0x75ac0, End: 0x79940},
 		// The control: on aarch64 the frame-pointer clause is the one that legitimately
 		// fires, neither preceding region matches, and gating changes nothing.
 		//
-		// Note for whoever next merges upstream: the end moves to 0x79940 there. Both
-		// starts are unchanged, and this is a stack delta extraction difference rather
-		// than a bounds one, so bump the constant rather than treating it as a
-		// regression.
+		// This end moved from 0x79924 when the basic-block stack delta refactor
+		// (upstream #1678) landed. Both starts, and the whole amd64 range, were
+		// unchanged across it: the difference is in delta extraction, not in the
+		// bounds heuristic.
 	},
 }
 
@@ -118,10 +117,10 @@ func TestExtractInterpreterBounds(t *testing.T) {
 			defer ef.Close()
 			require.Equal(t, tc.machine, ef.Machine)
 
-			var intervals sdtypes.IntervalData
-			require.NoError(t, elfunwindinfo.Extract(target, &intervals))
+			intervals, err := elfunwindinfo.Extract(target)
+			require.NoError(t, err)
 
-			got, err := extractInterpreterBounds(ef.Machine, intervals.Deltas, tc.cframeSize)
+			got, err := extractInterpreterBounds(ef.Machine, *intervals, tc.cframeSize)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, got)
 

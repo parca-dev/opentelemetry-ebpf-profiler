@@ -154,7 +154,7 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		return nil, err
 	}
 
-	luaInterp, err := extractInterpreterBounds(ef.Machine, info.Deltas(), cframeSize)
+	luaInterp, err := extractInterpreterBounds(ef.Machine, *info.Intervals(), cframeSize)
 	if err != nil {
 		return nil, err
 	}
@@ -176,6 +176,10 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 	return ljd, nil
 }
 
+// minInterpreterSize is the lower bound for the size of the stack delta
+// gap that identifies the interpreter blob.
+const minInterpreterSize = 10_000
+
 // LuaJIT's interpreter isn't a function, its a raw chunk of assembly code with direct threaded
 // jumps at end of each opcode. The public entrypoints (lua_pcall/lua_resume) call the lj_vm_pcall
 // function at the end of this blob which set up the interpreter and starts executing.
@@ -183,11 +187,34 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 // big and has a somewhat unique FDE we can pick out. We could tighten this up by looking for
 // direct jumps to the start of the interpreter (one can be found lj_dispatch_update) but we'd
 // still need to consult the stack deltas to get the end of the interpreter.
-func extractInterpreterBounds(machine elf.Machine, deltas sdtypes.StackDeltaArray,
+func extractInterpreterBounds(machine elf.Machine, intervals sdtypes.IntervalData,
 	param int32) (util.Range, error) {
-	for i := 0; i < len(deltas)-1; i++ {
-		d, next := &deltas[i], &deltas[i+1]
-		if next.Address-d.Address > 10_000 {
+DeltasLoop:
+	for i, bk := range intervals.Blocks {
+		for j, d := range bk.Deltas {
+			var next *sdtypes.StackDelta
+			var nextBk *sdtypes.BasicBlock
+			if j < len(bk.Deltas)-1 {
+				next = &bk.Deltas[j+1]
+				nextBk = bk
+			} else {
+				for nextI := i + 1; nextI < len(intervals.Blocks); nextI++ {
+					nextBk = intervals.Blocks[nextI]
+					if len(nextBk.Deltas) != 0 {
+						next = &nextBk.Deltas[0]
+						break
+					}
+				}
+			}
+			if next == nil {
+				break DeltasLoop
+			}
+			dAddr := bk.Start + uint64(d.Offset)
+			nextAddr := nextBk.Start + uint64(next.Offset)
+			if nextAddr < dAddr || nextAddr-dAddr <= minInterpreterSize {
+				continue
+			}
+
 			// The first case covers x86 w/ dwarf and old versions of luajit ARM that used dwarf and
 			// the second covers more recent arm versions that use frame pointers.
 			//
@@ -199,11 +226,10 @@ func extractInterpreterBounds(machine elf.Machine, deltas sdtypes.StackDeltaArra
 			if (d.Info.BaseReg == support.UnwindRegSp && d.Info.Param == param) ||
 				(machine == elf.EM_AARCH64 && d.Info.BaseReg == support.UnwindRegFp &&
 					d.Info.Param == 16) {
-				return util.Range{Start: d.Address, End: next.Address}, nil
+				return util.Range{Start: dAddr, End: nextAddr}, nil
 			}
 		}
 	}
-
 	return util.Range{}, errors.New("failed to find interpreter range")
 }
 
