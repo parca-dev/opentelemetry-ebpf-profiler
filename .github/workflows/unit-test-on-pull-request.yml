@@ -22,6 +22,8 @@ jobs:
     steps:
       - name: Clone code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -46,6 +48,8 @@ jobs:
     steps:
       - name: Clone code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up environment
         uses: ./.github/workflows/env
       - name: linter
@@ -59,6 +63,8 @@ jobs:
     steps:
       - name: Clone code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up environment
         uses: ./.github/workflows/env
       - name: formatter
@@ -78,6 +84,8 @@ jobs:
     steps:
       - name: Clone code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up environment
         uses: ./.github/workflows/env
       - name: Cross compile
@@ -97,6 +105,8 @@ jobs:
     steps:
       - name: Clone code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up environment
         uses: ./.github/workflows/env
       - name: Cache coredump modules
@@ -141,6 +151,8 @@ jobs:
     steps:
       - name: Clone code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up environment
         uses: ./.github/workflows/env
       - name: Prepare integration test binaries for qemu tests
@@ -157,6 +169,8 @@ jobs:
     steps:
       - name: Clone code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -215,6 +229,8 @@ jobs:
           sudo dpkg-reconfigure man-db
       - name: Clone code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Configure apt
         uses: ./.github/workflows/apt
       - name: Install dependencies
