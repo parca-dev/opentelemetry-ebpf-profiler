@@ -15,9 +15,13 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/noop"
 )
 
 var (
+	// metricsProviderConfigured indicates if Start() was called with a real (non-noop) metric meter.
+	metricsProviderConfigured bool
+
 	// prevTimestamp holds the timestamp of the buffered metrics
 	prevTimestamp uint32
 
@@ -56,10 +60,25 @@ func SetReporter(r MetricsReporter) {
 	reporterImpl = r
 }
 
+// Enabled reports whether metrics should be collected: either a real (non-noop)
+// metric meter was provided to Start(), or -- parca -- a MetricsReporter was
+// installed via SetReporter.
+//
+// parca: upstream #1788 gates all collection on the OTel meter alone. parca-agent
+// never installs a global OTel MeterProvider, so otel.Meter() hands Start() a noop
+// meter and every eBPF/interpreter metric would be silently dropped, including the
+// ones report() feeds to reporterImpl. Callers that rely on the reporter must call
+// SetReporter before NewTracer, since collectInterpreterMetrics samples Enabled()
+// once at startup.
+func Enabled() bool { return metricsProviderConfigured || reporterImpl != nil }
+
 // Start initializes the OTel metric instruments for a predefined set of
 // metric definitions. It must be called before any goroutine begins
 // calling AddSlice or Add.
 func Start(meter metric.Meter) {
+	_, enabled := any(meter).(noop.Meter)
+	metricsProviderConfigured = !enabled
+
 	defs := GetDefinitions()
 	metricTypes = make(map[MetricID]MetricType, len(defs))
 	for _, md := range defs {
@@ -67,6 +86,11 @@ func Start(meter metric.Meter) {
 			continue
 		}
 		metricTypes[md.ID] = md.Type
+
+		if !metricsProviderConfigured {
+			continue
+		}
+
 		switch typ := md.Type; typ {
 		case MetricTypeCounter:
 			counter, err := meter.Int64Counter(md.Field,

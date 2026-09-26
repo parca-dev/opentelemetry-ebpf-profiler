@@ -179,10 +179,16 @@ rm -rf support/_obj support/types_gen.go
 
 When upstream lands a PR that originally came from parca (custom labels,
 dlopen-uprobe, python+native combo, fix-stale-go-label, native r28 fallback),
-prefer the parca-fork version of the file — it usually has post-review
-refinements upstream didn't pick up. Skip upstream's additions if parca has
-the equivalent elsewhere (e.g. `go_support.h::get_go_m_ptr` already covers
-`go_get_*` from upstream #1456).
+check whether the parca-fork version still has post-review refinements upstream
+didn't pick up. If it does, keep it; if upstream's has caught up or overtaken
+it, take upstream's and delete ours. Carrying a duplicate "because it is ours"
+is how the delta grows.
+
+`go_support.h::get_go_m_ptr` was the worked example of getting this wrong: it
+was kept as parca's equivalent of upstream's `go_get_*` (#1456, moved into
+`go_runtime.h` by #1626), long after upstream's version had become a strict
+superset — same success path, plus an r28 fallback on the paths where ours
+returned NULL. It is gone now; use `go_runtime.h::go_get_m_ptr`.
 
 ### Rename cascades
 

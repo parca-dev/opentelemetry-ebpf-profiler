@@ -5,16 +5,16 @@ import (
 	"context"
 	"errors"
 	"io"
-	"math"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
+
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
-	"go.opentelemetry.io/otel"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
@@ -61,6 +61,7 @@ func InitializeMetrics() {
 
 func StartTracer(ctx context.Context, t *testing.T, et tracertypes.IncludedTracers,
 	printBpfLogs bool) (<-chan TraceEvent, *tracer.Tracer) {
+	t.Helper()
 	traceCh := make(chan TraceEvent)
 	tr := &traceReporter{
 		traceEventChan: traceCh,
@@ -75,7 +76,6 @@ func StartTracer(ctx context.Context, t *testing.T, et tracertypes.IncludedTrace
 		SamplesPerSecond:       20,
 		ProbabilisticInterval:  100,
 		ProbabilisticThreshold: 100,
-		OffCPUThreshold:        uint32(math.MaxUint32 / 100),
 		VerboseMode:            true,
 	})
 	require.NoError(t, err)
@@ -86,7 +86,7 @@ func StartTracer(ctx context.Context, t *testing.T, et tracertypes.IncludedTrace
 
 	trc.StartPIDEventProcessor(ctx)
 
-	err = trc.AttachTracer()
+	err = trc.AttachTracer(nil)
 	require.NoError(t, err)
 	log.Info("Attached tracer program")
 

@@ -135,7 +135,7 @@ type cubinVersionReader struct{ base io.ReaderAt }
 func (r cubinVersionReader) ReadAt(p []byte, off int64) (int, error) {
 	n, err := r.base.ReadAt(p, off)
 	// Patch whatever part of [elfVersionOff, elfVersionOff+4) this read covers.
-	for i := int64(0); i < 4; i++ {
+	for i := range int64(4) {
 		if idx := elfVersionOff + i - off; idx >= 0 && idx < int64(n) {
 			// Little-endian EV_CURRENT: 0x01 0x00 0x00 0x00.
 			if i == 0 {
@@ -167,7 +167,7 @@ const (
 //
 // Reading bits [8:15] unconditionally is wrong for every pre-Blackwell cubin,
 // because that is where the older ABI keeps feature flags:
-// EF_CUDA_TEXMODE_UNIFIED (0x100), EF_CUDA_TEXMODE_INDEPENDANT (0x200),
+// EF_CUDA_TEXMODE_UNIFIED (0x100), EF_CUDA_TEXMODE_INDEPENDENT (0x200),
 // EF_CUDA_64BIT_ADDRESS (0x400), EF_CUDA_ACCELERATORS_V1 (0x800). A typical
 // sm_90 cubin decodes to 5 that way, which is not a real SM version, so the
 // opcode table lookup silently misses and no instruction mnemonic is reported.
@@ -259,8 +259,8 @@ func (p *cubinProcess) OpenMappingFile(_ *process.RawMapping) (process.ReadAtClo
 
 func (p *cubinProcess) PID() libpf.PID                      { return libpf.PID(p.pid) }
 func (p *cubinProcess) GetMachineData() process.MachineData { return process.MachineData{} }
-func (p *cubinProcess) GetProcessMeta(process.MetaConfig) process.ProcessMeta {
-	return process.ProcessMeta{}
+func (p *cubinProcess) GetProcessMeta([]process.MetaEnricher) process.Meta {
+	return process.Meta{}
 }
 func (p *cubinProcess) GetExe() (libpf.String, error) { return libpf.NullString, nil }
 func (p *cubinProcess) IterateMappings(_ func(m process.RawMapping) bool) (uint32, error) {

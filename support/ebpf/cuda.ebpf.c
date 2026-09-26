@@ -26,7 +26,7 @@ int BPF_USDT(cuda_correlation, u32 correlation_id, s32 cbid)
   u64 ts      = bpf_ktime_get_ns();
   // Cast cbid to s32 first to get sign extension, then to u64
   u64 cuda_id = correlation_id + ((u64)cbid << 32);
-  return collect_trace(ctx, origin_id_cuda, pid, tid, ts, 0, cuda_id);
+  return collect_trace(ctx, origin_id_cuda, pid, tid, 0, ts, 0, cuda_id);
 }
 
 // Event type discriminator at offset 0 of every event submitted to cupti_events.

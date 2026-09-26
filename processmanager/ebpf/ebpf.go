@@ -18,10 +18,11 @@ import (
 	"github.com/cilium/ebpf/features"
 	"github.com/cilium/ebpf/link"
 	"github.com/parca-dev/usdt"
-	"go.opentelemetry.io/ebpf-profiler/internal/log"
-	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
 	"golang.org/x/exp/constraints"
 	"golang.org/x/sys/unix"
+
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
+	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
 
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
@@ -60,6 +61,7 @@ type ebpfMapsImpl struct {
 	GoProcs            *cebpf.Map `name:"go_procs"`
 	ClProcs            *cebpf.Map `name:"cl_procs"`
 	LuaJitProcs        *cebpf.Map `name:"luajit_procs"`
+	ThreadContextProcs *cebpf.Map `name:"thread_context_procs"`
 
 	// Stackdelta and process related eBPF maps
 	ExeIDToStackDeltaMaps []*cebpf.Map
@@ -130,7 +132,7 @@ func LoadMaps(ctx context.Context, interpretersConfig interpreterconfig.Config,
 			if !interpretersConfig.IsMapEnabled(nameTag) {
 				continue
 			}
-			return nil, fmt.Errorf("Map %v is not available", nameTag)
+			return nil, fmt.Errorf("map %v is not available", nameTag)
 		}
 		implRefVal.Field(i).Set(reflect.ValueOf(mapVal))
 	}
@@ -141,7 +143,7 @@ func LoadMaps(ctx context.Context, interpretersConfig interpreterconfig.Config,
 		deltasMapName := fmt.Sprintf("exe_id_to_%d_stack_deltas", i)
 		deltasMap, ok := maps[deltasMapName]
 		if !ok {
-			return nil, fmt.Errorf("Map %v is not available", deltasMapName)
+			return nil, fmt.Errorf("map %v is not available", deltasMapName)
 		}
 		impl.ExeIDToStackDeltaMaps[i-support.StackDeltaBucketSmallest] = deltasMap
 	}
@@ -451,7 +453,7 @@ func (impl *ebpfMapsImpl) UpdateInterpreterOffsets(ebpfProgIndex uint16, fileID 
 	if err := impl.InterpreterOffsets.Update(unsafe.Pointer(&key), unsafe.Pointer(&value),
 		cebpf.UpdateAny); err != nil {
 		// TODO: Used to be log.Fatalf, revisit if needed
-		return fmt.Errorf("Failed to place interpreter range in map: %v", err)
+		return fmt.Errorf("failed to place interpreter range in map: %v", err)
 	}
 
 	return nil
@@ -485,6 +487,8 @@ func (impl *ebpfMapsImpl) getInterpreterTypeMap(typ libpf.InterpreterType) (*ceb
 		return impl.ClProcs, nil
 	case libpf.LuaJIT:
 		return impl.LuaJitProcs, nil
+	case libpf.ThreadContext:
+		return impl.ThreadContextProcs, nil
 	default:
 		return nil, fmt.Errorf("type %d is not (yet) supported", typ)
 	}
@@ -840,8 +844,8 @@ func (impl *ebpfMapsImpl) DeleteExeIDToStackDeltas(fileID host.FileID, mapID uin
 	return nil
 }
 
-// UpdateStackDeltaPages adds fileID/page with given information to eBPF map. If the entry exists,
-// it will return an error. Otherwise the key/value pairs will be appended to the hash.
+// UpdateStackDeltaPages adds fileID/page combinations with given information to the eBPF map.
+// Existing entries for these fileID/page keys are overwritten.
 func (impl *ebpfMapsImpl) UpdateStackDeltaPages(fileID host.FileID, numDeltasPerPage []uint16,
 	mapID uint16, firstPageAddr uint64,
 ) error {
@@ -864,12 +868,39 @@ func (impl *ebpfMapsImpl) UpdateStackDeltaPages(fileID host.FileID, numDeltasPer
 		firstDelta += uint32(numDeltas)
 	}
 
-	_, err := impl.StackDeltaPageToInfo.BatchUpdate(
+	// The kernel never reads attr->batch.flags for batch updates, and only
+	// accepts BPF_F_LOCK in attr->batch.elem_flags. BPF_NOEXIST is silently ignored in Flags.
+	// We cannot pass BPF_NOEXIST as attr->batch.elem_flags because it will get
+	// rejected due to a discrepancy between the source code and documentation.
+	// See https://github.com/torvalds/linux/blob/e8f897f4afef0031fe618a8e94127a0934896aba/kernel/bpf/syscall.c#L1754
+	inserted, err := impl.StackDeltaPageToInfo.BatchUpdate(
 		ptrCastMarshaler[support.StackDeltaPageKey](keys),
 		ptrCastMarshaler[support.StackDeltaPageInfo](values),
-		&cebpf.BatchOptions{Flags: uint64(cebpf.UpdateNoExist)})
+		nil)
+	if err != nil {
+		// The batch stops at the first failing element and keeps everything inserted before it.
+		if errors.Is(err, unix.E2BIG) {
+			// E2BIG returns the exact number of inserted keys, so we can batch delete them.
+			if _, derr := impl.StackDeltaPageToInfo.BatchDelete(
+				ptrCastMarshaler[support.StackDeltaPageKey](keys[:inserted]), nil); derr == nil {
+				return impl.trackMapError(
+					metrics.IDStackDeltaPageToInfoBatchUpdate, err)
+			}
+		}
+		// Pre-loop errors and failed batch deletes report an unreliable count, so safely remove every attempted key.
+		var failed int
+		for i := range keys {
+			if derr := impl.StackDeltaPageToInfo.Delete(unsafe.Pointer(&keys[i])); derr != nil &&
+				!errors.Is(derr, cebpf.ErrKeyNotExist) {
+				failed++
+			}
+		}
+		if failed != 0 {
+			log.Debugf("Failed to delete %d of %d stack delta pages for FileID %x",
+				failed, len(keys), fileID)
+		}
+	}
 	return impl.trackMapError(metrics.IDStackDeltaPageToInfoBatchUpdate, err)
-
 }
 
 // DeleteStackDeltaPage removes the entry specified by fileID and page from the eBPF map.

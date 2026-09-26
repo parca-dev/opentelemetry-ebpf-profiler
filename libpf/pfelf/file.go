@@ -21,8 +21,8 @@ package pfelf // import "go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 
 import (
 	"bytes"
-	"debug/buildinfo"
 	"debug/elf"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -31,7 +31,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"runtime/debug"
 	"slices"
 	"syscall"
 	"unsafe"
@@ -54,6 +53,9 @@ const (
 	// parsed sections (e.g. symbol tables and string tables; libxul
 	// has about 4MB .dynstr)
 	maxBytesLargeSection = 16 * 1024 * 1024
+
+	// notYetProcessed is an internal placeholder to mark not yet parsed data.
+	notYetProcessed = "\x01"
 )
 
 // List of public errors.
@@ -73,8 +75,17 @@ var (
 	// ErrNoteNotFound is returned by VisitNotes when no note made the visitor stop.
 	ErrNoteNotFound = errors.New("note not found")
 
-	// errNotProcessed is internal placeholder to mark not yet parsed data.
+	// errNoGoBuildinfo is returned when the ELF is not a Go executable.
+	errNoGoBuildinfo = errors.New("go buildinfo not found")
+
+	// errNotProcessed is an internal placeholder to mark not yet parsed data.
 	errNotProcessed = errors.New("not yet processed")
+
+	// strNotProcessed is an internal placeholder to mark not yet parsed data.
+	strNotProcessed = libpf.Intern(notYetProcessed)
+
+	// goBuildInfoMagic is the magic header for Go buildinfo
+	goBuildInfoMagic = []byte("\xff Go buildinf:")
 )
 
 // File represents an open ELF file
@@ -135,6 +146,9 @@ type File struct {
 	// InsideCore indicates that this ELF is mapped from a coredump ELF
 	InsideCore bool
 
+	// isExecutable is set for main executable program (not for shared libraries)
+	isExecutable bool
+
 	// Fields to mimic elf.debug
 	Type    elf.Type
 	Machine elf.Machine
@@ -143,16 +157,14 @@ type File struct {
 	// Path to the debuglink exe,
 	// or empty if none exists
 	debuglinkPath string
-	// Whether we have checked for a debuglink
-	debuglinkChecked bool
 
 	// Cached notes data
 	notesError error
 	gnuBuildId string
 	goBuildId  string
 
-	// Contains the Go build information if present
-	goBuildInfo *debug.BuildInfo
+	// Go build info
+	golangVersion libpf.String
 }
 
 var (
@@ -236,10 +248,12 @@ func newFile(r io.ReaderAt, closer io.Closer,
 	loadAddress uint64, hasMusl bool,
 ) (*File, error) {
 	f := &File{
-		elfReader:  r,
-		InsideCore: loadAddress != 0,
-		closer:     closer,
-		notesError: errNotProcessed,
+		elfReader:     r,
+		InsideCore:    loadAddress != 0,
+		closer:        closer,
+		debuglinkPath: notYetProcessed,
+		notesError:    errNotProcessed,
+		golangVersion: strNotProcessed,
 	}
 	success := false
 	defer func() {
@@ -334,12 +348,15 @@ func newFile(r io.ReaderAt, closer io.Closer,
 		return int(a.Flags&(elf.PF_R|elf.PF_X)) - int(b.Flags&(elf.PF_R|elf.PF_X))
 	})
 
+	if f.Type == elf.ET_EXEC {
+		f.isExecutable = true
+	}
 	for i := range f.Progs {
 		p := &f.Progs[i]
 		if p.Filesz <= 0 {
 			continue
 		}
-		switch p.ProgHeader.Type {
+		switch p.Type {
 		case elf.PT_DYNAMIC:
 			rdr := pfbufio.NewReader(r, int64(p.Off), int64(p.Filesz))
 
@@ -360,6 +377,10 @@ func newFile(r io.ReaderAt, closer io.Closer,
 					adjustedVal -= bias
 				}
 				switch elf.DynTag(dyn.Tag) {
+				case elf.DT_FLAGS_1:
+					if elf.DynFlag1(dyn.Val)&elf.DF_1_PIE != 0 {
+						f.isExecutable = true
+					}
 				case elf.DT_NEEDED:
 					f.neededIndexes = append(f.neededIndexes, int64(dyn.Val))
 				case elf.DT_SONAME:
@@ -375,6 +396,8 @@ func newFile(r io.ReaderAt, closer io.Closer,
 				}
 			}
 			pfbufio.PutReader(rdr)
+		case elf.PT_INTERP:
+			f.isExecutable = true
 		}
 	}
 
@@ -399,7 +422,7 @@ func getString(section []byte, start int) (string, bool) {
 type NoMmapCloser libpf.Void
 
 // Close implements io.Closer interface.
-func (_ NoMmapCloser) Close() error {
+func (NoMmapCloser) Close() error {
 	return nil
 }
 
@@ -494,16 +517,6 @@ func (f *File) LoadSections() error {
 	return nil
 }
 
-// findProg finds the first matching program header of given type.
-func (f *File) findProg(t elf.ProgType) *Prog {
-	for i := range f.Progs {
-		if f.Progs[i].Type == t {
-			return &f.Progs[i]
-		}
-	}
-	return nil
-}
-
 // Section returns a section with the given name, or nil if no such section exists.
 func (f *File) Section(name string) *Section {
 	if f.InsideCore {
@@ -522,17 +535,25 @@ func (f *File) Section(name string) *Section {
 	return nil
 }
 
+// ProgByType finds the first matching program header of given type.
+func (f *File) ProgByType(t elf.ProgType) *Prog {
+	for i := range f.Progs {
+		if f.Progs[i].Type == t {
+			return &f.Progs[i]
+		}
+	}
+	return nil
+}
+
 // TLS gets the TLS segment (program header)
 func (f *File) TLS() (*Prog, error) {
-	for _, seg := range f.Progs {
-		if seg.Type == elf.PT_TLS {
-			return &seg, nil
-		}
+	if p := f.ProgByType(elf.PT_TLS); p != nil {
+		return p, nil
 	}
 	return nil, ErrNoTLS
 }
 
-// ProgByVirtualAddress searches the Prog header containing the virtual address.
+// ProgByVirtualAddress determines the Prog header containing the virtual address.
 func (f *File) ProgByVirtualAddress(addr uint64) *Prog {
 	// Search for the Program header that contains the start address.
 	for _, ph := range f.loadData {
@@ -582,41 +603,6 @@ func (f *File) SymbolData(name libpf.SymbolName, maxSize int) (*libpf.Symbol, []
 	return sym, data, nil
 }
 
-// EHFrame constructs a Program header with the EH Frame sections
-func (f *File) EHFrame() (*Prog, error) {
-	p := f.findProg(elf.PT_GNU_EH_FRAME)
-	if p == nil {
-		return nil, errors.New("no PT_GNU_EH_FRAME tag found")
-	}
-	// Find matching PT_LOAD segment
-	for i := range f.Progs {
-		ph := &f.Progs[i]
-		if ph.Type != elf.PT_LOAD || p.Vaddr < ph.Vaddr ||
-			p.Vaddr >= ph.Vaddr+ph.Filesz {
-			continue
-		}
-		// Normally the LOAD segment contains .rodata, .eh_frame_hdr
-		// and .eh_frame. Craft a subset segment that contains the data
-		// from start of the PT_GNU_EH_FRAME start until end of the LOAD
-		// segment.
-		offs := p.Vaddr - ph.Vaddr
-		return &Prog{
-			ProgHeader: elf.ProgHeader{
-				Type:   ph.Type,
-				Flags:  ph.Flags,
-				Off:    ph.Off + offs,
-				Vaddr:  ph.Vaddr + offs,
-				Paddr:  ph.Paddr + offs,
-				Filesz: ph.Filesz - offs,
-				Memsz:  ph.Memsz - offs,
-				Align:  ph.Align,
-			},
-			elfReader: f.getReader(),
-		}, nil
-	}
-	return nil, errors.New("no PT_LOAD segment for PT_GNU_EH_FRAME found")
-}
-
 // VisitNotes iterates the ELF notes.
 // The visitor must make copies of the 'data' it keeps after return.
 // It returns ErrNoteNotFound if all notes are visited without the visitor stopping iteration.
@@ -647,20 +633,27 @@ func (f *File) visitBuildIDNoteSections(visitor func(uint64, []byte) bool) error
 	if f.InsideCore {
 		return ErrNoteNotFound
 	}
+	return f.VisitNoteSections([]string{".note.gnu.build-id", ".note.go.buildid", ".notes"},
+		visitor)
+}
 
+// VisitNoteSections iterates the notes in the SHT_NOTE sections with the given names.
+// The visitor must make copies of the 'data' it keeps after return.
+// It returns ErrNoteNotFound if no named section exists, and nil once all notes
+// have been visited or the visitor stopped iteration.
+func (f *File) VisitNoteSections(names []string, visitor func(uint64, []byte) bool) error {
 	if err := f.LoadSections(); err != nil {
-		return ErrNoteNotFound
+		return err
 	}
 
 	rdr := pfbufio.GetReader()
 	defer pfbufio.PutReader(rdr)
 
 	visited := false
-	buildIDSections := []string{".note.gnu.build-id", ".note.go.buildid", ".notes"}
 	for i := range f.Sections {
 		section := &f.Sections[i]
 		if section.Type != elf.SHT_NOTE || section.Size == 0 ||
-			!slices.Contains(buildIDSections, section.Name) {
+			!slices.Contains(names, section.Name) {
 			continue
 		}
 		visited = true
@@ -726,29 +719,9 @@ func (f *File) GetBuildID() (string, error) {
 	return f.gnuBuildId, err
 }
 
-// GoVersion returns the Go version if present and empty string otherwise. This will delegate
-// to buildinfo.Read for any binaries where IsGolang is true which will scan the binary with
-// debug/elf. This will incur additional CPU/IO overhead but the libpf.readbufat buffer and
-// OS file buffers should ameliorate most of that.
-func (f *File) GoVersion() (string, error) {
-	if f.goBuildInfo != nil {
-		return f.goBuildInfo.GoVersion, nil
-	}
-	if !f.IsGolang() {
-		return "", nil
-	}
-	bi, err := buildinfo.Read(f.getReader())
-	if err != nil {
-		return "", err
-	}
-	f.goBuildInfo = bi
-
-	return bi.GoVersion, nil
-}
-
 // DebuglinkFileName returns the debug file linked by .gnu_debuglink if any
 func (f *File) DebuglinkFileName(elfFilePath string, elfOpener ELFOpener) string {
-	if f.debuglinkChecked {
+	if f.debuglinkPath != notYetProcessed {
 		return f.debuglinkPath
 	}
 	file, path := f.OpenDebugLink(elfFilePath, elfOpener)
@@ -769,6 +742,8 @@ const (
 	RelTLSDESC RelocType = 1 << iota
 	// RelDTPMOD64 matches DTPMOD64 relocations (R_AARCH64_TLS_DTPMOD64, R_X86_64_DTPMOD64).
 	RelDTPMOD64
+	// RelTPOFF64 matches TP-relative relocations (R_AARCH64_TLS_TPREL64, R_X86_64_TPOFF64).
+	RelTPOFF64
 )
 
 // classifyRelocAarch64 returns the RelocType for an AARCH64 relocation.
@@ -778,6 +753,8 @@ func classifyRelocAarch64(rela ElfReloc) RelocType {
 		return RelTLSDESC
 	case elf.R_AARCH64_TLS_DTPMOD64:
 		return RelDTPMOD64
+	case elf.R_AARCH64_TLS_TPREL64:
+		return RelTPOFF64
 	default:
 		return 0
 	}
@@ -790,6 +767,8 @@ func classifyRelocX86_64(rela ElfReloc) RelocType {
 		return RelTLSDESC
 	case elf.R_X86_64_DTPMOD64:
 		return RelDTPMOD64
+	case elf.R_X86_64_TPOFF64:
+		return RelTPOFF64
 	default:
 		return 0
 	}
@@ -799,13 +778,15 @@ func classifyRelocX86_64(rela ElfReloc) RelocType {
 // for the TLS symbol, as well as a best-effort string for the symbol's name.
 // It continues until the visitor returns false.
 func (f *File) VisitTLSRelocations(visitor func(ElfReloc, string) bool) error {
-	return f.VisitRelocations(visitor, RelTLSDESC)
+	return f.VisitRelocations(func(r ElfReloc, name string, _ RelocType) bool {
+		return visitor(r, name)
+	}, RelTLSDESC)
 }
 
 // VisitRelocations visits all relocations whose type matches the relTypes
-// bitmask and provides the relocation and symbol name to the visitor. The
-// visitor can return false to stop iteration.
-func (f *File) VisitRelocations(visitor func(ElfReloc, string) bool,
+// bitmask and provides the relocation, symbol name and matched RelocType to the
+// visitor. The visitor can return false to stop iteration.
+func (f *File) VisitRelocations(visitor func(ElfReloc, string, RelocType) bool,
 	relTypes RelocType) error {
 	var classify func(ElfReloc) RelocType
 	switch f.Machine {
@@ -816,9 +797,6 @@ func (f *File) VisitRelocations(visitor func(ElfReloc, string) bool,
 	default:
 		return nil
 	}
-	filterFunc := func(rela ElfReloc) bool {
-		return classify(rela)&relTypes != 0
-	}
 	var err error
 	if err = f.LoadSections(); err != nil {
 		return err
@@ -828,7 +806,7 @@ func (f *File) VisitRelocations(visitor func(ElfReloc, string) bool,
 		section := &f.Sections[i]
 		// NOTE: SHT_REL is not relevant for the archs that we care about
 		if section.Type == elf.SHT_RELA {
-			cont, err := f.visitRelocationsForSection(visitor, filterFunc, section)
+			cont, err := f.visitRelocationsForSection(visitor, classify, relTypes, section)
 			if err != nil {
 				return err
 			}
@@ -841,8 +819,8 @@ func (f *File) VisitRelocations(visitor func(ElfReloc, string) bool,
 	return nil
 }
 
-func (f *File) visitRelocationsForSection(visitor func(ElfReloc, string) bool,
-	checkRelocation func(ElfReloc) bool,
+func (f *File) visitRelocationsForSection(visitor func(ElfReloc, string, RelocType) bool,
+	classify func(ElfReloc) RelocType, relTypes RelocType,
 	relaSection *Section,
 ) (bool, error) {
 	if relaSection.Link >= uint32(len(f.Sections)) {
@@ -885,7 +863,8 @@ func (f *File) visitRelocationsForSection(visitor func(ElfReloc, string) bool,
 			}
 			break
 		}
-		if !checkRelocation(*rela) {
+		relType := classify(*rela)
+		if relType&relTypes == 0 {
 			continue
 		}
 		symNo := int64(rela.Info >> 32)
@@ -899,7 +878,7 @@ func (f *File) visitRelocationsForSection(visitor func(ElfReloc, string) bool,
 			return false, errors.New("failed to get relocation name string")
 		}
 
-		if !visitor(*rela, symStr) {
+		if !visitor(*rela, symStr, relType) {
 			return false, nil
 		}
 	}
@@ -930,7 +909,7 @@ func (f *File) GetDebugLink() (linkName string, crc int32, err error) {
 func (f *File) OpenDebugLink(elfFilePath string, elfOpener ELFOpener) (
 	debugELF *File, debugFile string,
 ) {
-	f.debuglinkChecked = true
+	f.debuglinkPath = ""
 	// Get the debug link
 	linkName, linkCRC32, err := f.GetDebugLink()
 	if err != nil {
@@ -1115,6 +1094,8 @@ func (f *File) readAndMatchSymbol(n uint32, name libpf.SymbolName) (libpf.Symbol
 		Name:    name,
 		Address: libpf.SymbolValue(sym.Value),
 		Size:    sym.Size,
+		Info:    sym.Info,
+		Shndx:   sym.Shndx,
 	}, true
 }
 
@@ -1330,6 +1311,8 @@ func (f *File) visitSymbolTable(name string, visitor func(libpf.Symbol) bool) er
 				Name:    libpf.SymbolName(name),
 				Address: libpf.SymbolValue(sym.Value),
 				Size:    sym.Size,
+				Info:    sym.Info,
+				Shndx:   sym.Shndx,
 			}) {
 				break
 			}
@@ -1342,7 +1325,7 @@ func (f *File) visitSymbolTable(name string, visitor func(libpf.Symbol) bool) er
 // VisitSymbols iterates through the symbol table until visitor returns false.
 func (f *File) VisitSymbols(visitor func(libpf.Symbol) bool) error {
 	if err := f.visitSymbolTable(".symtab", visitor); err != nil {
-		return fmt.Errorf("Failed to visit .symtab: %w", err)
+		return fmt.Errorf("failed to visit .symtab: %w", err)
 	}
 	return nil
 }
@@ -1350,7 +1333,7 @@ func (f *File) VisitSymbols(visitor func(libpf.Symbol) bool) error {
 // VisitDynamicSymbols iterates through the dynamic symbol table until visitor returns false.
 func (f *File) VisitDynamicSymbols(visitor func(libpf.Symbol) bool) error {
 	if err := f.visitSymbolTable(".dynsym", visitor); err != nil {
-		return fmt.Errorf("Failed to visit .dynsym: %w", err)
+		return fmt.Errorf("failed to visit .dynsym: %w", err)
 	}
 	return nil
 }
@@ -1379,7 +1362,135 @@ func (f *File) DynString(tag elf.DynTag) ([]string, error) {
 	return dynStrings, nil
 }
 
+// IsExecutable returns true if this ELF is an executable program (and not a shared library).
+func (f *File) IsExecutable() bool {
+	return f.isExecutable
+}
+
 // IsGolang determines if this ELF is a Golang executable
 func (f *File) IsGolang() bool {
+	if _, err := f.GetGoBuildID(); err == nil {
+		return true
+	}
 	return f.Section(".go.buildinfo") != nil || f.Section(".gopclntab") != nil
+}
+
+func decodeString(rdr *pfbufio.Reader) (string, error) {
+	size, err := binary.ReadUvarint(rdr)
+	if err != nil {
+		return "", err
+	}
+	return rdr.ReadStringN(int(size))
+}
+
+func readString(r io.ReaderAt, addr uint64) (string, error) {
+	var addrAndSize [16]byte
+
+	if _, err := r.ReadAt(addrAndSize[:], int64(addr)); err != nil {
+		return "", err
+	}
+	addr = binary.LittleEndian.Uint64(addrAndSize[0:])
+	size := binary.LittleEndian.Uint64(addrAndSize[8:])
+	if size >= maxBytesSmallSection {
+		return "", errNoGoBuildinfo
+	}
+
+	val := make([]byte, size)
+	_, err := r.ReadAt(val, int64(addr))
+	return pfunsafe.ToString(val), err
+}
+
+func (f *File) parseGoBuildinfo() error {
+	if f.golangVersion != strNotProcessed {
+		return nil
+	}
+	f.golangVersion = libpf.NullString
+
+	var off, sz int64
+	if s := f.Section(".go.buildinfo"); s != nil {
+		off = int64(s.Offset)
+		sz = int64(s.Size)
+	} else {
+		if !f.IsGolang() {
+			return nil
+		}
+		for _, p := range f.Progs {
+			if p.Type == elf.PT_LOAD && p.Flags&(elf.PF_X|elf.PF_W) == elf.PF_W {
+				off = int64(p.Off)
+				sz = int64(p.Filesz)
+				break
+			}
+		}
+	}
+	if sz == 0 {
+		return errNoGoBuildinfo
+	}
+
+	rdr := pfbufio.NewReader(f.Underlying(), off, sz)
+	defer pfbufio.PutReader(rdr)
+
+	for {
+		offset, err := rdr.SearchSlice(goBuildInfoMagic)
+		if err != nil {
+			return errNoGoBuildinfo
+		}
+		if offset%16 == 0 {
+			break
+		}
+	}
+
+	// type buildInfoHeader struct {
+	// 	magic       [14]byte
+	// 	ptrSize     uint8 // used if flagsVersionPtr
+	// 	flags       uint8
+	// 	versPtr     targetUintptr // used if flagsVersionPtr
+	// 	modPtr      targetUintptr // used if flagsVersionPtr
+	// }
+	ptrSize, err := rdr.ReadByte()
+	if err != nil {
+		return errNoGoBuildinfo
+	}
+	flags, err := rdr.ReadByte()
+	if err != nil {
+		return errNoGoBuildinfo
+	}
+	if flags&2 != 0 {
+		// Go 1.18+ inline strings
+		_, err = rdr.Discard(16)
+		if err != nil {
+			return errNoGoBuildinfo
+		}
+		ver, err := decodeString(rdr)
+		if err != nil {
+			return err
+		}
+		f.golangVersion = libpf.Intern(ver)
+	} else {
+		// Go <1.18 with string pointers
+		ptrs, err := rdr.ReadN(16)
+		if err != nil {
+			return errNoGoBuildinfo
+		}
+		// Only 64-bit little-endian is supported
+		if ptrSize != 8 || flags&1 != 0 {
+			return fmt.Errorf("pointers with size %d, flags %x not supported",
+				ptrSize, flags)
+		}
+		verPtr := binary.LittleEndian.Uint64(ptrs[0:])
+
+		ver, err := readString(f, verPtr)
+		if err != nil {
+			return err
+		}
+		f.golangVersion = libpf.Intern(ver)
+	}
+	return nil
+}
+
+// GoVersion returns the Go version if present and empty string otherwise.
+func (f *File) GoVersion() string {
+	if err := f.parseGoBuildinfo(); err != nil {
+		log.Debugf("Failed to read go buildinfo: %v", err)
+	}
+	return f.golangVersion.String()
 }

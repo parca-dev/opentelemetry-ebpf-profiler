@@ -18,32 +18,34 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter/php"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/python"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/ruby"
+	"go.opentelemetry.io/ebpf-profiler/interpreter/threadcontext"
 )
 
 // Config holds configuration for all interpreters.
 // By default all interpreters are enabled.
 type Config struct {
-	Python  python.Config  `mapstructure:"python" json:"python,omitempty"`
-	Perl    perl.Config    `mapstructure:"perl" json:"perl,omitempty"`
-	PHP     php.Config     `mapstructure:"php" json:"php,omitempty"`
-	Hotspot hotspot.Config `mapstructure:"hotspot" json:"hotspot,omitempty"`
-	Ruby    ruby.Config    `mapstructure:"ruby" json:"ruby,omitempty"`
-	V8      nodev8.Config  `mapstructure:"v8" json:"v8,omitempty"`
-	Dotnet  dotnet.Config  `mapstructure:"dotnet" json:"dotnet,omitempty"`
+	Python  python.Config  `mapstructure:"python" json:"python"`
+	Perl    perl.Config    `mapstructure:"perl" json:"perl"`
+	PHP     php.Config     `mapstructure:"php" json:"php"`
+	Hotspot hotspot.Config `mapstructure:"hotspot" json:"hotspot"`
+	Ruby    ruby.Config    `mapstructure:"ruby" json:"ruby"`
+	V8      nodev8.Config  `mapstructure:"v8" json:"v8"`
+	Dotnet  dotnet.Config  `mapstructure:"dotnet" json:"dotnet"`
 	// Go carries both the runtime-offset and the custom-label knobs since
 	// upstream #1564 folded the former `labels` section into it.
-	Go   golang.Config `mapstructure:"go" json:"go,omitempty"`
-	BEAM beam.Config   `mapstructure:"beam" json:"beam,omitempty"`
+	Go     golang.Config `mapstructure:"go" json:"go"`
+	BEAM   beam.Config   `mapstructure:"beam" json:"beam"`
+	LuaJIT luajit.Config `mapstructure:"luajit" json:"luajit"`
 	// parca-only extensions
-	LuaJIT luajit.Config `mapstructure:"luajit" json:"luajit,omitempty"`
-	CUDA   gpu.Config    `mapstructure:"cuda" json:"cuda,omitempty"`
+	CUDA gpu.Config `mapstructure:"cuda" json:"cuda"`
 	// CustomLabels gates the native (non-Go) custom-labels pseudo-interpreter.
 	// It has its own toggle because it has nothing to do with Go: before
 	// upstream #1564 the fork gated it on the standalone `labels` section, and
 	// that section is now Go.Labels, whose Config documents that go.Disabled
 	// wins over the sub-toggles. Reusing it would switch native custom labels
 	// off for every process whenever the Go interpreter is disabled.
-	CustomLabels interpreter.BaseConfig `mapstructure:"custom_labels" json:"custom_labels,omitempty"`
+	CustomLabels  interpreter.BaseConfig `mapstructure:"custom_labels" json:"custom_labels"`
+	ThreadContext threadcontext.Config   `mapstructure:"thread_context" json:"thread_context"`
 }
 
 // AllInterpreters returns a Config with all interpreters enabled.
@@ -63,10 +65,51 @@ func NoInterpreters() Config {
 		Go:      golang.Config{BaseConfig: disabled},
 		BEAM:    beam.Config{BaseConfig: disabled},
 		// parca-only extensions
-		LuaJIT:       luajit.Config{BaseConfig: disabled},
-		CUDA:         gpu.Config{BaseConfig: disabled},
-		CustomLabels: disabled,
+		LuaJIT:        luajit.Config{BaseConfig: disabled},
+		CUDA:          gpu.Config{BaseConfig: disabled},
+		CustomLabels:  disabled,
+		ThreadContext: threadcontext.Config{BaseConfig: disabled},
 	}
+}
+
+// Loaders returns active loaders for all enabled interpreters.
+func (cfg *Config) Loaders() []interpreter.Loader {
+	loaders := make([]interpreter.Loader, 0, 12)
+	if !cfg.Perl.IsDisabled() {
+		loaders = append(loaders, perl.GetLoader(cfg.Perl))
+	}
+	if !cfg.Python.IsDisabled() {
+		loaders = append(loaders, python.GetLoader(cfg.Python))
+	}
+	if !cfg.PHP.IsDisabled() {
+		loaders = append(loaders, php.GetLoader(cfg.PHP))
+		loaders = append(loaders, php.GetOpcacheLoader(cfg.PHP))
+	}
+	if !cfg.Hotspot.IsDisabled() {
+		loaders = append(loaders, hotspot.GetLoader(cfg.Hotspot))
+	}
+	if !cfg.Ruby.IsDisabled() {
+		loaders = append(loaders, ruby.GetLoader(cfg.Ruby))
+	}
+	if !cfg.V8.IsDisabled() {
+		loaders = append(loaders, nodev8.GetLoader(cfg.V8))
+	}
+	if !cfg.Dotnet.IsDisabled() {
+		loaders = append(loaders, dotnet.GetLoader(cfg.Dotnet))
+	}
+	if !cfg.BEAM.IsDisabled() {
+		loaders = append(loaders, beam.GetLoader(cfg.BEAM))
+	}
+	if !cfg.LuaJIT.IsDisabled() {
+		loaders = append(loaders, luajit.GetLoader(cfg.LuaJIT))
+	}
+	if !cfg.Go.IsDisabled() {
+		loaders = append(loaders, golang.GetLoader(cfg.Go))
+	}
+	if !cfg.ThreadContext.IsDisabled() {
+		loaders = append(loaders, threadcontext.GetLoader(cfg.ThreadContext))
+	}
+	return loaders
 }
 
 // IsMapEnabled returns true if for the given mapName the respective
@@ -91,7 +134,8 @@ func (cfg *Config) IsMapEnabled(mapName string) bool {
 		return !cfg.LuaJIT.IsDisabled()
 	case golang.BPFMapName, apmint.BPFMapName, nodev8.BPFMapName:
 		// go_procs is read from collect_trace (preloaded into the PerCPURecord)
-		// and apm_int_procs from unwind_stop, so both must always be loaded.
+		// and apm_int_procs from unwind_stop, so both must always be loaded
+		// regardless of interpreter configuration.
 		// v8_procs is a parca fork addition to this list — the reference lives
 		// in a parca-side eBPF change to unwind_stop and would otherwise break
 		// the verifier when v8 is disabled.

@@ -61,10 +61,7 @@ func buildGpuPCTrace(cpuTrace *SymbolizedCudaTrace, cubinMapping libpf.FrameMapp
 	// Count CPU frames (exclude the original CUDAKernelFrame).
 	cpuFrameCount := 0
 	if cpuTrace != nil {
-		cpuFrameCount = len(cpuTrace.Trace.Frames) - 1
-		if cpuFrameCount < 0 {
-			cpuFrameCount = 0
-		}
+		cpuFrameCount = max(len(cpuTrace.Trace.Frames)-1, 0)
 	}
 
 	trace := &libpf.Trace{
@@ -127,7 +124,6 @@ func buildGpuPCMeta(cpuTrace *SymbolizedCudaTrace, pid uint32,
 	if cpuTrace != nil && cpuTrace.Meta != nil {
 		meta.Timestamp = cpuTrace.Meta.Timestamp
 		meta.Comm = cpuTrace.Meta.Comm
-		meta.ProcessName = cpuTrace.Meta.ProcessName
 		meta.ExecutablePath = cpuTrace.Meta.ExecutablePath
 		meta.ContainerID = cpuTrace.Meta.ContainerID
 		meta.TID = cpuTrace.Meta.TID

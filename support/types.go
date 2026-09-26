@@ -64,7 +64,7 @@ const (
 const UnwindInfoMaxEntries = 0x4000
 
 const (
-	MetricIDBeginCumulative = 0x7d
+	MetricIDBeginCumulative = 0x87
 )
 
 const (
@@ -120,6 +120,15 @@ type PIDPageMappingInfo struct {
 	File_id                 uint64
 	Bias_and_unwind_program uint64
 }
+type PIDNamespaceLayout struct {
+	Task_thread_pid_offset    uint32
+	Pid_level_offset          uint32
+	Pid_numbers_offset        uint32
+	Upid_size                 uint32
+	Upid_nr_offset            uint32
+	Upid_ns_offset            uint32
+	Pid_namespace_inum_offset uint32
+}
 type StackDelta struct {
 	AddrLow    uint16
 	UnwindInfo uint16
@@ -140,13 +149,23 @@ type SystemAnalysis struct {
 	Code    [128]uint8
 }
 type TSDInfo struct {
-	Offset     int16
-	Multiplier uint8
-	Indirect   uint8
+	Offset       int16
+	Multiplier   uint8
+	Indirect     uint8
+	KeyLimit     uint16
+	BlockEntries uint8
+	DataOffset   uint8
 }
 type DTVInfo struct {
 	Offset     int16
 	Multiplier uint8
+	Pad_cgo_0  [1]byte
+}
+type TLSVarInfo struct {
+	Tls_offset int32
+	Dtv_pos    uint32
+	Dtv_offset int16
+	Valid      bool
 	Pad_cgo_0  [1]byte
 }
 type Trace struct {
@@ -191,12 +210,17 @@ type DotnetProcInfo struct {
 }
 type GoRuntimeOffsets struct {
 	M_offset               uint32
+	M_gsignal              uint32
 	Curg                   uint32
 	Labels                 uint32
 	Hmap_count             uint32
 	Hmap_log2_bucket_count uint32
 	Hmap_buckets           uint32
 	Tls_offset             int32
+	Sched_sp_off           uint32
+	Sched_pc_off           uint32
+	Sched_lr_off           uint32
+	Sched_bp_off           uint32
 }
 type HotspotProcInfo struct {
 	Codecache_start        uint64
@@ -251,7 +275,6 @@ type PerlProcInfo struct {
 	Xcv_flags                uint8
 	Xcv_gv                   uint8
 	Gp_egv                   uint8
-	Pad_cgo_0                [4]byte
 }
 type PyProcInfo struct {
 	AutoTLSKeyAddr                 uint64
@@ -273,7 +296,7 @@ type PyProcInfo struct {
 	PyCodeObject_sizeof            uint8
 	Lasti_is_codeunit              uint8
 	Frame_is_cframe                uint8
-	Pad_cgo_0                      [2]byte
+	Pad_cgo_0                      [6]byte
 }
 type RubyProcInfo struct {
 	Version                      uint32
@@ -283,6 +306,8 @@ type RubyProcInfo struct {
 	Tls_module_id                uint32
 	Current_ctx_ptr              uint64
 	Has_objspace                 bool
+	Jit_start                    uint64
+	Jit_end                      uint64
 	Vm_stack                     uint8
 	Vm_stack_size                uint8
 	Cfp                          uint8
@@ -300,6 +325,9 @@ type RubyProcInfo struct {
 	Size_of_value                uint8
 	Running_ec                   uint16
 	Pad_cgo_0                    [4]byte
+}
+type ThreadContextProcInfo struct {
+	Tls TLSVarInfo
 }
 type V8ProcInfo struct {
 	Version                      uint32
@@ -345,11 +373,12 @@ const (
 	Sizeof_StackDelta = 0x4
 	Sizeof_Trace      = 0x6378
 
-	sizeof_ApmIntProcInfo   = 0x8
-	sizeof_DotnetProcInfo   = 0x4
-	sizeof_PHPProcInfo      = 0x18
-	sizeof_RubyProcInfo     = 0x48
-	sizeof_GoRuntimeOffsets = 0x1c
+	sizeof_ApmIntProcInfo        = 0x8
+	sizeof_DotnetProcInfo        = 0x4
+	sizeof_PHPProcInfo           = 0x18
+	sizeof_RubyProcInfo          = 0x60
+	sizeof_ThreadContextProcInfo = 0xc
+	sizeof_GoRuntimeOffsets      = 0x30
 )
 
 const (
@@ -367,18 +396,18 @@ const (
 	UnwindRegX86RDI  uint8 = 0x7
 	UnwindRegX86R8   uint8 = 0x8
 
-	UnwindFlagCommand    uint8 = 0x1
-	UnwindFlagFrame      uint8 = 0x2
-	UnwindFlagLeafOnly   uint8 = 0x4
-	UnwindFlagDerefCfa   uint8 = 0x8
-	UnwindFlagRegisterRA uint8 = 0x10
+	UnwindFlagCommand  uint8 = 0x1
+	UnwindFlagFrame    uint8 = 0x2
+	UnwindFlagLeafOnly uint8 = 0x4
+	UnwindFlagDerefCfa uint8 = 0x8
 
 	UnwindCommandInvalid      int32 = 0x0
 	UnwindCommandStop         int32 = 0x1
 	UnwindCommandPLT          int32 = 0x2
 	UnwindCommandSignal       int32 = 0x3
 	UnwindCommandFramePointer int32 = 0x4
-	UnwindCommandGoMorestack  int32 = 0x5
+	UnwindCommandGoAsmcgocall int32 = 0x4005
+	UnwindCommandGoMorestack  int32 = 0x4006
 
 	UnwindDerefMask       int32 = 0x7
 	UnwindDerefMultiplier int32 = 0x8
@@ -415,6 +444,7 @@ const (
 	RubyFrameTypeCmeCfunc = 0x2
 	RubyFrameTypeIseq     = 0x3
 	RubyFrameTypeGc       = 0x4
+	RubyFrameTypeJit      = 0x5
 
 	CustomLabelMaxKeyLen = 0x19
 	CustomLabelMaxValLen = 0x35
@@ -546,5 +576,15 @@ var MetricsTranslation = []metrics.MetricID{
 	0x79: metrics.IDUnwindNativeErrNoVMA,
 	0x7a: metrics.IDUnwindNativeErrUnsupportedAnonymousMapping,
 	0x7b: metrics.IDUnwindNativeErrNonExecutableVMA,
+	0x7d: metrics.IDSamplesSkippedProcessTooNew,
+	0x7e: metrics.IDNumSyncsFromPrctl,
+	0x7f: metrics.IDNumPriorityEventDeferred,
+	0x80: metrics.IDUnwindGoAsmcgocallAttempts,
+	0x81: metrics.IDUnwindGoAsmcgocallSuccess,
+	0x82: metrics.IDUnwindGoAsmcgocallUnwindFailure,
+	0x83: metrics.IDUnwindThreadContextErrReadTlsPtr,
+	0x84: metrics.IDUnwindThreadContextErrReadThreadCtxBuf,
+	0x85: metrics.IDUnwindThreadContextReadSuccesses,
+	0x86: metrics.IDUnwindThreadContextAttrsTruncated,
 	0x7c: metrics.IDCUPTIEventsRingbufFull,
 }

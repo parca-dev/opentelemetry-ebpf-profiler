@@ -27,7 +27,7 @@ func init() {
 
 // logf logs debugging as higher level so they stick out w/o
 // enabling debug firehose if LUA_DEBUG env var is set.
-func logf(format string, args ...interface{}) {
+func logf(format string, args ...any) {
 	if development {
 		log.Infof(format, args...)
 	} else {

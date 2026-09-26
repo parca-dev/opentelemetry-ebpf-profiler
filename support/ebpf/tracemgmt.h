@@ -7,8 +7,8 @@
 #include "errors.h"
 #include "extmaps.h"
 #include "frametypes.h"
-#include "go_support.h"
 #include "types.h"
+#include "util.h"
 
 #if defined(TESTING_COREDUMP)
 
@@ -39,8 +39,17 @@
 // inverse_pac_mask is declared in native_stack_trace.ebpf.c
 extern u64 inverse_pac_mask;
 
+// filter_min_process_age_ns is declared in native_stack_trace.ebpf.c
+extern u64 filter_min_process_age_ns;
+
+// task_group_leader_offset is declared in native_stack_trace.ebpf.c
+extern u32 task_group_leader_offset;
+
 // task_stack_offset is declared in native_stack_trace.ebpf.c
 extern u32 task_stack_offset;
+
+// task_start_time_offset is declared in native_stack_trace.ebpf.c
+extern u32 task_start_time_offset;
 
 // stack_ptregs_offset is declared in native_stack_trace.ebpf.c
 extern u32 stack_ptregs_offset;
@@ -56,6 +65,159 @@ extern u32 vma_vm_flags_offset;
 
 // origin_id_sampling is declared in native_stack_trace.ebpf.c
 extern u16 origin_id_sampling;
+
+// pid_ns_translation_mode is declared in native_stack_trace.ebpf.c
+extern u8 pid_ns_translation_mode;
+
+// target_pid_ns_inode is declared in native_stack_trace.ebpf.c
+extern u64 target_pid_ns_inode;
+
+// target_pid_ns_dev is declared in native_stack_trace.ebpf.c
+extern u64 target_pid_ns_dev;
+
+// target_pid_ns_level is declared in native_stack_trace.ebpf.c
+extern u32 target_pid_ns_level;
+
+// pid_namespace_layout is declared in native_stack_trace.ebpf.c
+extern PIDNamespaceLayout pid_namespace_layout;
+
+// Mirrors the kernel's struct bpf_pidns_info for use with bpf_get_ns_current_pid_tgid().
+// pid:  thread PID as seen within the target PID namespace.
+// tgid: thread group ID (= process PID in userspace) within the target PID namespace.
+struct bpf_pidns_info {
+  u32 pid;
+  u32 tgid;
+};
+
+// Resolve the PID of task as visible in the configured target namespace.
+// Using the target PID namespace level (L) determined at startup:
+// Tasks visible in the target namespace have their PID at numbers[L] (see kernel pid_nr_ns).
+static inline EBPF_INLINE bool get_pid_in_target_namespace(u64 task, u32 *result)
+{
+  u64 pid_address = 0;
+  if (
+    bpf_probe_read_kernel(
+      &pid_address,
+      sizeof(pid_address),
+      (void *)(task + pid_namespace_layout.task_thread_pid_offset)) ||
+    pid_address == 0) {
+    return false;
+  }
+
+  u32 active_level = 0;
+  if (bpf_probe_read_kernel(
+        &active_level,
+        sizeof(active_level),
+        (void *)(pid_address + pid_namespace_layout.pid_level_offset))) {
+    return false;
+  }
+
+  if (active_level < target_pid_ns_level || target_pid_ns_level > 32) {
+    return false;
+  }
+
+  u64 upid_address = pid_address + pid_namespace_layout.pid_numbers_offset +
+                     ((u64)target_pid_ns_level * pid_namespace_layout.upid_size);
+
+  __attribute__((aligned(8))) u8 upid_buf[16];
+  if (bpf_probe_read_kernel(upid_buf, sizeof(upid_buf), (void *)upid_address)) {
+    return false;
+  }
+
+  if (
+    pid_namespace_layout.upid_ns_offset + sizeof(u64) > sizeof(upid_buf) ||
+    pid_namespace_layout.upid_nr_offset + sizeof(u32) > sizeof(upid_buf)) {
+    return false;
+  }
+
+  u64 namespace_address = *(u64 *)(upid_buf + pid_namespace_layout.upid_ns_offset);
+  if (namespace_address == 0) {
+    return false;
+  }
+
+  u32 namespace_inode = 0;
+  if (
+    bpf_probe_read_kernel(
+      &namespace_inode,
+      sizeof(namespace_inode),
+      (void *)(namespace_address + pid_namespace_layout.pid_namespace_inum_offset)) ||
+    namespace_inode != (u32)target_pid_ns_inode) {
+    return false;
+  }
+
+  u32 translated_pid = *(u32 *)(upid_buf + pid_namespace_layout.upid_nr_offset);
+  if (translated_pid == 0) {
+    return false;
+  }
+
+  *result = translated_pid;
+  return true;
+}
+
+// get_pid_tgid_leader resolves the current task's PID and TGID, translating them into the
+// configured target PID namespace if pid_ns_translation_mode is set. If thread_group is
+// non-NULL, it receives the thread-group leader task pointer if resolved during descendant
+// translation (otherwise 0). Returns false if the task could not be resolved (e.g. it is not
+// part of the target namespace), in which case the caller should skip the current event.
+static inline EBPF_INLINE bool get_pid_tgid_leader(u32 *pid, u32 *tid, u64 *thread_group)
+{
+  if (thread_group) {
+    *thread_group = 0;
+  }
+
+  if (pid_ns_translation_mode != PID_NS_TRANSLATION_MODE_NONE) {
+    struct bpf_pidns_info ns_info = {0};
+    long ret                      = bpf_get_ns_current_pid_tgid(
+      target_pid_ns_dev, target_pid_ns_inode, &ns_info, sizeof(ns_info));
+    if (ret == 0) {
+      // ns_info.tgid is the thread group ID (= process PID in userspace) in the namespace.
+      // ns_info.pid is the thread PID in the namespace.
+      // Match the convention of the non-namespace path where pid holds the TGID.
+      *pid = ns_info.tgid;
+      *tid = ns_info.pid;
+      return true;
+    }
+
+    if (pid_ns_translation_mode != PID_NS_TRANSLATION_MODE_RECURSIVE) {
+      return false;
+    }
+
+    u64 task         = bpf_get_current_task();
+    u64 group_leader = 0;
+    if (
+      task == 0 ||
+      bpf_probe_read_kernel(
+        &group_leader, sizeof(group_leader), (void *)(task + task_group_leader_offset)) ||
+      group_leader == 0) {
+      return false;
+    }
+
+    // A helper miss can mean either a descendant namespace or an unrelated
+    // namespace. Both translations validate the target namespace inode, so
+    // untranslated host PIDs are never returned from this path.
+    if (
+      !get_pid_in_target_namespace(group_leader, pid) || !get_pid_in_target_namespace(task, tid)) {
+      return false;
+    }
+
+    if (thread_group) {
+      *thread_group = group_leader;
+    }
+    return true;
+  }
+
+  // bpf_get_current_pid_tgid returns (tgid << 32 | pid).
+  u64 id = bpf_get_current_pid_tgid();
+  *pid   = id >> 32;
+  *tid   = id & 0xFFFFFFFF;
+  return true;
+}
+
+// get_pid_tgid resolves the current task's PID and TGID.
+static inline EBPF_INLINE bool get_pid_tgid(u32 *pid, u32 *tid)
+{
+  return get_pid_tgid_leader(pid, tid, NULL);
+}
 
 // Strips the PAC tag from a pointer.
 //
@@ -73,6 +235,44 @@ static inline EBPF_INLINE u64 normalize_pac_ptr(u64 ptr)
 #else
   return ptr;
 #endif
+}
+
+// NB: upstream also defines increment_metric here. parca keeps it in util.h,
+// included above, so taking upstream's copy of this hunk would define it twice.
+
+// process_is_too_new returns true when a trace should be skipped because a process is too new.
+// If group_leader is non-zero, it reuses the pointer instead of reading it from current task.
+static inline EBPF_INLINE bool process_is_too_new(u64 ts, u64 group_leader)
+{
+  if (!filter_min_process_age_ns) {
+    return false;
+  }
+
+  if (group_leader == 0) {
+    u64 task             = bpf_get_current_task();
+    u64 group_leader_ptr = task + task_group_leader_offset;
+    // task_struct::group_leader is a pointer to the thread-group leader task, whose PID
+    // is the PID from userspace's perspective. Follow it so process age filtering uses
+    // the initial thread's start_time instead of the current thread's start_time.
+    if (bpf_probe_read_kernel(&group_leader, sizeof(group_leader), (void *)group_leader_ptr)) {
+      DEBUG_PRINT("Failed to read group_leader");
+      return false;
+    }
+  }
+
+  u64 start_time_ptr = group_leader + task_start_time_offset;
+  u64 start_time;
+  if (bpf_probe_read_kernel(&start_time, sizeof(start_time), (void *)start_time_ptr)) {
+    DEBUG_PRINT("Failed to read start_time");
+    return false;
+  }
+
+  if (ts >= start_time && ts - start_time < filter_min_process_age_ns) {
+    increment_metric(metricID_SamplesSkippedProcessTooNew);
+    return true;
+  }
+
+  return false;
 }
 
 // Send immediate notifications for event triggers to Go.
@@ -140,13 +340,19 @@ static inline EBPF_INLINE bool pid_uses_anonymous_mappings(PIDPageMappingInfo *i
 }
 
 // Reset the ratelimit cache
-#define RATELIMIT_ACTION_RESET   0
+#define RATELIMIT_ACTION_RESET    0
 // Use default timer
-#define RATELIMIT_ACTION_DEFAULT 1
+#define RATELIMIT_ACTION_DEFAULT  1
 // Set PID to fast timer mode
-#define RATELIMIT_ACTION_FAST    2
-// Skip rate limiting
-#define RATELIMIT_ACTION_NONE    3
+#define RATELIMIT_ACTION_FAST     2
+// Deliver once per activity burst. Once a priority event has been delivered, further
+// events, including subsequent priority events, fall back to the normal window until
+// the PID goes quiet again, so a process cannot defeat rate limiting by spamming
+// priority events.
+#define RATELIMIT_ACTION_PRIORITY 3
+// Skip rate limiting. parca-only; renumbered past upstream's PRIORITY, which also
+// claimed 3.
+#define RATELIMIT_ACTION_NONE     4
 
 // pid_event_ratelimit determines if the PID event should be inhibited or not
 // based on rate limiting rules.
@@ -159,10 +365,12 @@ static inline EBPF_INLINE bool pid_event_ratelimit(u32 pid, int ratelimit_action
   const u8 default_max_attempts = 8; // 25 seconds
   const u8 fast_max_attempts    = 4; // 1.6 seconds
   const u8 fast_timer_flag      = 0x10;
+  const u8 priority_sent_flag   = 0x20;
   u64 *token_ptr                = bpf_map_lookup_elem(&reported_pids, &pid);
   u64 ts                        = bpf_ktime_get_ns();
   u8 attempt                    = 0;
   u8 fast_timer                 = (ratelimit_action == RATELIMIT_ACTION_FAST) ? fast_timer_flag : 0;
+  u8 priority_sent              = 0;
 
   if (ratelimit_action == RATELIMIT_ACTION_RESET || ratelimit_action == RATELIMIT_ACTION_NONE) {
     return false;
@@ -170,34 +378,49 @@ static inline EBPF_INLINE bool pid_event_ratelimit(u32 pid, int ratelimit_action
 
   if (token_ptr) {
     u64 token   = *token_ptr;
-    u64 diff_ts = ts - (token & ~0x1fULL);
+    u64 diff_ts = ts - (token & ~0x3fULL);
     attempt     = token & 0xf;
     fast_timer |= token & fast_timer_flag;
+    priority_sent       = token & priority_sent_flag;
     // Calculate the limit window size. 100ms << attempt.
     u64 limit_window_ts = (100 * 1000000ULL) << attempt;
 
+    // A priority event is delivered on the leading edge of an activity burst: it
+    // bypasses the minimum-interval inhibition below. Only the first priority event of
+    // a burst is treated this way.
+    bool priority_event = (ratelimit_action == RATELIMIT_ACTION_PRIORITY) && !priority_sent;
+
     if (diff_ts < limit_window_ts) {
       // Minimum event interval.
-      DEBUG_PRINT("PID %d event limited: too fast", pid);
-      return true;
-    }
-    if (diff_ts < limit_window_ts + (5000 * 1000000ULL)) {
+      if (!priority_event) {
+        DEBUG_PRINT("PID %d event limited: too fast", pid);
+        return true;
+      }
+    } else if (diff_ts < limit_window_ts + (5000 * 1000000ULL)) {
       // PID event within 5 seconds, increase limit window size if possible
       if (attempt < (fast_timer ? fast_max_attempts : default_max_attempts)) {
         attempt++;
       }
     } else {
-      // Silence for at least 5 seconds. Reset back to zero.
-      attempt = 0;
+      // Silence for at least 5 seconds. Reset back to zero and re-arm the priority
+      // slot so the next activity burst gets a fresh delivery.
+      attempt       = 0;
+      priority_sent = 0;
     }
   }
 
+  // A delivered priority event marks the burst so the next one is throttled.
+  if (ratelimit_action == RATELIMIT_ACTION_PRIORITY) {
+    priority_sent = priority_sent_flag;
+  }
+
   // Create new token:
-  // 59 bits - the high bits of timestamp of last event
+  // 58 bits - the high bits of timestamp of last event
+  //  1 bit  - set if a priority event has been delivered this activity burst
   //  1 bit  - set if the PID should be in fast timer mode
   //  4 bits - number of bursts left at event time
   DEBUG_PRINT("PID %d event send, attempt=%d", pid, attempt);
-  u64 token = (ts & ~0x1fULL) | fast_timer | attempt;
+  u64 token = (ts & ~0x3fULL) | priority_sent | fast_timer | attempt;
 
   // Update the map entry. Technically this is not SMP safe, but doing
   // an atomic update would require EBPF atomics. At worst we send an
@@ -216,12 +439,18 @@ static inline EBPF_INLINE bool pid_event_ratelimit(u32 pid, int ratelimit_action
 
 // report_pid informs userspace about a PID that needs to be processed.
 // See pid_event_ratelimit for ratelimit_action functional specifics.
-// Returns true if the PID was successfully reported to user space.
+// Returns true if userspace was notified, false if the event was dropped or (for
+// RATELIMIT_ACTION_PRIORITY) deferred.
 static inline EBPF_INLINE bool report_pid(void *ctx, u64 pid_tgid, int ratelimit_action)
 {
   u32 pid = pid_tgid >> 32;
 
-  if (pid_event_ratelimit(pid, ratelimit_action)) {
+  bool inhibited = pid_event_ratelimit(pid, ratelimit_action);
+
+  // Rate-limited priority events are deferred rather than dropped: still recorded in
+  // pid_events (coalescing) but not signalled, so the next periodic drain picks them up.
+  // No trigger means a process cannot drive resyncs by spamming priority events.
+  if (inhibited && ratelimit_action != RATELIMIT_ACTION_PRIORITY) {
     return false;
   }
 
@@ -235,6 +464,12 @@ static inline EBPF_INLINE bool report_pid(void *ctx, u64 pid_tgid, int ratelimit
   }
   if (ratelimit_action == RATELIMIT_ACTION_RESET) {
     bpf_map_delete_elem(&reported_pids, &pid);
+  }
+
+  if (inhibited) {
+    // Deferred priority event: recorded but not signalled.
+    increment_metric(metricID_NumPriorityEventDeferred);
+    return false;
   }
 
   // Notify userspace that there is a PID waiting to be processed.
@@ -282,12 +517,13 @@ static inline EBPF_INLINE PerCPURecord *get_pristine_per_cpu_record()
   record->luajitUnwindState.L_ptr           = 0;
   record->luajitUnwindState.cframe          = 0;
   record->luajitUnwindState.is_jit          = false;
+  record->rubyUnwindState.jit_detected      = false;
   record->unwindersDone                     = 0;
   record->tailCalls                         = 0;
   record->ratelimitAction                   = RATELIMIT_ACTION_DEFAULT;
   record->usesAnonymousMappings             = false;
   record->customLabelsState.go_m_ptr        = NULL;
-  record->goOffsets.m_offset                = 0;
+  record->goOffsets                         = (GoRuntimeOffsets){};
 
   Trace *trace             = &record->trace;
   trace->frame_data_len    = 0;
@@ -399,56 +635,6 @@ static inline EBPF_INLINE bool unwinder_unwind_frame_pointer(UnwindState *state)
   return unwinder_unwind_frame_pointer_regs(state, regs);
 }
 
-static inline EBPF_INLINE bool unwinder_unwind_go_morestack(PerCPURecord *record)
-{
-  // goOffsets is preloaded once per trace by collect_trace; m_offset == 0 means
-  // this PID has no go_procs entry, i.e. it is not a Go binary.
-  GoRuntimeOffsets *offs = &record->goOffsets;
-  if (offs->m_offset == 0) {
-    DEBUG_PRINT("morestack: failed to read go labels offsets");
-    return false;
-  }
-  void *mptr = get_go_m_ptr(offs, &record->state);
-  DEBUG_PRINT("morestack: curg offset: %d, mptr: %llx\n", offs->curg, (u64)mptr);
-
-  size_t curg_ptr_addr;
-  if (bpf_probe_read_user(&curg_ptr_addr, sizeof(void *), (void *)((u64)mptr + offs->curg))) {
-    DEBUG_PRINT("morestack: failed to read value for m_ptr->curg");
-    return false;
-  }
-
-  DEBUG_PRINT("morestack: curg is %lx\n", curg_ptr_addr);
-
-  if (curg_ptr_addr == 0) {
-    // Terminal case: this m has no attached user goroutine (e.g. the m parked
-    // in newstack -> goschedImpl after handing off the g). There's no saved
-    // register state to unwind to; signal end-of-stack by zeroing PC so the
-    // caller (get_next_unwinder_after_native_frame) emits ERR_NATIVE_ZERO_PC.
-    // Upstream's nanotime coredump tests (#1502) validate this shape.
-    record->state.pc = 0;
-    return true;
-  }
-
-  // Valid since go 1.25:
-  // https://github.com/golang/go/blob/7b60d06739/src/runtime/runtime2.go#L303-L322
-  // On previous versions, there was an extra "ret" value, so "bp" is one spot later.
-  // TODO - make this work on earlier versions.
-  unsigned long regs[6];
-  if (bpf_probe_read_user(regs, sizeof(regs), (void *)(curg_ptr_addr + 56 /* XXX */))) {
-    DEBUG_PRINT("morestack: failed to read regs");
-    return false;
-  }
-  record->state.sp = regs[0];
-  record->state.pc = regs[1];
-  record->state.fp = regs[5];
-  DEBUG_PRINT(
-    "morestack: success, sp is %llx, pc is %llx, fp is %llx",
-    record->state.sp,
-    record->state.pc,
-    record->state.fp);
-  return true;
-}
-
 static inline EBPF_INLINE u64 frame_header(u8 frame_type, u8 flags, u8 length, u64 data)
 {
   // frame header format (fixed size):
@@ -486,6 +672,20 @@ static inline EBPF_INLINE u64 *push_frame(
   trace->frame_data_len += frame_size;
   pos[0] = frame_header(frame_type, frame_flags, frame_size, frame_data);
   return &pos[1];
+}
+
+// Record a native frame
+static inline EBPF_INLINE ErrorCode
+push_native(UnwindState *state, Trace *trace, u64 file, u64 line, bool return_address)
+{
+  const u8 ra_flag = return_address ? FRAME_FLAG_RETURN_ADDRESS : 0;
+
+  u64 *data = push_frame(state, trace, FRAME_MARKER_NATIVE, ra_flag, line, 1);
+  if (!data) {
+    return ERR_STACK_LENGTH_EXCEEDED;
+  }
+  data[0] = file;
+  return ERR_OK;
 }
 
 // Push an interpreter specific error frame.
@@ -976,11 +1176,22 @@ get_usermode_regs(struct pt_regs *ctx, UnwindState *state, bool *has_usermode_re
 #endif // TESTING_COREDUMP
 
 static inline EBPF_INLINE int collect_trace(
-  struct pt_regs *ctx, u16 origin, u32 pid, u32 tid, u64 trace_timestamp, u64 value, u64 cuda_id)
+  struct pt_regs *ctx,
+  u16 origin,
+  u32 pid,
+  u32 tid,
+  u64 group_leader,
+  u64 trace_timestamp,
+  u64 value,
+  u64 cuda_id)
 {
   // Only continue processing the trace with a valid origin.
   if (origin == 0) {
     return -1;
+  }
+
+  if (process_is_too_new(trace_timestamp, group_leader)) {
+    return 0;
   }
 
   // The trace is reused on each call to this function so we have to reset the

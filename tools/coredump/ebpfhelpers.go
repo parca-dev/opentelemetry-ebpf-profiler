@@ -12,6 +12,7 @@ package main
 // this, definitions must be placed in preambles in other files, or in C source files.
 
 import (
+	"fmt"
 	"math/bits"
 	"unsafe"
 
@@ -133,11 +134,11 @@ func __bpf_map_lookup_elem(id C.u64, mapdef unsafe.Pointer, keyptr unsafe.Pointe
 		return stackDeltaInnerMap
 	case unsafe.Pointer(&C.unwind_info_array):
 		key := uintptr(*(*C.u32)(keyptr))
-		return unsafe.Pointer(uintptr(ctx.unwindInfoArray) + key*C.sizeof_UnwindInfo)
+		return unsafe.Add(ctx.unwindInfoArray, key*C.sizeof_UnwindInfo)
 	case stackDeltaInnerMap:
 		key := uintptr(*(*C.u32)(keyptr))
 		if deltas, ok := ctx.exeIDToStackDeltaMaps[ctx.stackDeltaFileID]; ok {
-			return unsafe.Pointer(uintptr(deltas) + key*C.sizeof_StackDelta)
+			return unsafe.Add(deltas, key*C.sizeof_StackDelta)
 		}
 	}
 	return unsafe.Pointer(uintptr(0))
@@ -146,7 +147,13 @@ func __bpf_map_lookup_elem(id C.u64, mapdef unsafe.Pointer, keyptr unsafe.Pointe
 //export __bpf_copy_frame
 func __bpf_copy_frame(id C.u64, trace *C.Trace) {
 	ctx := ebpfContextMap[id]
+	if trace.num_kernel_frames != 0 {
+		panic(fmt.Sprintf("coredump trace unexpectedly contains %d kernel frames",
+			uint16(trace.num_kernel_frames)))
+	}
 	sz := trace.frame_data_len
 	copy(pfunsafe.FromSlice(ctx.trace.FrameDataBuf[:sz]), pfunsafe.FromSlice(trace.frame_data[:sz]))
 	ctx.trace.FrameData = ctx.trace.FrameDataBuf[:sz]
+	ctx.trace.NumFrames = uint16(trace.num_frames)
+	ctx.trace.NumKernelFrames = 0
 }

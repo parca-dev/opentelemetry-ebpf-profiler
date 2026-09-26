@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
 	"go.opentelemetry.io/ebpf-profiler/testutils"
 	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
 )

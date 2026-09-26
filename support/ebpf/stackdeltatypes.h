@@ -1,6 +1,10 @@
 #ifndef OPTI_STACKDELTATYPES_H
 #define OPTI_STACKDELTATYPES_H
 
+// NB: parca-only header. Every UNWIND_* value below mirrors support/ebpf/types.h,
+// which is the source of truth — keep them in sync when merging upstream, or the
+// two definitions collide at compile time in python_tracer.ebpf.c.
+
 // Command without arguments, the argument is instead an UNWIND_COMMAND_* value
 #define UNWIND_OPCODE_COMMAND  0x00
 // Expression with base value being the Canonical Frame Address (CFA)
@@ -17,17 +21,24 @@
 #define UNWIND_OPCODEF_DEREF   0x80
 
 // Unsupported or no value for the register
-#define UNWIND_COMMAND_INVALID       0
+#define UNWIND_COMMAND_INVALID         0
 // For CFA: stop unwinding, this function is a stack root function
-#define UNWIND_COMMAND_STOP          1
+#define UNWIND_COMMAND_STOP            1
 // Unwind a PLT entry
-#define UNWIND_COMMAND_PLT           2
+#define UNWIND_COMMAND_PLT             2
 // Unwind a signal frame
-#define UNWIND_COMMAND_SIGNAL        3
+#define UNWIND_COMMAND_SIGNAL          3
 // Unwind using standard frame pointer
-#define UNWIND_COMMAND_FRAME_POINTER 4
-// Unwind past the Go runtime.morestack function
-#define UNWIND_COMMAND_GO_MORESTACK  5
+#define UNWIND_COMMAND_FRAME_POINTER   4
+// Commands with this bit set are dispatched by the Go-capable unwinder flavor
+// rather than the plain one; see unwind_one_frame in native_stack_trace.h.
+#define STACK_DELTA_NATIVE_COMMAND_BIT 0x4000
+// Cross the Go runtime.asmcgocall stack-switch boundary (arm64) by reading the
+// goroutine saved context from gobuf
+#define UNWIND_COMMAND_GO_ASMCGOCALL   (STACK_DELTA_NATIVE_COMMAND_BIT | 5)
+// Unwind past Go runtime.morestack by reading the caller registers it saved
+// into the goroutine's gobuf
+#define UNWIND_COMMAND_GO_MORESTACK    (STACK_DELTA_NATIVE_COMMAND_BIT | 6)
 
 // If opcode has UNWIND_OPCODEF_DEREF set, the lowest bits of 'param' are used
 // as second adder as post-deref operation. This contains the mask for that.

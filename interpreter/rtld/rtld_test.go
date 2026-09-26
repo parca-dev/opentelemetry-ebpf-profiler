@@ -25,6 +25,7 @@ import (
 )
 
 func test(t *testing.T) {
+	t.Helper()
 	if !testutils.IsRoot() {
 		t.Skip("This test requires root privileges")
 	}

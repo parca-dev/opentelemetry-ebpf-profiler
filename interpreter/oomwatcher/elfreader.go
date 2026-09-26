@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/parca-dev/oomprof/oomprof"
+
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 )
@@ -41,7 +42,10 @@ func (f *pfelfFile) GetBuildID() (string, error) {
 
 // GoVersion returns the Go version the binary was built with.
 func (f *pfelfFile) GoVersion() (string, error) {
-	return f.file.GoVersion()
+	// pfelf.File.GoVersion logs and returns the empty string on failure rather
+	// than reporting it; the oomprof interface this satisfies still wants an
+	// error, so report success and let the caller treat "" as unknown.
+	return f.file.GoVersion(), nil
 }
 
 // LookupSymbol looks up a symbol by name and returns its address.

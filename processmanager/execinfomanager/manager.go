@@ -7,32 +7,21 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"reflect"
-	"runtime"
 	"time"
 
 	lru "github.com/elastic/go-freelru"
+
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"go.opentelemetry.io/ebpf-profiler/util"
 
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/apmint"
-	"go.opentelemetry.io/ebpf-profiler/interpreter/beam"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/customlabels"
-	"go.opentelemetry.io/ebpf-profiler/interpreter/dotnet"
-	golang "go.opentelemetry.io/ebpf-profiler/interpreter/go"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
-	"go.opentelemetry.io/ebpf-profiler/interpreter/hotspot"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
-	"go.opentelemetry.io/ebpf-profiler/interpreter/luajit"
-	"go.opentelemetry.io/ebpf-profiler/interpreter/nodev8"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/oomwatcher"
-	"go.opentelemetry.io/ebpf-profiler/interpreter/perl"
-	"go.opentelemetry.io/ebpf-profiler/interpreter/php"
-	"go.opentelemetry.io/ebpf-profiler/interpreter/python"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/rtld"
-	"go.opentelemetry.io/ebpf-profiler/interpreter/ruby"
 	"go.opentelemetry.io/ebpf-profiler/libc"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
@@ -102,44 +91,9 @@ func NewExecutableInfoManager(
 	ebpf pmebpf.EbpfHandler,
 	interpretersConfig interpreterconfig.Config,
 ) (*ExecutableInfoManager, error) {
-	// Initialize interpreter loaders.
-	loaders := make([]interpreter.Loader, 0)
-	if !interpretersConfig.Perl.IsDisabled() {
-		loaders = append(loaders, perl.GetLoader(interpretersConfig.Perl))
-	}
-	if !interpretersConfig.Python.IsDisabled() {
-		loaders = append(loaders, python.GetLoader(interpretersConfig.Python))
-	}
-	if !interpretersConfig.PHP.IsDisabled() {
-		loaders = append(loaders, php.GetLoader(interpretersConfig.PHP))
-		loaders = append(loaders, php.GetOpcacheLoader(interpretersConfig.PHP))
-	}
-	if !interpretersConfig.Hotspot.IsDisabled() {
-		loaders = append(loaders, hotspot.GetLoader(interpretersConfig.Hotspot))
-	}
-	if !interpretersConfig.Ruby.IsDisabled() {
-		loaders = append(loaders, ruby.GetLoader(interpretersConfig.Ruby))
-	}
-	if !interpretersConfig.V8.IsDisabled() {
-		loaders = append(loaders, nodev8.GetLoader(interpretersConfig.V8))
-	}
-	if !interpretersConfig.Dotnet.IsDisabled() {
-		loaders = append(loaders, dotnet.GetLoader(interpretersConfig.Dotnet))
-	}
-	// The Go runtime offsets are needed for native stack unwinding across the
-	// Go runtime and by the labels program. Load them whenever Go support is
-	// enabled, independent of the labels and symbolization sub-toggles.
-	if !interpretersConfig.Go.IsDisabled() {
-		loaders = append(loaders, golang.GetLoader(interpretersConfig.Go))
-	}
-	if !interpretersConfig.BEAM.IsDisabled() {
-		loaders = append(loaders, beam.GetLoader(interpretersConfig.BEAM))
-	}
-	if !interpretersConfig.LuaJIT.IsDisabled() {
-		loaders = append(loaders, luajit.GetLoader(interpretersConfig.LuaJIT))
-	}
+	loaders := interpretersConfig.Loaders()
 
-	loaders = append(loaders, apmint.Loader)
+	loaders = append(loaders, apmint.GetLoader(apmint.Config{}))
 	// customlabels is parca's native (non-Go) custom-labels pseudo-interpreter,
 	// which upstream does not have. It gets its own toggle rather than riding on
 	// Go.Labels: go.Disabled wins over the Go sub-toggles, so gating it there
@@ -147,16 +101,19 @@ func NewExecutableInfoManager(
 	// interpreter is off — including `--tracers=labels,v8`, which is exactly how
 	// the node integration test runs.
 	//
-	// The Go loader itself is appended above, whenever Go support is enabled.
+	// The Go loader itself comes from interpreterconfig.Loaders(), whenever Go
+	// support is enabled.
 	if !interpretersConfig.CustomLabels.IsDisabled() {
-		loaders = append(loaders, customlabels.Loader)
+		loaders = append(loaders, interpreter.NewLoader(customlabels.Loader, nil))
 	}
-	loaders = append(loaders, oomwatcher.Loader, rtld.Loader)
+	loaders = append(loaders,
+		interpreter.NewLoader(oomwatcher.Loader, nil),
+		interpreter.NewLoader(rtld.Loader, nil))
 
 	if !interpretersConfig.CUDA.IsDisabled() {
 		// USDT support requires cookies
 		if util.HasBpfGetAttachCookie() {
-			loaders = append(loaders, gpu.Loader)
+			loaders = append(loaders, interpreter.NewLoader(gpu.Loader, nil))
 		} else {
 			log.Warn("CUDA USDT tracing is not supported on this kernel (missing bpf_get_attach_cookie)")
 		}
@@ -194,10 +151,8 @@ func (mgr *ExecutableInfoManager) AddOrIncRef(fileID host.FileID,
 		return ExecutableInfo{}, ErrDeferredFileID
 	}
 	var (
-		intervalData sdtypes.IntervalData
-		libcInfo     *libc.LibcInfo
-		ref          mapRef
-		err          error
+		libcInfo *libc.LibcInfo
+		ref      mapRef
 	)
 
 	// Fast path for executable info that is already present.
@@ -216,13 +171,14 @@ func (mgr *ExecutableInfoManager) AddOrIncRef(fileID host.FileID,
 	// so we release the lock before doing this.
 	mgr.state.WUnlock(&state)
 
-	if err = mgr.sdp.GetIntervalStructuresForFile(elfRef, &intervalData); err != nil {
+	intervalData, err := mgr.sdp.GetIntervalDataForFile(elfRef)
+	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			mgr.deferredFileIDs.Add(fileID, libpf.Void{})
 		}
 		return ExecutableInfo{}, fmt.Errorf("failed to extract interval data: %w", err)
 	}
-	if len(intervalData.Deltas) == 0 {
+	if len(intervalData.Blocks) == 0 {
 		ef, errx := elfRef.GetELF()
 		if errx != nil {
 			return ExecutableInfo{}, errx
@@ -250,14 +206,14 @@ func (mgr *ExecutableInfoManager) AddOrIncRef(fileID host.FileID,
 	}
 
 	// Load the data into BPF maps.
-	ref, err = state.loadDeltas(fileID, intervalData.Deltas)
+	ref, err = state.loadDeltas(fileID, intervalData)
 	if err != nil {
 		mgr.deferredFileIDs.Add(fileID, libpf.Void{})
 		return ExecutableInfo{}, fmt.Errorf("failed to load deltas: %w", err)
 	}
 
 	// Create the LoaderInfo for interpreter detection
-	loaderInfo := interpreter.NewLoaderInfo(fileID, elfRef, intervalData.Deltas)
+	loaderInfo := interpreter.NewLoaderInfo(fileID, elfRef, intervalData)
 
 	// Detect and load interpreter data
 	interpData := state.detectAndLoadInterpData(loaderInfo)
@@ -395,17 +351,16 @@ func (state *executableInfoManagerState) detectAndLoadInterpData(
 	var matches []interpreter.Data //nolint:prealloc
 
 	// Ask all interpreter loaders whether they want to handle this executable.
-	for _, load := range state.interpreterLoaders {
-		data, err := load(state.ebpf, loaderInfo)
+	for _, loader := range state.interpreterLoaders {
+		data, err := loader.Load(state.ebpf, loaderInfo)
 		if err != nil {
-			loaderName := runtime.FuncForPC(reflect.ValueOf(load).Pointer()).Name()
 			if errors.Is(err, os.ErrNotExist) {
 				// Very common if the process exited when we tried to analyze it.
-				log.Debugf("Failed to load %v (%#016x) [%s]: file not found",
-					loaderInfo.FileName(), loaderInfo.FileID(), loaderName)
+				log.Debugf("Failed to load %v (%#016x): file not found",
+					loaderInfo.FileName(), loaderInfo.FileID())
 			} else {
-				log.Errorf("Failed to load %v (%#016x) [%s]: %v",
-					loaderInfo.FileName(), loaderInfo.FileID(), loaderName, err)
+				log.Warnf("Failed to load %v (%#016x): %v",
+					loaderInfo.FileName(), loaderInfo.FileID(), err)
 			}
 			// Continue checking other loaders even if one fails
 			continue
@@ -437,46 +392,78 @@ func (state *executableInfoManagerState) detectAndLoadInterpData(
 // also creates a list of all large gaps in the executable.
 func (state *executableInfoManagerState) loadDeltas(
 	fileID host.FileID,
-	deltas []sdtypes.StackDelta,
+	intervals *sdtypes.IntervalData,
 ) (mapRef, error) {
-	numDeltas := len(deltas)
+	numDeltas := intervals.NumDeltas
 	if numDeltas == 0 {
 		// If no deltas are extracted, cache the result but don't reserve memory in BPF maps.
 		return mapRef{MapID: 0}, nil
 	}
 
-	firstPage := deltas[0].Address >> support.StackDeltaPageBits
-	firstPageAddr := deltas[0].Address &^ support.StackDeltaPageMask
-	lastPage := deltas[numDeltas-1].Address >> support.StackDeltaPageBits
+	firstBlock := intervals.Blocks[0]
+	lastBlock := intervals.Blocks[len(intervals.Blocks)-1]
+
+	firstPage := firstBlock.Start >> support.StackDeltaPageBits
+	firstPageAddr := firstBlock.Start &^ support.StackDeltaPageMask
+	lastPage := lastBlock.End >> support.StackDeltaPageBits
 	numPages := lastPage - firstPage + 1
 	numDeltasPerPage := make([]uint16, numPages)
 
 	// Index the unwind-info.
 	var unwindInfo sdtypes.UnwindInfo
 	ebpfDeltas := make([]pmebpf.StackDeltaEBPF, 0, numDeltas)
-	for index, delta := range deltas {
-		if unwindInfo.MergeOpcode != 0 {
-			// This delta was merged in the previous iteration.
-			unwindInfo.MergeOpcode = 0
-			continue
-		}
-		unwindInfo = delta.Info
-		if index+1 < len(deltas) {
-			unwindInfo.MergeOpcode = calculateMergeOpcode(delta, deltas[index+1])
-		}
-		// Uses the new 'unwindInfo' with potentially updated MergeOpcode
-		// here. In the end, it's only the unwindInfoIndex being different for
-		// merged deltas.
-		var unwindInfoIndex uint16
-		unwindInfoIndex, err := state.getUnwindInfoIndex(unwindInfo)
+	addDelta := func(addr uint64, info support.UnwindInfo) error {
+		unwindInfoIndex, err := state.getUnwindInfoIndex(info)
 		if err != nil {
-			return mapRef{}, err
+			return err
 		}
-		ebpfDeltas = append(ebpfDeltas, pmebpf.StackDeltaEBPF{
-			AddressLow: uint16(delta.Address),
-			UnwindInfo: unwindInfoIndex,
-		})
-		numDeltasPerPage[(delta.Address>>support.StackDeltaPageBits)-firstPage]++
+		numDeltas := len(ebpfDeltas)
+		if numDeltas == 0 || ebpfDeltas[numDeltas-1].UnwindInfo != unwindInfoIndex {
+			ebpfDeltas = append(ebpfDeltas, pmebpf.StackDeltaEBPF{
+				AddressLow: uint16(addr),
+				UnwindInfo: unwindInfoIndex,
+			})
+			numDeltasPerPage[(addr>>support.StackDeltaPageBits)-firstPage]++
+		}
+		return nil
+	}
+
+	for blockIndex, block := range intervals.Blocks {
+		for deltaIndex, delta := range block.Deltas {
+			if unwindInfo.MergeOpcode != 0 {
+				// This delta was merged in the previous iteration.
+				unwindInfo.MergeOpcode = 0
+				continue
+			}
+			unwindInfo = delta.Info
+			if deltaIndex+1 < len(block.Deltas) {
+				unwindInfo.MergeOpcode = calculateMergeOpcode(delta, block.Deltas[deltaIndex+1])
+			}
+
+			addr := block.Start + uint64(delta.Offset)
+			if unwindInfo.Flags&support.UnwindFlagCommand != 0 && unwindInfo.Param == support.UnwindCommandSignal {
+				// EBPF code does a -1 fixup for return addresses.
+				// To match the signal handler function injected into
+				// stack, the signal handler stack delta must start one
+				// byte earlier to accommodate for the ebpf fixup.
+				// C-libraries will have a 'nop' inserted to make sure
+				// nothing conflicts.
+				addr--
+			}
+
+			// Uses the new 'unwindInfo' with potentially updated MergeOpcode
+			// here. In the end, it's only the unwindInfoIndex being different for
+			// merged deltas.
+			if err := addDelta(addr, unwindInfo); err != nil {
+				return mapRef{}, err
+			}
+		}
+		// Check if blocks are far apart or last block
+		if blockIndex+1 == len(intervals.Blocks) || block.End+sdtypes.MinimumGap < intervals.Blocks[blockIndex+1].Start {
+			if err := addDelta(block.End, sdtypes.UnwindInfoInvalid); err != nil {
+				return mapRef{}, err
+			}
+		}
 	}
 
 	// Update data to eBPF
@@ -509,7 +496,7 @@ func calculateMergeOpcode(delta, nextDelta sdtypes.StackDelta) uint8 {
 	if delta.Info.Flags&support.UnwindFlagCommand != 0 {
 		return 0
 	}
-	addrDiff := nextDelta.Address - delta.Address
+	addrDiff := nextDelta.Offset - delta.Offset
 	if addrDiff < 1 || addrDiff > 2 {
 		return 0
 	}

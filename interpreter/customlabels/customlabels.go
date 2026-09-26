@@ -37,8 +37,9 @@ type data struct {
 
 var _ interpreter.Data = &data{}
 
+//go:fix inline
 func heapify[T any](t T) *T {
-	return &t
+	return new(t)
 }
 
 func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpreter.Data, error) {
@@ -73,12 +74,13 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 		// Resolve thread info TLS export.
 		if err := ef.VisitTLSRelocations(func(r pfelf.ElfReloc, symName string) bool {
 			if symName == currentSetTlsExport {
-				currentSetTlsAddr = heapify(libpf.Address(r.Off))
+				currentSetTlsAddr = new(libpf.Address(r.Off))
 			} else if isNodeExtension {
-				if symName == alsIdentityHashExport {
-					alsIdentityHashAddr = heapify(libpf.Address(r.Off))
-				} else if symName == alsHandleExport {
-					alsHandleAddr = heapify(libpf.Address(r.Off))
+				switch symName {
+				case alsIdentityHashExport:
+					alsIdentityHashAddr = new(libpf.Address(r.Off))
+				case alsHandleExport:
+					alsHandleAddr = new(libpf.Address(r.Off))
 				}
 			}
 			return currentSetTlsAddr == nil ||
@@ -94,7 +96,7 @@ func Loader(_ interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interprete
 		if err != nil {
 			return nil, fmt.Errorf("failed to get tls symbol offset: %w", err)
 		}
-		currentSetTlsAddr = heapify(libpf.Address(offset))
+		currentSetTlsAddr = new(libpf.Address(offset))
 	}
 
 	var idAddr libpf.Address
