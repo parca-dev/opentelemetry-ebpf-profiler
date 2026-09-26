@@ -7,8 +7,8 @@
 #include "errors.h"
 #include "extmaps.h"
 #include "frametypes.h"
-#include "go_support.h"
 #include "types.h"
+#include "util.h"
 
 #if defined(TESTING_COREDUMP)
 
@@ -237,8 +237,8 @@ static inline EBPF_INLINE u64 normalize_pac_ptr(u64 ptr)
 #endif
 }
 
-// NB: upstream also defines increment_metric here. parca keeps it in util.h, so
-// taking upstream's copy of this hunk would define it twice.
+// NB: upstream also defines increment_metric here. parca keeps it in util.h,
+// included above, so taking upstream's copy of this hunk would define it twice.
 
 // process_is_too_new returns true when a trace should be skipped because a process is too new.
 // If group_leader is non-zero, it reuses the pointer instead of reading it from current task.
@@ -633,56 +633,6 @@ static inline EBPF_INLINE bool unwinder_unwind_frame_pointer(UnwindState *state)
     return false;
   }
   return unwinder_unwind_frame_pointer_regs(state, regs);
-}
-
-static inline EBPF_INLINE bool unwinder_unwind_go_morestack(PerCPURecord *record)
-{
-  // goOffsets is preloaded once per trace by collect_trace; m_offset == 0 means
-  // this PID has no go_procs entry, i.e. it is not a Go binary.
-  GoRuntimeOffsets *offs = &record->goOffsets;
-  if (offs->m_offset == 0) {
-    DEBUG_PRINT("morestack: failed to read go labels offsets");
-    return false;
-  }
-  void *mptr = get_go_m_ptr(offs, &record->state);
-  DEBUG_PRINT("morestack: curg offset: %d, mptr: %llx\n", offs->curg, (u64)mptr);
-
-  size_t curg_ptr_addr;
-  if (bpf_probe_read_user(&curg_ptr_addr, sizeof(void *), (void *)((u64)mptr + offs->curg))) {
-    DEBUG_PRINT("morestack: failed to read value for m_ptr->curg");
-    return false;
-  }
-
-  DEBUG_PRINT("morestack: curg is %lx\n", curg_ptr_addr);
-
-  if (curg_ptr_addr == 0) {
-    // Terminal case: this m has no attached user goroutine (e.g. the m parked
-    // in newstack -> goschedImpl after handing off the g). There's no saved
-    // register state to unwind to; signal end-of-stack by zeroing PC so the
-    // caller (get_next_unwinder_after_native_frame) emits ERR_NATIVE_ZERO_PC.
-    // Upstream's nanotime coredump tests (#1502) validate this shape.
-    record->state.pc = 0;
-    return true;
-  }
-
-  // Valid since go 1.25:
-  // https://github.com/golang/go/blob/7b60d06739/src/runtime/runtime2.go#L303-L322
-  // On previous versions, there was an extra "ret" value, so "bp" is one spot later.
-  // TODO - make this work on earlier versions.
-  unsigned long regs[6];
-  if (bpf_probe_read_user(regs, sizeof(regs), (void *)(curg_ptr_addr + 56 /* XXX */))) {
-    DEBUG_PRINT("morestack: failed to read regs");
-    return false;
-  }
-  record->state.sp = regs[0];
-  record->state.pc = regs[1];
-  record->state.fp = regs[5];
-  DEBUG_PRINT(
-    "morestack: success, sp is %llx, pc is %llx, fp is %llx",
-    record->state.sp,
-    record->state.pc,
-    record->state.fp);
-  return true;
 }
 
 static inline EBPF_INLINE u64 frame_header(u8 frame_type, u8 flags, u8 length, u64 data)
