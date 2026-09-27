@@ -7,9 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/ebpf-profiler/internal/linux"
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
-	// parca: ProbeBPFSyscall lives in util here; upstream moved it to internal/linux.
-	"go.opentelemetry.io/ebpf-profiler/util"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
@@ -58,7 +57,7 @@ func New(cfg *Config) *Controller {
 // See:
 // https://github.com/open-telemetry/opentelemetry-collector/blob/v0.144.0/otelcol/collector.go#L258-L260
 func (c *Controller) Start(ctx context.Context) error {
-	if err := util.ProbeBPFSyscall(); err != nil {
+	if err := linux.ProbeBPFSyscall(); err != nil {
 		return fmt.Errorf("failed to probe eBPF syscall: %w", err)
 	}
 
