@@ -15,5 +15,13 @@ cmd/otelcol-ebpf-profiler/go.mod
 cmd/otelcol-ebpf-profiler/go.sum
 otelcol-ebpf-profiler
 
-# Mock CUDA/CUPTI libs downloaded by test/distro-qemu/download-parcagpu.sh
+# Mock CUDA/CUPTI libs downloaded by test/distro-qemu/download-parcagpu.sh.
+# PARCAGPU_DIR is relative, so where it lands depends on the caller's cwd: the
+# documented way of running the harness puts it under test/distro-qemu.
 /parcagpu-lib/
+test/distro-qemu/parcagpu-lib/
+
+# `go build ./tools/coredump` run from the repo root lands here. The pattern in
+# tools/coredump/.gitignore is anchored to that directory and does not cover it.
+/coredump
+/coredump.test
