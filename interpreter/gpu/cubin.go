@@ -90,7 +90,6 @@ func HandleCubinEvent(ev *CuptiCubinEvent, rep reporter.ExecutableReporter) {
 			FileName: libpf.Intern(cubinName),
 		}),
 		Process: NewCubinProcess(ev.Pid, data),
-		IsElf:   true,
 	})
 }
 

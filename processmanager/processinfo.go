@@ -311,7 +311,6 @@ func (pm *ProcessManager) getELFInfo(pr process.Process, mapping *process.RawMap
 		Process:           pr,
 		Mapping:           mapping,
 		DebuglinkFileName: ef.DebuglinkFileName(elfRef.FileName(), elfRef),
-		IsElf:             true,
 	})
 
 	return info
