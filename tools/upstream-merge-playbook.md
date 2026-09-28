@@ -146,9 +146,13 @@ survive unless noted.
 - **`normalize_pac_ptr` definition** — parca keeps the canonical definition
   near the top of the file; if upstream relocates or duplicates it, accept
   upstream's relocation and verify there's still only one definition.
-- **`increment_metric` definition** — parca has it in `support/ebpf/util.h`,
-  not `tracemgmt.h`. When upstream adds it to `tracemgmt.h` as part of an
-  unrelated relocation patch, drop their addition; keep ours in `util.h`.
+- **`increment_metric`'s `DEBUG_PRINT`** — commented out in parca, live
+  upstream. `DEBUG_PRINT` is compiled in and gated at runtime, so it costs
+  instructions at every call site. `f8ee2110` cut it together with the prints
+  in `python_tracer.ebpf.c` and the `native_stack_trace.h` steps it inlines, to
+  fit the Python unwinder under the verifier after parca raised its unwind
+  limits (`f1c902b0`). Keep ours on conflict; dropping it needs a distro-qemu
+  run.
 
 ### `support/ebpf/native_stack_trace.{ebpf.c,h}`
 

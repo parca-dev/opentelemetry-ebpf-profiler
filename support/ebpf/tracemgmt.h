@@ -8,7 +8,6 @@
 #include "extmaps.h"
 #include "frametypes.h"
 #include "types.h"
-#include "util.h"
 
 #if defined(TESTING_COREDUMP)
 
@@ -237,8 +236,16 @@ static inline EBPF_INLINE u64 normalize_pac_ptr(u64 ptr)
 #endif
 }
 
-// NB: upstream also defines increment_metric here. parca keeps it in util.h,
-// included above, so taking upstream's copy of this hunk would define it twice.
+// increment_metric increments the value of the given metricID by 1
+static inline EBPF_INLINE void increment_metric(u32 metricID)
+{
+  u64 *count = bpf_map_lookup_elem(&metrics, &metricID);
+  if (count) {
+    ++*count;
+  } else {
+    // DEBUG_PRINT("Failed to lookup metrics map for metricID %d", metricID);
+  }
+}
 
 // process_is_too_new returns true when a trace should be skipped because a process is too new.
 // If group_leader is non-zero, it reuses the pointer instead of reading it from current task.

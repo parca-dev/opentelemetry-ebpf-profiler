@@ -2,14 +2,10 @@
 
 #include "bpfdefs.h"
 #include "errors.h"
-#include "stackdeltatypes.h"
+#include "native_stack_trace.h"
 #include "tracemgmt.h"
 #include "tsd.h"
 #include "types.h"
-
-// native_stack_trace.h references types from types.h/tracemgmt.h, so include
-// it after those.
-#include "native_stack_trace.h"
 
 // Number of loop iterations in unwind_python. Each iteration handles either
 // a Python or a native frame, so the name follows the *_FRAMES_PER_PROGRAM
