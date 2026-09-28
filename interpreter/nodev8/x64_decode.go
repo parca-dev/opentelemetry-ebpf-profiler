@@ -3,9 +3,10 @@ package nodev8 // import "go.opentelemetry.io/ebpf-profiler/interpreter/nodev8"
 import (
 	"errors"
 
+	"golang.org/x/arch/x86/x86asm"
+
 	"go.opentelemetry.io/ebpf-profiler/asm/amd"
 	e "go.opentelemetry.io/ebpf-profiler/asm/expression"
-	"golang.org/x/arch/x86/x86asm"
 )
 
 // GetJsDispatchTableOffsetX64 finds the offset of `js_dispatch_table_` within `IsolateGroup`
@@ -39,7 +40,7 @@ func GetJsDispatchTableOffsetX64(code []byte) (uint64, error) {
 	rax := it.Regs.Get(amd.RAX)
 	offset, ok := e.MemOffset(rax)
 	if !ok {
-		return 0, errors.New("Failed to find js_dispatch_table_ field offset")
+		return 0, errors.New("failed to find js_dispatch_table_ field offset")
 	}
 	return offset, nil
 }

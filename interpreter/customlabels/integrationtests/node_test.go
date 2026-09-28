@@ -34,9 +34,10 @@ import (
 	"github.com/stretchr/testify/require"
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
+
+	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/testutils"
-	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
 )
 
 const N_WORKERS int = 8
@@ -53,10 +54,12 @@ var files = []string{
 }
 
 func runTest(t *testing.T, ctx context.Context, host string, port network.Port) {
-	enabledTracers, err := tracertypes.Parse("labels,v8")
-	require.NoError(t, err)
+	t.Helper()
+	interpreters := interpreterconfig.NoInterpreters()
+	interpreters.V8.Disabled = false
+	interpreters.CustomLabels.Disabled = false
 
-	traceCh, _ := testutils.StartTracer(ctx, t, enabledTracers, false)
+	traceCh, _ := testutils.StartTracer(ctx, t, interpreters, false)
 
 	testHTTPEndpoint(t, host, port)
 	framesPerWorkerId := make(map[int]int)
@@ -103,7 +106,7 @@ func runTest(t *testing.T, ctx context.Context, host string, port network.Port) 
 
 			if hasWorkloadFrame {
 				totalWorkloadFrames++
-				if !(okWid && okFname) {
+				if !okWid || !okFname {
 					unlabeledWorkloadFrames++
 				}
 			}
@@ -129,11 +132,11 @@ done:
 	// for 8 workers, each should have roughly 1/8
 	// of the labeled frames. There will be a bit of skew,
 	// so accept anything above 60% of that.
-	for i := 0; i < N_WORKERS; i++ {
+	for i := range N_WORKERS {
 		totalWidFrames += framesPerWorkerId[i]
 	}
 	expectedWorkerAvg := float64(totalWidFrames) / float64(N_WORKERS)
-	for i := 0; i < N_WORKERS; i++ {
+	for i := range N_WORKERS {
 		require.Less(t, expectedWorkerAvg*0.60, float64(framesPerWorkerId[i]))
 	}
 	// Each of the documents should account for some nontrivial amount of time,
@@ -218,13 +221,10 @@ func TestIntegration(t *testing.T) {
 		tarballName := fmt.Sprintf("node-%s-%s", latest.Version, nodeArch)
 
 		var tarballURL string
-		for _, file := range latest.Files {
-			if file == nodeArch {
-				tarballURL = fmt.Sprintf(
-					"https://nodejs.org/download/nightly/%s/%s.tar.gz",
-					latest.Version, tarballName)
-				break
-			}
+		if slices.Contains(latest.Files, nodeArch) {
+			tarballURL = fmt.Sprintf(
+				"https://nodejs.org/download/nightly/%s/%s.tar.gz",
+				latest.Version, tarballName)
 		}
 		require.NotEmpty(t, tarballURL, "No tarball found for latest nightly")
 
@@ -247,6 +247,7 @@ func TestIntegration(t *testing.T) {
 
 func startContainer(ctx context.Context, t *testing.T,
 	nodeVersion string) testcontainers.Container {
+	t.Helper()
 	t.Log("starting container for node version", nodeVersion)
 	//nolint:dogsled
 	_, path, _, _ := runtime.Caller(0)
@@ -270,6 +271,7 @@ func startContainer(ctx context.Context, t *testing.T,
 func startNightlyContainer(ctx context.Context,
 	t *testing.T,
 	nodeURL string) testcontainers.Container {
+	t.Helper()
 	t.Log("starting container for node nightly at URL", nodeURL)
 
 	//nolint:dogsled
@@ -293,6 +295,7 @@ func startNightlyContainer(ctx context.Context,
 }
 
 func testHTTPEndpoint(t *testing.T, host string, port network.Port) {
+	t.Helper()
 	const numGoroutines = 10
 	const requestsPerGoroutine = 10000
 
@@ -301,13 +304,13 @@ func testHTTPEndpoint(t *testing.T, host string, port network.Port) {
 	var wg sync.WaitGroup
 
 	var errs []error
-	for i := 0; i < numGoroutines; i++ {
+	for i := range numGoroutines {
 		wg.Add(1)
 		errs = append(errs, nil)
 		go func() {
 			defer wg.Done()
 
-			for j := 0; j < requestsPerGoroutine; j++ {
+			for range requestsPerGoroutine {
 				//nolint:gosec
 				file := files[rand.Intn(len(files))]
 

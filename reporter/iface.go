@@ -48,9 +48,6 @@ type ExecutableMetadata struct {
 	// from the .gnu.debuglink, if any. The caller should
 	// verify that the file in question matches the GnuBuildID of this executable.
 	DebuglinkFileName string
-
-	// IsElf is whether the executable is an ELF file.
-	IsElf bool
 }
 
 // ExecutableReporter is an optional interface to allow uploading files. There is

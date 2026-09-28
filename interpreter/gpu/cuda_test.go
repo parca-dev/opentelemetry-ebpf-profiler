@@ -14,7 +14,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/support"
-	"go.opentelemetry.io/ebpf-profiler/traceutil"
 )
 
 // TestProgramNamesExist verifies that the eBPF program names used in cuda.go
@@ -65,10 +64,18 @@ func makeMapping(fileIDHi uint64) libpf.FrameMapping {
 	})
 }
 
-// TestCUDATraceHashStability verifies that after prepTrace sets the kernel name
-// (zeroing AddressOrLineno), traces from the same call site hash equally
-// regardless of correlation ID, and different call sites hash differently.
-func TestCUDATraceHashStability(t *testing.T) {
+// TestCUDATraceIdentityStability verifies that after prepTrace sets the kernel
+// name (zeroing AddressOrLineno), traces from the same call site are identical
+// regardless of correlation ID, and traces from different call sites are not.
+//
+// This used to be asserted through traceutil.HashTrace, which upstream removed
+// along with the rest of profiler-side trace hashing. parca-agent still hashes
+// traces for its backend, but the invariant that matters here is parca's own:
+// packCudaID stashes a per-sample correlation ID in the CUDA frame's
+// AddressOrLineno, and prepTrace must clear it, or every GPU sample would be a
+// distinct trace. Comparing frames directly tests that more strictly than
+// comparing hashes of them.
+func TestCUDATraceIdentityStability(t *testing.T) {
 	mapping := makeMapping(0xaaaa)
 
 	makeTrace := func(correlationID uint32, nativeAddr uint64) *libpf.Trace {
@@ -99,11 +106,8 @@ func TestCUDATraceHashStability(t *testing.T) {
 		})
 	}
 
-	h1 := traceutil.HashTrace(tr1)
-	h2 := traceutil.HashTrace(tr2)
-	h3 := traceutil.HashTrace(tr3)
-	assert.Equal(t, h1, h2, "same call site must hash equal")
-	assert.NotEqual(t, h1, h3, "different call sites must hash different")
+	assert.Equal(t, tr1.Frames, tr2.Frames, "same call site must be identical")
+	assert.NotEqual(t, tr1.Frames, tr3.Frames, "different call sites must differ")
 }
 
 // makeSymbolizedTrace builds a libpf.Trace that looks like what HandleTrace

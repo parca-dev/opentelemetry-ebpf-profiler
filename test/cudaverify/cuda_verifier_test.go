@@ -16,9 +16,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
+	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/testutils"
-	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
@@ -63,10 +63,10 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	enabledTracers, _ := tracertypes.Parse("")
-	enabledTracers.Enable(tracertypes.CUDATracer)
+	interpreters := interpreterconfig.NoInterpreters()
+	interpreters.CUDA.Disabled = false
 
-	_, trc := testutils.StartTracer(ctx, t, enabledTracers, false)
+	_, trc := testutils.StartTracer(ctx, t, interpreters, false)
 	defer trc.Close()
 
 	// Trigger initial process sync for our PID so the tracer discovers our

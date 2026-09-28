@@ -77,10 +77,13 @@ func (emc *ebpfMapsCoredump) UpdateProcData(t libpf.InterpreterType, pid libpf.P
 		emc.ctx.addMap(unsafe.Pointer(&C.v8_procs), C.u32(pid), sliceBuffer(ptr, C.sizeof_V8ProcInfo))
 	case libpf.BEAM:
 		emc.ctx.addMap(unsafe.Pointer(&C.beam_procs), C.u32(pid), sliceBuffer(ptr, C.sizeof_BEAMProcInfo))
-	case libpf.LuaJIT:
-		emc.ctx.addMap(unsafe.Pointer(&C.luajit_procs), C.u32(pid), sliceBuffer(ptr, C.sizeof_LuaJITProcInfo))
 	case libpf.Go:
 		emc.ctx.addMap(unsafe.Pointer(&C.go_procs), C.u32(pid), sliceBuffer(ptr, C.sizeof_GoRuntimeOffsets))
+	case libpf.LuaJIT:
+		emc.ctx.addMap(unsafe.Pointer(&C.luajit_procs), C.u32(pid), sliceBuffer(ptr, C.sizeof_LuaJITProcInfo))
+	case libpf.ThreadContext:
+		emc.ctx.addMap(unsafe.Pointer(&C.thread_context_procs), C.u32(pid),
+			sliceBuffer(ptr, C.sizeof_ThreadContextProcInfo))
 	}
 	return nil
 }
@@ -103,8 +106,12 @@ func (emc *ebpfMapsCoredump) DeleteProcData(t libpf.InterpreterType, pid libpf.P
 		emc.ctx.delMap(unsafe.Pointer(&C.v8_procs), C.u32(pid))
 	case libpf.BEAM:
 		emc.ctx.delMap(unsafe.Pointer(&C.beam_procs), C.u32(pid))
+	case libpf.Go:
+		emc.ctx.delMap(unsafe.Pointer(&C.go_procs), C.u32(pid))
 	case libpf.LuaJIT:
 		emc.ctx.delMap(unsafe.Pointer(&C.luajit_procs), C.u32(pid))
+	case libpf.ThreadContext:
+		emc.ctx.delMap(unsafe.Pointer(&C.thread_context_procs), C.u32(pid))
 	}
 	return nil
 }
@@ -167,7 +174,7 @@ func (emc *ebpfMapsCoredump) UpdateUnwindInfo(index uint16, info sdtypes.UnwindI
 			index, support.UnwindInfoMaxEntries)
 	}
 
-	cmd := (*support.UnwindInfo)(unsafe.Pointer(uintptr(emc.ctx.unwindInfoArray) +
+	cmd := (*support.UnwindInfo)(unsafe.Add(emc.ctx.unwindInfoArray,
 		uintptr(index)*C.sizeof_UnwindInfo))
 	*cmd = info
 	return nil
@@ -179,7 +186,7 @@ func (emc *ebpfMapsCoredump) UpdateExeIDToStackDeltas(fileID host.FileID,
 	entSize := C.sizeof_StackDelta
 	deltas := C.malloc(C.size_t(len(deltaArrays) * entSize))
 	for index, delta := range deltaArrays {
-		info := (*C.StackDelta)(unsafe.Pointer(uintptr(deltas) + uintptr(index*entSize)))
+		info := (*C.StackDelta)(unsafe.Add(deltas, uintptr(index*entSize)))
 		*info = C.StackDelta{
 			addrLow:    C.u16(delta.AddressLow),
 			unwindInfo: C.u16(delta.UnwindInfo),

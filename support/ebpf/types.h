@@ -388,6 +388,36 @@ enum {
   // number of cupti_events ringbuf reserve failures (GPU events dropped)
   metricID_CUPTIEventsRingbufFull,
 
+  // number of samples skipped because the process is too new
+  metricID_SamplesSkippedProcessTooNew,
+
+  // number of PID resynchronizations triggered by the prctl monitor
+  metricID_NumSyncsFromPrctl,
+
+  // number of priority PID events deferred (recorded but not signalled) due to rate limiting
+  metricID_NumPriorityEventDeferred,
+
+  // number of attempted Go asmcgocall stack-switch unwinds
+  metricID_UnwindGoAsmcgocallAttempts,
+
+  // number of successful Go asmcgocall unwinds
+  metricID_UnwindGoAsmcgocallSuccess,
+
+  // number of Go asmcgocall unwind failures
+  metricID_UnwindGoAsmcgocallUnwindFailure,
+
+  // number of failures to read the thread context buffer pointer out of TLS
+  metricID_UnwindThreadContextErrReadTlsPtr,
+
+  // number of failures to read the thread context buffer, header or payload
+  metricID_UnwindThreadContextErrReadThreadCtxBuf,
+
+  // number of successful reads of thread context info
+  metricID_UnwindThreadContextReadSuccesses,
+
+  // number of thread context attribute payloads truncated to fit the buffer
+  metricID_UnwindThreadContextAttrsTruncated,
+
   //
   // Metric IDs above are for counters (cumulative values)
   //
@@ -431,7 +461,8 @@ typedef enum TracePrograms {
 typedef struct TSDInfo {
   // Offset is the pointer difference from "tpbase" pointer to the C-library
   // specific struct pthread's member containing the thread specific data:
-  // .tsd (musl) or .specific (glibc).
+  // .tsd (musl), .specific (glibc metadata), or the first block's data
+  // field (glibc disassembly).
   // Note: on x86_64 it's positive value, and arm64 it is negative value as
   // "tpbase" register has different purpose and pointer value per platform ABI.
   s16 offset;
@@ -439,8 +470,14 @@ typedef struct TSDInfo {
   // Typically 8 bytes on 64bit musl and 16 bytes on 64bit glibc
   u8 multiplier;
   // Indirect is a flag indicating if the "tpbase + Offset" points to a member
-  // which is a pointer the array (musl) and not the array itself (glibc).
+  // which is a pointer to a flat array (musl) rather than inline data.
   u8 indirect;
+  // Exclusive upper bound for keys. Must be initialized.
+  u16 keyLimit;
+  // Entries per block for two-level glibc lookup. Zero selects a flat array.
+  u8 blockEntries;
+  // Offset of the first entry's data field from the block pointer.
+  u8 dataOffset;
 } TSDInfo;
 
 // DTVInfo contains data needed to read Thread Local Storage (TLS) values, which
@@ -455,6 +492,23 @@ typedef struct DTVInfo {
   // Multiplier is the size of each DTV entry in bytes.
   u8 multiplier;
 } DTVInfo;
+
+// TLSVarInfo locates a thread-local variable at unwind time, covering both
+// static and dynamic TLS.
+typedef struct TLSVarInfo {
+  // TP-relative when dtv_pos is 0, else within the module's TLS block.
+  // Signed because variant II puts the static block below the thread pointer.
+  s32 tls_offset;
+  // Byte offset of the module's entry in the DTV array, that is its TLS module
+  // ID times the entry size. 0 for static TLS, and the only static/dynamic
+  // discriminant.
+  u32 dtv_pos;
+  // Offset of the DTV pointer from the thread pointer. Unused for static TLS.
+  s16 dtv_offset;
+  // Needed because a zeroed TLSVarInfo is otherwise a valid static descriptor:
+  // aarch64 musl gives tls_offset 0 to a library whose executable has no PT_TLS.
+  bool valid;
+} TLSVarInfo;
 
 // DotnetProcInfo is a container for the data needed to build stack trace for a dotnet process.
 typedef struct DotnetProcInfo {
@@ -540,6 +594,9 @@ typedef struct RubyProcInfo {
 
   // is reading gc state from objspace supported for this version?
   bool has_objspace;
+
+  // JIT regions, for detecting if a native PC was JIT
+  u64 jit_start, jit_end;
 
   // Offsets and sizes of Ruby internal structs
 
@@ -816,6 +873,8 @@ typedef struct RubyUnwindState {
   void *last_stack_frame;
   // Frame for last cfunc before we switched to native unwinder
   u64 cfunc_saved_frame;
+  // Detect if JIT code ran in the process (at any time)
+  bool jit_detected;
 } RubyUnwindState;
 
 typedef u64 TValue;
@@ -938,17 +997,29 @@ typedef struct GoMapBucket {
 
 typedef struct GoRuntimeOffsets {
   u32 m_offset;
+  u32 m_gsignal;
   u32 curg;
   u32 labels;
   u32 hmap_count;
   u32 hmap_log2_bucket_count;
   u32 hmap_buckets;
   s32 tls_offset;
+  u32 sched_sp_off;
+  u32 sched_pc_off;
+  u32 sched_lr_off;
+  u32 sched_bp_off;
 } GoRuntimeOffsets;
 
 typedef struct CustomLabelsState {
   void *go_m_ptr;
 } CustomLabelsState;
+
+// Container for additional scratch space needed by the Go unwinder.
+typedef struct GoUnwindScratchSpace {
+  // Max size for a single bpf_probe_read, so the larger of runtime.m[0:curg+8) and
+  // runtime.g[0:sched_bp_off+8). The m prefix is the larger one and needs 200 bytes.
+  u64 buf[25];
+} GoUnwindScratchSpace;
 
 // Per-CPU info for the stack being built. This contains the stack as well as
 // meta-data on the number of eBPF tail-calls used so far to construct it.
@@ -981,6 +1052,8 @@ typedef struct PerCPURecord {
     V8UnwindScratchSpace v8UnwindScratch;
     // Scratch space for the Python unwinder
     PythonUnwindScratchSpace pythonUnwindScratch;
+    // Scratch space for the Go unwinder
+    GoUnwindScratchSpace goUnwindScratch;
     // Scratch space for the LuaJIT unwinder
     LJScratchSpace luajitUnwindScratch;
     // Native labels scratch space
@@ -1044,15 +1117,13 @@ typedef struct UnwindInfo {
 #define UNWIND_REG_X86_R15 12
 
 // Flag to indicate a command (used inside Go stack delta generation only)
-#define UNWIND_FLAG_COMMAND     (1 << 0)
+#define UNWIND_FLAG_COMMAND   (1 << 0)
 // Flag to indicate that a full LR+FR frame is present on aarch64
-#define UNWIND_FLAG_FRAME       (1 << 1)
+#define UNWIND_FLAG_FRAME     (1 << 1)
 // Flag to indicate that unwinding is valid on leaf frames only (uses untracked register)
-#define UNWIND_FLAG_LEAF_ONLY   (1 << 2)
+#define UNWIND_FLAG_LEAF_ONLY (1 << 2)
 // Flag to indicate that the resolve CFA value should be dereferenced
-#define UNWIND_FLAG_DEREF_CFA   (1 << 3)
-// Flag to indicate that the return address is in a register
-#define UNWIND_FLAG_REGISTER_RA (1 << 4)
+#define UNWIND_FLAG_DEREF_CFA (1 << 3)
 
 // If flags has UNWIND_FLAG_DEREF_CFA set, the lowest bits of 'param' are used
 // as second adder as post-deref operation. This contains the mask for that.
@@ -1079,6 +1150,14 @@ typedef struct StackDelta {
 // the unwind info array.
 #define STACK_DELTA_COMMAND_FLAG 0x8000
 
+// Commands carrying this bit are implemented by the native unwinder only. The combined
+// interpreter+native programs report such a frame to their caller instead of unwinding it
+// themselves, so that the implementation is not inlined into them. Keeping this a property
+// of the command means a new native-only command cannot forget to opt in.
+// Only meaningful when STACK_DELTA_COMMAND_FLAG is set, so it does not reduce the index
+// space of the unwind info array.
+#define STACK_DELTA_NATIVE_COMMAND_BIT 0x4000
+
 // Unsupported or no value for the register
 #define UNWIND_COMMAND_INVALID       0
 // For CFA: stop unwinding, this function is a stack root function
@@ -1089,8 +1168,12 @@ typedef struct StackDelta {
 #define UNWIND_COMMAND_SIGNAL        3
 // Unwind using standard frame pointer
 #define UNWIND_COMMAND_FRAME_POINTER 4
-// Unwind past the Go runtime.morestack function
-#define UNWIND_COMMAND_GO_MORESTACK  5
+// Cross the Go runtime.asmcgocall stack-switch boundary (arm64) by reading the
+// goroutine saved context from gobuf
+#define UNWIND_COMMAND_GO_ASMCGOCALL (STACK_DELTA_NATIVE_COMMAND_BIT | 5)
+// Unwind past Go runtime.morestack by reading the caller registers it saved
+// into the goroutine's gobuf
+#define UNWIND_COMMAND_GO_MORESTACK  (STACK_DELTA_NATIVE_COMMAND_BIT | 6)
 
 // StackDeltaPageKey is the look up key for stack delta page map.
 typedef struct StackDeltaPageKey {
@@ -1146,6 +1229,25 @@ typedef struct Event {
 
 // Event types that notifications are sent for through event_send_trigger.
 #define EVENT_TYPE_GENERIC_PID 1
+
+// PID namespace translation modes.
+enum PIDNamespaceTranslationMode {
+  PID_NS_TRANSLATION_MODE_NONE      = 0,
+  PID_NS_TRANSLATION_MODE_EXACT     = 1,
+  PID_NS_TRANSLATION_MODE_RECURSIVE = 2,
+};
+
+// PIDNamespaceLayout contains kernel structure offsets used to translate PIDs from descendant
+// namespaces.
+typedef struct PIDNamespaceLayout {
+  u32 task_thread_pid_offset;
+  u32 pid_level_offset;
+  u32 pid_numbers_offset;
+  u32 upid_size;
+  u32 upid_nr_offset;
+  u32 upid_ns_offset;
+  u32 pid_namespace_inum_offset;
+} PIDNamespaceLayout;
 
 // PIDPage represents the key of the eBPF map pid_page_to_mapping_info.
 typedef struct PIDPage {
@@ -1204,6 +1306,11 @@ typedef struct ApmIntProcInfo {
   u64 tls_offset;
 } ApmIntProcInfo;
 
+// ThreadContextProcInfo is a container for the data needed to locate the
+// thread context TLS variable of a process.
+typedef struct ThreadContextProcInfo {
+  TLSVarInfo tls;
+} ThreadContextProcInfo;
 typedef struct NativeCustomLabelsProcInfo {
   u64 current_set_tls_offset;
 

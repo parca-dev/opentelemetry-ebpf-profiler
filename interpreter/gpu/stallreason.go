@@ -24,12 +24,9 @@ func StoreStallReasonMap(pid uint32, names []libpf.String) {
 // terminated names and caching them keyed by PID for later use by PC sample
 // processing.
 func HandleStallReasonMap(ev *CuptiStallReasonMapEvent) {
-	count := ev.Count
-	if count > uint32(len(ev.Names)) {
-		count = uint32(len(ev.Names))
-	}
+	count := min(ev.Count, uint32(len(ev.Names)))
 	names := make([]libpf.String, count)
-	for i := uint32(0); i < count; i++ {
+	for i := range count {
 		// Intern dedups the small fixed set of CUPTI names repeated across every
 		// PID and event, and copies internally, so we can hand it the no-copy
 		// ToString view of ev's buffer.

@@ -1,13 +1,5 @@
-// Copyright 2024 The Parca Authors
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
 
 package luajit // import "go.opentelemetry.io/ebpf-profiler/interpreter/luajit"
 
@@ -16,10 +8,12 @@ import (
 	"fmt"
 	"io"
 
+	"golang.org/x/arch/x86/x86asm"
+
 	"go.opentelemetry.io/ebpf-profiler/asm/amd"
 	"go.opentelemetry.io/ebpf-profiler/asm/expression"
+	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
-	"golang.org/x/arch/x86/x86asm"
 )
 
 type x86Extractor struct {
@@ -65,7 +59,7 @@ which is a dynamic public symbol that should be in all binaries of LuaJIT includ
 // expression and read both offsets off it.
 //
 //nolint:nonamedreturns
-func (x *x86Extractor) findOffsetsFromLuaClose(b []byte) (glref, curL uint64, err error) {
+func (x *x86Extractor) findOffsetsFromLuaClose(b []byte) (glref, curL libpf.Address, err error) {
 	it := amd.NewInterpreterWithCode(b)
 	// SysV ABI passes lua_State *L in RDI. The interpreter initializes every
 	// register to a fresh Named expression, so RDI's initial value IS our L.
@@ -98,7 +92,7 @@ func (x *x86Extractor) findOffsetsFromLuaClose(b []byte) (glref, curL uint64, er
 		if it.Regs.GetX86(dst.Base).Match(
 			expression.Mem8(expression.Add(L, glrefCap)),
 		) {
-			return glrefCap.CapturedValue(), uint64(dst.Disp), nil
+			return libpf.Address(glrefCap.CapturedValue()), libpf.Address(dst.Disp), nil
 		}
 	}
 	return 0, 0, errors.New("find offsets from lua_close failed")
@@ -119,26 +113,26 @@ func isZeroOperand(arg x86asm.Arg, regs *amd.Registers) bool {
 }
 
 // This is different in most builds and we need to get it from stripped binaries.
-// The public symbol luaopen_jit gives is the best way in.  The first or second
-// thing it calls is lj_dispatch_update.  We can determine which because the first
+// The public symbol luaopen_jit is the best way in. The first or second
+// thing it calls is lj_dispatch_update. We can determine which because the first
 // arg is G which will come from the glref offset from L.  Ie:
 //
 //	0x000000000006a737 <+119>:   mov    0x10(%rbx),%rdi
 //	0x000000000006a73b <+123>:   call   0x16cf0
 //
 // Then we load the function 0x16cf0 and look at how it fills the per-G dispatch
-// table.  lj_dispatch_update emits an init loop bounded by two `lea OFS(%greg), %reg`
+// table. lj_dispatch_update emits an init loop bounded by two `lea OFS(%greg), %reg`
 // instructions whose displacements are the start and end of the dispatch table.
-// The smaller of the two displacements is normally the value we want.  The
+// The smaller of the two displacements is normally the value we want. The
 // compiler is free to emit the bounds in either order, and in some builds the
 // very first slot of the dispatch table is peeled off into a pre-loop
 // `mov %X, OFS(%greg)` store - in that case OFS sits a slot below the loop iter
 // LEA and that store's displacement is the canonical g2dispatch.
 // https://github.com/openresty/luajit2/blob/7952882d/src/lj_dispatch.c#L122
-func (x *x86Extractor) findG2DispatchOffsetFromLjDispatchUpdate(b []byte) (uint64, error) {
+func (x *x86Extractor) findG2DispatchOffsetFromLjDispatchUpdate(b []byte) (libpf.Address, error) {
 	type ref struct {
 		disp int64
-		pos  int
+		pos  uint64
 	}
 	var (
 		greg   x86asm.Reg
@@ -184,10 +178,10 @@ func (x *x86Extractor) findG2DispatchOffsetFromLjDispatchUpdate(b []byte) (uint6
 	}
 
 	if len(leas) == 0 {
-		return 0, nil
+		return 0, errors.New("g to dispatch offset not found")
 	}
 	if len(leas) == 1 {
-		return uint64(leas[0].disp), nil
+		return libpf.Address(leas[0].disp), nil
 	}
 
 	// Look for a pair of LEAs off greg whose displacements differ by no more
@@ -213,13 +207,13 @@ func (x *x86Extractor) findG2DispatchOffsetFromLjDispatchUpdate(b []byte) (uint6
 					best = s.disp
 				}
 			}
-			return uint64(best), nil
+			return libpf.Address(best), nil
 		}
 	}
 
 	// No recognizable loop pair - fall back to the first LEA, matching the
 	// historical heuristic.
-	return uint64(leas[0].disp), nil
+	return libpf.Address(leas[0].disp), nil
 }
 
 // Find first or second call address, the one whose first argument is 0x10 off of
@@ -252,9 +246,9 @@ func (x *x86Extractor) findG2DispatchOffsetFromLjDispatchUpdate(b []byte) (uint6
 // libluajit-5.1.so[0x64e46] <+118>: callq  0x15c90        ; lj_dispatch_update at lj_dispatch.c:109:53
 //
 //nolint:lll
-func (x *x86Extractor) findLjDispatchUpdateAddr(b []byte, addr uint64) (uint64, error) {
+func (x *x86Extractor) findLjDispatchUpdateAddr(b []byte, addr libpf.Address) (libpf.Address, error) {
 	it := amd.NewInterpreterWithCode(b)
-	it.CodeAddress = expression.Imm(addr)
+	it.CodeAddress = expression.Imm(uint64(addr))
 	// L is initial RDI (SysV first arg). lj_dispatch_update's first arg is G,
 	// reached via L->glref at offset 0x10. We don't care which register the
 	// compiler parks L in - symbolic tracking handles the chain.
@@ -281,11 +275,8 @@ func (x *x86Extractor) findLjDispatchUpdateAddr(b []byte, addr uint64) (uint64, 
 		}
 		// it.PC() is the offset past the CALL within the interpreter's bytes,
 		// which equals the offset in the caller's bytes since we started at 0.
-		callAddr := int64(addr) + int64(it.PC()) + int64(rel)
-		if callAddr < 0 {
-			return 0, errors.New("invalid call address")
-		}
-		return uint64(callAddr), nil
+		callAddr := libpf.Address(addr) + libpf.Address(it.PC()) + libpf.Address(rel)
+		return callAddr, nil
 	}
 	return 0, errors.New("lj_dispatch_update addr not found")
 }
@@ -307,11 +298,11 @@ func (x *x86Extractor) findLjDispatchUpdateAddr(b []byte, addr uint64) (uint64, 
 // Some builds apply an ADD/SUB constant to the register holding G before the
 // final load; the symbolic interpreter folds those into the address expression
 // for free, so the captured displacement is the true G->traces offset.
-func (x *x86Extractor) findG2TracesOffsetFromChecktrace(b []byte) (uint64, error) {
+func (x *x86Extractor) findG2TracesOffsetFromChecktrace(b []byte) (libpf.Address, error) {
 	it := amd.NewInterpreterWithCode(b)
 	// L is initial RDI; G is L->glref. glref is hard-wired at 0x10 in the
 	// LJ_GC64 layout (findOffsetsFromLuaClose enforces this assumption
-	// before extractOffsets gets here).
+	// before newLuajitData gets here).
 	L := it.Regs.GetX86(x86asm.RDI)
 	G := expression.Mem8(expression.Add(L, expression.Imm(0x10)))
 	tracesCap := expression.NewImmediateCapture("g2traces")
@@ -338,13 +329,13 @@ func (x *x86Extractor) findG2TracesOffsetFromChecktrace(b []byte) (uint64, error
 			continue
 		}
 		if it.Regs.GetX86(dstReg).Match(pattern) {
-			return tracesCap.CapturedValue(), nil
+			return libpf.Address(tracesCap.CapturedValue()), nil
 		}
 	}
 	return 0, errors.New("offset not found")
 }
 
-func (x *x86Extractor) findFirstCall(b []byte, baseAddr int64) (uint64, error) {
+func (x *x86Extractor) findFirstCall(b []byte, baseAddr libpf.Address) (libpf.Address, error) {
 	it := amd.NewInterpreterWithCode(b)
 	it.CodeAddress = expression.Imm(uint64(baseAddr))
 	for {
@@ -358,8 +349,8 @@ func (x *x86Extractor) findFirstCall(b []byte, baseAddr int64) (uint64, error) {
 		if i.Op == x86asm.CALL {
 			a0, ok := i.Args[0].(x86asm.Rel)
 			if ok {
-				callAddr := baseAddr + int64(it.PC()) + int64(a0)
-				return uint64(callAddr), nil
+				callAddr := baseAddr + libpf.Address(it.PC()) + libpf.Address(a0)
+				return callAddr, nil
 			}
 		}
 	}
@@ -367,7 +358,7 @@ func (x *x86Extractor) findFirstCall(b []byte, baseAddr int64) (uint64, error) {
 }
 
 // Return true if the code in b calls targetCall.
-func (x *x86Extractor) callExists(b []byte, baseAddr, targetCall int64) (bool, error) {
+func (x *x86Extractor) callExists(b []byte, baseAddr, targetCall libpf.Address) (bool, error) {
 	it := amd.NewInterpreterWithCode(b)
 	it.CodeAddress = expression.Imm(uint64(baseAddr))
 	for {
@@ -382,7 +373,7 @@ func (x *x86Extractor) callExists(b []byte, baseAddr, targetCall int64) (bool, e
 		if i.Op == x86asm.CALL {
 			a0, ok := i.Args[0].(x86asm.Rel)
 			if ok {
-				callAddr := baseAddr + int64(it.PC()) + int64(a0)
+				callAddr := baseAddr + libpf.Address(it.PC()) + libpf.Address(a0)
 				if callAddr == targetCall {
 					return true, nil
 				}
@@ -398,7 +389,7 @@ func (x *x86Extractor) callExists(b []byte, baseAddr, targetCall int64) (bool, e
 // 1545e:	e8 cd 1e 09 00       	call   a7330 <lua_pushcclosure@@Base>
 //
 //nolint:lll
-func (x *x86Extractor) find2ndArgTo2ndPushClosureCall(b []byte, baseAddr, targetCall int64) (uint64, error) {
+func (x *x86Extractor) find2ndArgTo2ndPushClosureCall(b []byte, baseAddr, targetCall libpf.Address) (libpf.Address, error) {
 	it := amd.NewInterpreterWithCode(b)
 	it.CodeAddress = expression.Imm(uint64(baseAddr))
 	callsLeft := 2
@@ -418,7 +409,7 @@ func (x *x86Extractor) find2ndArgTo2ndPushClosureCall(b []byte, baseAddr, target
 		if !ok {
 			continue
 		}
-		if baseAddr+int64(it.PC())+int64(rel) != targetCall {
+		if baseAddr+libpf.Address(it.PC())+libpf.Address(rel) != targetCall {
 			continue
 		}
 		callsLeft--
@@ -433,15 +424,15 @@ func (x *x86Extractor) find2ndArgTo2ndPushClosureCall(b []byte, baseAddr, target
 		if !it.Regs.GetX86(x86asm.RSI).Match(rsiCap) {
 			return 0, errors.New("RSI is not a concrete address at the 2nd matching call")
 		}
-		return rsiCap.CapturedValue(), nil
+		return libpf.Address(rsiCap.CapturedValue()), nil
 	}
 	return 0, errors.New("failed to find rip relative lea instruction stored in rsi")
 }
 
 //nolint:gocritic
-func skipCallsAABA(it *amd.Interpreter, baseAddr int64) error {
-	var lastCall int64
-	var acall int64
+func skipCallsAABA(it *amd.Interpreter, baseAddr libpf.Address) error {
+	var lastCall libpf.Address
+	var acall libpf.Address
 	// 3 Step process, 1 is find AA, 2 is find B and 3 is find A.
 	step := 0
 
@@ -457,7 +448,7 @@ func skipCallsAABA(it *amd.Interpreter, baseAddr int64) error {
 		}
 		a0, ok := i.Args[0].(x86asm.Rel)
 		if ok {
-			callAddr := baseAddr + int64(it.PC()) + int64(a0)
+			callAddr := baseAddr + libpf.Address(it.PC()) + libpf.Address(a0)
 			if step == 0 && callAddr == lastCall {
 				// Found potential AA
 				step = 1
@@ -491,7 +482,7 @@ func skipCallsAABA(it *amd.Interpreter, baseAddr int64) error {
 // 6d96c:	48 8d 15 ed e2 ff ff 	lea    -0x1d13(%rip),%rdx    # 6bc60 <luaopen_jit_util>
 // 6d973:	48 8d 35 1c a2 00 00 	lea    0xa21c(%rip),%rsi     # 77b96 <lj_lib_init_debug+0x236>
 // 6d97a:	e8 a1 28 ff ff       	call   60220 <lj_lib_prereg>
-func (x *x86Extractor) find3rdArgToLibPreregCall(b []byte, baseAddr int64) (uint64, error) {
+func (x *x86Extractor) find3rdArgToLibPreregCall(b []byte, baseAddr libpf.Address) (libpf.Address, error) {
 	// Skip the lua_push* call sequence (and all the preceding calls which varies depending on
 	// inlining).
 	// libluajit-5.1.so[0x700a5] <+133>: movq   %rbx, %rdi
@@ -540,7 +531,7 @@ func (x *x86Extractor) find3rdArgToLibPreregCall(b []byte, baseAddr int64) (uint
 		if !it.Regs.GetX86(x86asm.RDX).Match(rdxCap) {
 			return 0, errors.New("RDX is not a concrete value at the 3rd post-AABA call")
 		}
-		return rdxCap.CapturedValue(), nil
+		return libpf.Address(rdxCap.CapturedValue()), nil
 	}
 	return 0, errors.New("failed to find 3rd arg to lj_lib_prereg call")
 }
@@ -555,7 +546,7 @@ func (x *x86Extractor) find3rdArgToLibPreregCall(b []byte, baseAddr int64) (uint
 // bbb9:	b8 01 00 00 00       	mov    $0x1,%eax
 // bbbe:	48 83 c4 08          	add    $0x8,%rsp
 // bbc2:	c3                   	ret
-func (x *x86Extractor) find4thArgToLibRegCall(b []byte, baseAddr int64) (int64, error) {
+func (x *x86Extractor) find4thArgToLibRegCall(b []byte, baseAddr libpf.Address) (libpf.Address, error) {
 	it := amd.NewInterpreterWithCode(b)
 	it.CodeAddress = expression.Imm(uint64(baseAddr))
 	// luaopen_jit_util's body is: set up call args (RCX via either
@@ -571,5 +562,5 @@ func (x *x86Extractor) find4thArgToLibRegCall(b []byte, baseAddr int64) (int64, 
 	if !it.Regs.GetX86(x86asm.RCX).Match(rcxCap) {
 		return 0, errors.New("failed to find 4th arg to lj_reg call")
 	}
-	return int64(rcxCap.CapturedValue()), nil
+	return libpf.Address(rcxCap.CapturedValue()), nil
 }

@@ -36,10 +36,6 @@ const (
 	// events are produced by the kernel between two polling intervals, the queue from bpf
 	// to userspace will fill up and the kernel will start dropping events.
 	maxEvents = 4096
-
-	// eventReaderDeadline is the timeout for perf event reads. It allows the
-	// reader goroutine to periodically check for context cancellation.
-	eventReaderDeadline = 100 * time.Millisecond
 )
 
 // StartPIDEventProcessor spawns a goroutine to process PID events.
@@ -87,7 +83,7 @@ func (t *Tracer) triggerReportEvent(data []byte) {
 }
 
 // startPerfEventMonitor spawns a goroutine that receives events from the given
-// perf event map by waiting for events the kernel. Every event in the buffer
+// perf event map by waiting for events from the kernel. Every event in the buffer
 // will wake up userspace.
 //
 // For each received event, triggerFunc is called. triggerFunc may NOT store
@@ -99,28 +95,22 @@ func startPerfEventMonitor(ctx context.Context, perfEventMap *ebpf.Map,
 ) (func() (lost, noData, readError uint64), error) {
 	eventReader, err := perf.NewReader(perfEventMap, perCPUBufferSize)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to setup perf reporting via %s: %v", perfEventMap, err)
+		return nil, fmt.Errorf("failed to setup perf reporting via %s: %v", perfEventMap, err)
 	}
-
-	// Set a deadline so ReadInto times out periodically and we can check context
-	eventReader.SetDeadline(time.Now().Add(eventReaderDeadline))
 
 	var lostEventsCount, readErrorCount, noDataCount atomic.Uint64
 	go func() {
 		defer eventReader.Close()
+		context.AfterFunc(ctx, func() { _ = eventReader.Close() })
+
 		var data perf.Record
 		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-			// Set a deadline so ReadInto times out and we can check context
-			eventReader.SetDeadline(time.Now().Add(eventReaderDeadline))
+
 			if err := eventReader.ReadInto(&data); err != nil {
-				if !errors.Is(err, os.ErrDeadlineExceeded) {
-					readErrorCount.Add(1)
+				if errors.Is(err, os.ErrClosed) {
+					return
 				}
+				readErrorCount.Add(1)
 				continue
 			}
 			if data.LostSamples != 0 {
@@ -154,7 +144,7 @@ func (t *Tracer) startTraceEventMonitor(ctx context.Context,
 	eventsMap := t.ebpfMaps["trace_events"]
 	eventReader, err := ringbuf.NewReader(eventsMap)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to setup ringbuf reporting via %s: %v", eventsMap, err)
+		return nil, fmt.Errorf("failed to setup ringbuf reporting via %s: %v", eventsMap, err)
 	}
 
 	// A deadline of zero is treated as "no deadline". A deadline in the past
@@ -312,7 +302,7 @@ func (t *Tracer) startTraceEventMonitor(ctx context.Context,
 func (t *Tracer) startEventMonitor(ctx context.Context) (func() []metrics.Metric, error) {
 	eventMap, ok := t.ebpfMaps["report_events"]
 	if !ok {
-		return nil, fmt.Errorf("Map report_events is not available")
+		return nil, fmt.Errorf("map report_events is not available")
 	}
 
 	getPerfErrorCounts, err := startPerfEventMonitor(ctx, eventMap, t.triggerReportEvent, os.Getpagesize())

@@ -20,17 +20,16 @@ type LoaderInfo struct {
 	fileID host.FileID
 	// elfRef provides a cached access to the ELF file.
 	elfRef *pfelf.Reference
-	// deltas contains the stack deltas for the executable.
-	deltas sdtypes.StackDeltaArray
+	// intervals provides a cached access to interval data.
+	intervals *sdtypes.IntervalData
 }
 
 // NewLoaderInfo returns a populated LoaderInfo struct.
-func NewLoaderInfo(fileID host.FileID, elfRef *pfelf.Reference,
-	deltas sdtypes.StackDeltaArray) *LoaderInfo {
+func NewLoaderInfo(fileID host.FileID, elfRef *pfelf.Reference, intervals *sdtypes.IntervalData) *LoaderInfo {
 	return &LoaderInfo{
-		fileID: fileID,
-		elfRef: elfRef,
-		deltas: deltas,
+		fileID:    fileID,
+		elfRef:    elfRef,
+		intervals: intervals,
 	}
 }
 
@@ -66,7 +65,10 @@ func (i *LoaderInfo) FileName() string {
 	return i.elfRef.FileName()
 }
 
-// Deltas returns the stack deltas for the executable of this LoaderInfo.
-func (i *LoaderInfo) Deltas() sdtypes.StackDeltaArray {
-	return i.deltas
+// Intervals returns the intervals element of the LoaderInfo struct.
+func (i *LoaderInfo) Intervals() *sdtypes.IntervalData {
+	if i.intervals == nil {
+		i.intervals = &sdtypes.IntervalData{}
+	}
+	return i.intervals
 }

@@ -1,13 +1,5 @@
-// Copyright 2024 The Parca Authors
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
 
 package luajit // import "go.opentelemetry.io/ebpf-profiler/interpreter/luajit"
 
@@ -23,18 +15,42 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
+const (
+	ljVMAsmBeginSym         libpf.SymbolName = "lj_vm_asm_begin"
+	jitChecktraceSym        libpf.SymbolName = "jit_checktrace"
+	ljCFJitUtilTraceinfoSym libpf.SymbolName = "lj_cf_jit_util_traceinfo"
+	luaPushCClosureSym      libpf.SymbolName = "lua_pushcclosure"
+	luaopenJitSym           libpf.SymbolName = "luaopen_jit"
+	luaCloseSym             libpf.SymbolName = "lua_close"
+)
+
 func scanSymbols(ef *pfelf.File) map[libpf.SymbolName]libpf.Symbol {
 	interestingSymbols := map[libpf.SymbolName]struct{}{
-		"lj_vm_asm_begin":          {},
-		"jit_checktrace":           {},
-		"lj_cf_jit_util_traceinfo": {},
-		"lua_pushcclosure":         {},
-		"luaopen_jit":              {},
-		"lua_close":                {},
+		ljVMAsmBeginSym:         {},
+		jitChecktraceSym:        {},
+		ljCFJitUtilTraceinfoSym: {},
+		luaPushCClosureSym:      {},
+		luaopenJitSym:           {},
+		luaCloseSym:             {},
 	}
 
 	foundSymbols := map[libpf.SymbolName]libpf.Symbol{}
 
+	for name := range interestingSymbols {
+		if sym, err := ef.LookupSymbol(name); sym != nil && err == nil {
+			foundSymbols[name] = *sym
+			delete(interestingSymbols, name)
+		}
+	}
+
+	// It's unlikely we found all of these in dynamic symbols,
+	// but just in case, let's return now to avoid the scan in `VisitSymbols`.
+	if len(interestingSymbols) == 0 {
+		return foundSymbols
+	}
+
+	// We didn't find all the symbols in the dynamic symbols, so try again
+	// on the non-dynamic symbols, which requires a full scan.
 	visitor := func(sym libpf.Symbol) bool {
 		if _, ok := interestingSymbols[sym.Name]; ok {
 			foundSymbols[sym.Name] = sym
@@ -44,10 +60,6 @@ func scanSymbols(ef *pfelf.File) map[libpf.SymbolName]libpf.Symbol {
 	}
 	if err := ef.VisitSymbols(visitor); err != nil {
 		log.Warnf("failed to read symbols: %v", err)
-	}
-
-	if err := ef.VisitDynamicSymbols(visitor); err != nil {
-		log.Warnf("failed to read dynamic symbols: %v", err)
 	}
 
 	return foundSymbols
@@ -72,45 +84,46 @@ func scanSymbols(ef *pfelf.File) map[libpf.SymbolName]libpf.Symbol {
 //
 // Some versions of openresty have a stripped luajit which makes things a little more
 // complicated because we have to start from a public symbol and work our way around.
-func extractOffsets(ef *pfelf.File, ljd *luajitData, ir util.Range) error {
-	oft := offsetData{}
-	if err := oft.init(ef); err != nil {
-		return err
+func newLuajitData(ef *pfelf.File, ir util.Range) (*luajitData, error) {
+	ljd := luajitData{}
+	oft, err := newOffsetData(ef)
+	if err != nil {
+		return nil, err
 	}
 
 	curLOffset, err := oft.findCurLOffset()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if curLOffset > 0x7fff {
-		return fmt.Errorf("lj: curL offset %v is too large", curLOffset)
+		return nil, fmt.Errorf("lj: curL offset %v is too large", curLOffset)
 	}
-	ljd.currentLOffset = curLOffset
+	ljd.currentLOffset = uint16(curLOffset)
 
 	g2Traces, err := oft.findG2TracesOffset()
 	if err != nil {
-		return fmt.Errorf("lj: failed to find g2traces offset: %v", err)
+		return nil, fmt.Errorf("lj: failed to find g2traces offset: %v", err)
 	}
 	if g2Traces > 0xffff {
-		return fmt.Errorf("lj: g to traces offset %v is too large", g2Traces)
+		return nil, fmt.Errorf("lj: g to traces offset %v is too large", g2Traces)
 	}
 	ljd.g2Traces = uint16(g2Traces)
 
 	g2dispatch, err := oft.findG2DispatchOffset()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if g2dispatch > 0xffff {
-		return fmt.Errorf("lj: dispatch_L offset %v is too large", g2dispatch)
+		return nil, fmt.Errorf("lj: dispatch_L offset %v is too large", g2dispatch)
 	}
 	ljd.g2Dispatch = uint16(g2dispatch)
 
 	// If we have symbols we can check that the start address is correct.
-	if s, e := oft.lookupSymbol("lj_vm_asm_begin"); e == nil && ir.Start != uint64(s.Address) {
-		return fmt.Errorf("lj: unexpected start address %x, expected %x", s.Address, ir.Start)
+	if s, ok := oft.foundSymbols[ljVMAsmBeginSym]; ok && ir.Start != uint64(s.Address) {
+		return nil, fmt.Errorf("lj: unexpected start address %x, expected %x", s.Address, ir.Start)
 	}
 
-	return nil
+	return &ljd, nil
 }
 
 type extractor interface {
@@ -125,17 +138,17 @@ type extractor interface {
 	// #endif
 	//
 	//	setgcrefnull(g->cur_L);   <---- DING DING DING
-	findOffsetsFromLuaClose(b []byte) (uint64, uint64, error)
+	findOffsetsFromLuaClose(b []byte) (libpf.Address, libpf.Address, error)
 
 	// Find call to lj_dispatch_update in luaopen_jit by looking for
 	// first call being passed G loaded from L->glref.
-	findLjDispatchUpdateAddr(b []byte, addr uint64) (uint64, error)
+	findLjDispatchUpdateAddr(b []byte, addr libpf.Address) (libpf.Address, error)
 
 	// luaopen_jit calls jit_init which calls lj_dispatch_update. lj_dispatch_update
 	// has this line near the beginning:
 	//   ASMFunction *disp = G2GG(g)->dispatch;
 	// Use this line to find the g2dispatch offset.
-	findG2DispatchOffsetFromLjDispatchUpdate(b []byte) (uint64, error)
+	findG2DispatchOffsetFromLjDispatchUpdate(b []byte) (libpf.Address, error)
 
 	// jit_checktrace does this:
 	//
@@ -146,62 +159,66 @@ type extractor interface {
 	// L2J will find J relative to G and traceref will find traces
 	// relative to J so we find both offsets and add them to get
 	// g2traces offset.
-	findG2TracesOffsetFromChecktrace([]byte) (uint64, error)
+	findG2TracesOffsetFromChecktrace([]byte) (libpf.Address, error)
 
 	// Return true if the code in b calls targetCall.
-	callExists(b []byte, baseAddr, targetCall int64) (bool, error)
+	callExists(b []byte, baseAddr, targetCall libpf.Address) (bool, error)
 
-	findFirstCall(b []byte, baseAddr int64) (uint64, error)
+	findFirstCall(b []byte, baseAddr libpf.Address) (libpf.Address, error)
 
-	find3rdArgToLibPreregCall(b []byte, baseAddr int64) (uint64, error)
+	find3rdArgToLibPreregCall(b []byte, baseAddr libpf.Address) (libpf.Address, error)
 
-	find4thArgToLibRegCall(b []byte, baseAddr int64) (int64, error)
+	find4thArgToLibRegCall(b []byte, baseAddr libpf.Address) (libpf.Address, error)
 
 	// find2ndArgTo2ndPushClosureCall finds the address of the
 	// second argument to the second "lua_pushcclosure" call,
 	// whose address appears in `targetCall`.
 	//
 	// This is used to find the address of `luaopen_jit_util` from the code of `luaopen_jit`.
-	find2ndArgTo2ndPushClosureCall(b []byte, baseAddr, targetCall int64) (uint64, error)
+	find2ndArgTo2ndPushClosureCall(b []byte, baseAddr, targetCall libpf.Address) (libpf.Address, error)
 }
 
-func newExtractor(ef *pfelf.File) extractor {
+func newExtractor(ef *pfelf.File) (extractor, error) {
 	switch ef.Machine {
 	case elf.EM_X86_64:
-		return &x86Extractor{ef: ef}
+		return &x86Extractor{ef: ef}, nil
 	case elf.EM_AARCH64:
-		return &armExtractor{ef: ef}
+		return &armExtractor{ef: ef}, nil
 	default:
-		panic("unexpected architecture")
+		return nil, fmt.Errorf("unexpected architecture: %s", ef.Machine)
 	}
 }
 
 type offsetData struct {
 	f              *pfelf.File
 	luajitOpen     []byte
-	luajitOpenAddr uint64
+	luajitOpenAddr libpf.Address
 	e              extractor
 	foundSymbols   map[libpf.SymbolName]libpf.Symbol
 }
 
-func (o *offsetData) init(ef *pfelf.File) error {
+func newOffsetData(ef *pfelf.File) (*offsetData, error) {
+	o := offsetData{}
 	o.f = ef
-	o.e = newExtractor(ef)
+	extractor, err := newExtractor(ef)
+	if err != nil {
+		return nil, err
+	}
+	o.e = extractor
 
-	var err error
 	o.foundSymbols = scanSymbols(ef)
 	// Two extractors use luaopen_jit so cache it.
-	b, addr, err := o.readSymByName("luaopen_jit")
+	b, addr, err := o.readSymByName(luaopenJitSym)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	o.luajitOpen = b
-	o.luajitOpenAddr = uint64(addr)
-	return nil
+	o.luajitOpenAddr = libpf.Address(addr)
+	return &o, nil
 }
 
-func (o *offsetData) findCurLOffset() (uint16, error) {
-	b, _, err := o.readSymByName("lua_close")
+func (o *offsetData) findCurLOffset() (libpf.Address, error) {
+	b, _, err := o.readSymByName(luaCloseSym)
 	if err != nil {
 		return 0, err
 	}
@@ -215,10 +232,10 @@ func (o *offsetData) findCurLOffset() (uint16, error) {
 		//nolint: lll
 		return 0, fmt.Errorf("unexpected glref offset %x, only luajit with LJ_GC64 is supported", glref)
 	}
-	return uint16(curL), nil
+	return curL, nil
 }
 
-func (o *offsetData) findG2DispatchOffset() (uint64, error) {
+func (o *offsetData) findG2DispatchOffset() (libpf.Address, error) {
 	luaDispatchUpdateAddr, err := o.e.findLjDispatchUpdateAddr(o.luajitOpen, o.luajitOpenAddr)
 	if err != nil {
 		return 0, err
@@ -231,8 +248,8 @@ func (o *offsetData) findG2DispatchOffset() (uint64, error) {
 	return o.e.findG2DispatchOffsetFromLjDispatchUpdate(b)
 }
 
-func (o *offsetData) findG2TracesOffset() (uint64, error) {
-	if sym, err := o.lookupSymbol("jit_checktrace"); err == nil {
+func (o *offsetData) findG2TracesOffset() (libpf.Address, error) {
+	if sym, ok := o.foundSymbols[jitChecktraceSym]; ok {
 		// easiest case
 		b, err := o.readSym(sym)
 		if err != nil {
@@ -242,7 +259,7 @@ func (o *offsetData) findG2TracesOffset() (uint64, error) {
 	}
 
 	// jit_checktrace could be inlined or we could be dealing with a stripped binary
-	if sym, err := o.lookupSymbol("lj_cf_jit_util_traceinfo"); err == nil {
+	if sym, ok := o.foundSymbols[ljCFJitUtilTraceinfoSym]; ok {
 		// Inline case
 		b, er := o.readSym(sym)
 		if er != nil {
@@ -257,7 +274,7 @@ func (o *offsetData) findG2TracesOffset() (uint64, error) {
 		return 0, err
 	}
 
-	b, err := o.readSym(sym)
+	b, err := o.readSym(*sym)
 	if err != nil {
 		return 0, err
 	}
@@ -270,7 +287,7 @@ func (o *offsetData) findG2TracesOffset() (uint64, error) {
 
 	addr, err := o.e.findG2TracesOffsetFromChecktrace(b)
 	if err != nil {
-		callAddr, err := o.e.findFirstCall(b, int64(sym.Address))
+		callAddr, err := o.e.findFirstCall(b, libpf.Address(sym.Address))
 		if err != nil {
 			return 0, err
 		}
@@ -297,13 +314,13 @@ func (o *offsetData) findG2TracesOffset() (uint64, error) {
 // which will be an argument to lj_lib_register.  Finally the lj_cf_jit_util_traceinfo function
 // will be the 4th element of that array.
 func (o *offsetData) findTraceInfoFromLuaOpen() (*libpf.Symbol, error) {
-	pushCClosure, err := o.lookupSymbol("lua_pushcclosure")
-	if err != nil {
-		return nil, err
+	pushCClosure, ok := o.foundSymbols[luaPushCClosureSym]
+	if !ok {
+		return nil, libpf.ErrSymbolNotFound
 	}
-	pushClosureAddr := int64(pushCClosure.Address)
-	baseAddr := int64(o.luajitOpenAddr)
-	var luaopenJitUtilAddr uint64
+	pushClosureAddr := libpf.Address(pushCClosure.Address)
+	baseAddr := o.luajitOpenAddr
+	var luaopenJitUtilAddr libpf.Address
 	inlined, err := o.e.callExists(o.luajitOpen, baseAddr, pushClosureAddr)
 	if err != nil {
 		return nil, err
@@ -329,13 +346,13 @@ func (o *offsetData) findTraceInfoFromLuaOpen() (*libpf.Symbol, error) {
 	if err != nil {
 		return nil, err
 	}
-	libJitFunctionAddresses, err := o.e.find4thArgToLibRegCall(b, int64(luaopenJitUtilAddr))
+	libJitFunctionAddresses, err := o.e.find4thArgToLibRegCall(b, luaopenJitUtilAddr)
 	if err != nil {
 		return nil, err
 	}
 
 	// libJitFunctionAddresses should be this static array:
-	// No permalinks for generated code, its in lj_libdef.h
+	// No permalinks for generated code, it's in lj_libdef.h
 	// static const lua_CFunction lj_lib_cf_jit_util[] = {
 	// 	lj_cf_jit_util_funcinfo,
 	// 	lj_cf_jit_util_funcbc,
@@ -350,18 +367,18 @@ func (o *offsetData) findTraceInfoFromLuaOpen() (*libpf.Symbol, error) {
 	// 	lj_cf_jit_util_ircalladdr
 	//   };
 	const traceInfoIndex = 4
-	funcAddrs := make([]uint64, 12)
-	_, err = o.f.ReadAt(pfunsafe.FromSlice(funcAddrs), libJitFunctionAddresses)
+	funcAddrs := make([]uint64, 11)
+	_, err = o.f.ReadAt(pfunsafe.FromSlice(funcAddrs), int64(libJitFunctionAddresses))
 	if err != nil {
 		return nil, err
 	}
 
 	traceInfoAddr := funcAddrs[traceInfoIndex]
 
-	// Derive size by sorting and seeing offset to next function, swag if its last (it won't be).
+	// Derive size by sorting and seeing offset to next function, swag if it's last (it won't be).
 	slices.Sort(funcAddrs)
 
-	// Its a tiny function, give it reasonable default.
+	// It's a tiny function, give it reasonable default.
 	traceInfoSize := uint64(100)
 	for i, addr := range funcAddrs {
 		if addr == traceInfoAddr && i != len(funcAddrs)-1 {
@@ -371,12 +388,12 @@ func (o *offsetData) findTraceInfoFromLuaOpen() (*libpf.Symbol, error) {
 	}
 
 	return &libpf.Symbol{
-		Name:    "lj_cf_jit_util_traceinfo",
+		Name:    ljCFJitUtilTraceinfoSym,
 		Address: libpf.SymbolValue(traceInfoAddr),
 		Size:    traceInfoSize}, nil
 }
 
-func (o *offsetData) readSym(sym *libpf.Symbol) ([]byte, error) {
+func (o *offsetData) readSym(sym libpf.Symbol) ([]byte, error) {
 	b := make([]byte, sym.Size)
 	n, err := o.f.ReadAt(b, int64(sym.Address))
 	if err != nil {
@@ -388,25 +405,14 @@ func (o *offsetData) readSym(sym *libpf.Symbol) ([]byte, error) {
 	return b, nil
 }
 
-func (o *offsetData) lookupSymbol(name libpf.SymbolName) (s *libpf.Symbol, err error) {
-	s, err = o.f.LookupSymbol(name)
-	if err == libpf.ErrSymbolNotFound && o.foundSymbols != nil {
-		if sym, ok := o.foundSymbols[name]; ok {
-			s = &sym
-			err = nil
-		}
-	}
-	return s, err
-}
-
 //nolint:gocritic
-func (o *offsetData) readSymByName(name string) ([]byte, int64, error) {
-	sym, err := o.lookupSymbol(libpf.SymbolName(name))
-	if err != nil {
-		return nil, 0, err
+func (o *offsetData) readSymByName(name libpf.SymbolName) ([]byte, int64, error) {
+	sym, ok := o.foundSymbols[name]
+	if !ok {
+		return nil, 0, libpf.ErrSymbolNotFound
 	}
 	b := make([]byte, sym.Size)
-	_, err = o.f.ReadAt(b, int64(sym.Address))
+	_, err := o.f.ReadAt(b, int64(sym.Address))
 	if err != nil {
 		return nil, 0, err
 	}

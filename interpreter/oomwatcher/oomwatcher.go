@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/parca-dev/oomprof/oomprof"
+
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"

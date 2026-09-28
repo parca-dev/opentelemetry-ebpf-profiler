@@ -8,12 +8,12 @@ package golang // import "go.opentelemetry.io/ebpf-profiler/interpreter/go"
 import (
 	"fmt"
 
+	"golang.org/x/arch/arm64/arm64asm"
+
 	"go.opentelemetry.io/ebpf-profiler/asm/arm"
-	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/nativeunwind/elfunwindinfo"
-	"golang.org/x/arch/arm64/arm64asm"
 )
 
 // runtime.load_g starts by loading runtime.iscgo before deciding how to
@@ -109,8 +109,7 @@ func extractRuntimeIsCgo(f *pfelf.File, b []byte, pc int64) (bool, int, error) {
 func extractTLSGOffset(f *pfelf.File) (int32, error) {
 	pclntab, err := elfunwindinfo.NewGopclntab(f)
 	if err != nil {
-		log.Debugf("Failed to find symbols (%v) using default TLSG offset", err)
-		return 0, nil
+		return 0, err
 	}
 	defer pclntab.Close()
 

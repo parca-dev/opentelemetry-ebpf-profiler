@@ -19,10 +19,40 @@
 //                                (from types.h)
 //   - MAX_CUSTOM_LABELS, CUSTOM_LABEL_MAX_KEY_LEN, CUSTOM_LABEL_MAX_VAL_LEN
 //                                (from types.h)
-//   - MIN(a, b)                  (from bpfdefs.h)
+//   - MIN(a, b), barrier_var(v)  (from bpfdefs.h)
 
 #ifndef OPTI_NATIVE_CUSTOM_LABELS_H
 #define OPTI_NATIVE_CUSTOM_LABELS_H
+
+// BOUNDED_LEN clamps a label length to `max` and then re-asserts that bound in
+// a form the verifier cannot lose.
+//
+// The arm64 verifier on 6.6 and 6.8 rejects the label reads below with
+//
+//   R2 min value is negative, either use unsigned or 'var &= const'
+//
+// after only ~2750 instructions, so this is not a program-size problem. What
+// happens is that clang materializes the clamp's result on the stack *before*
+// the comparison that bounds it, and then reloads it at each use. Those kernels
+// refine the bound on the register the branch tested but not on the stack slot
+// it was already spilled to, so every reload is an unbounded scalar --
+// possibly negative -- whether it is used as a helper size argument or as an
+// index added to a map_value pointer. Kernels from 6.9 on propagate the
+// refinement into spilled slots and accept the same blob, which is why only the
+// two older arm64 entries in the distro-qemu matrix fail.
+//
+// `mask` must cover `max`, so the AND is a no-op at runtime and exists only to
+// give the verifier a bound it cannot lose. barrier_var() is what keeps it:
+// without it clang sees the value is already below the mask and folds the AND
+// away. Use the result for *every* use of the length, not just the helper call.
+#define BOUNDED_LEN(len, max, mask)                                                                \
+  ({                                                                                               \
+    _Static_assert((mask) >= (max), "BOUNDED_LEN mask must cover max");                            \
+    unsigned _len = MIN((len), (max));                                                             \
+    barrier_var(_len);                                                                             \
+    _len &= (mask);                                                                                \
+    _len;                                                                                          \
+  })
 
 static EBPF_INLINE u64 addr_for_tls_symbol(u64 symbol, bool dtv)
 {
@@ -118,14 +148,14 @@ read_labelset_into_trace(PerCPURecord *record, NativeCustomLabelsSet *p_current_
     if (!lbl->key.buf)
       continue;
     CustomLabel *out_lbl = &out->labels[ct];
-    unsigned klen        = MIN(lbl->key.len, CUSTOM_LABEL_MAX_KEY_LEN);
+    unsigned klen        = BOUNDED_LEN(lbl->key.len, CUSTOM_LABEL_MAX_KEY_LEN, 0x1f);
     if ((err = bpf_probe_read_user(out_lbl->key, klen, (void *)lbl->key.buf))) {
       increment_metric(metricID_UnwindNativeCustomLabelsErrReadKey);
       DEBUG_PRINT("cl: failed to read label key: %d", err);
       goto exit;
     }
     out_lbl->key[klen] = 0;
-    unsigned vlen      = MIN(lbl->value.len, CUSTOM_LABEL_MAX_VAL_LEN);
+    unsigned vlen      = BOUNDED_LEN(lbl->value.len, CUSTOM_LABEL_MAX_VAL_LEN, 0x3f);
     if ((err = bpf_probe_read_user(out_lbl->val, vlen, (void *)lbl->value.buf))) {
       increment_metric(metricID_UnwindNativeCustomLabelsErrReadValue);
       DEBUG_PRINT("cl: failed to read label value: %d", err);
