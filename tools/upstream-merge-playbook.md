@@ -115,6 +115,24 @@ When the script stops, the workflow at each stop is the same:
    different thing from `-s` (`--signoff`) — verify with `git log --show-signature`
    or `git log --format='%h %G?'`.
 
+### Rebuilding the BPF blobs
+
+The blobs are checked in, and CI (`.github/workflows/unit-test-ebpf.yml`)
+rebuilds them in a pinned `otel/opentelemetry-ebpf-profiler-dev` image and
+fails on any byte difference, with no useful diff. The script rebuilds with
+whatever clang is on `PATH`. If the blob check fails, rebuild in CI's image:
+
+```bash
+docker run --rm --platform linux/arm64 --entrypoint bash -v "$PWD:/src" -w /src \
+  otel/opentelemetry-ebpf-profiler-dev:latest@sha256:585409de39191c201f91a8e6ec5294556c8f21c7d2ce0b0f96e838f27e399f82 \
+  -lc "git config --global --add safe.directory /src; make -C support/ebpf amd64 arm64"
+```
+
+Use `--platform linux/arm64` on an arm64 host, even though it builds the amd64
+object too: clang cross-compiles it, while the amd64 image crashes under qemu
+(the Go runtime dies, `go list` include paths collapse, and the build cannot
+find `cupti_bpf.h`). On an amd64 host use `linux/amd64`.
+
 ## Decision matrix for recurring conflicts
 
 These show up every cycle. Defaults assume the parca fork's behavior should
