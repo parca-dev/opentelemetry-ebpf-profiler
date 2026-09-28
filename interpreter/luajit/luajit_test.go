@@ -27,10 +27,10 @@ import (
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/testutils"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
-	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
 )
 
 // Run
@@ -102,10 +102,9 @@ func TestIntegration(t *testing.T) {
 					port, err := cont.MappedPort(ctx, "8080")
 					require.NoError(t, err)
 
-					enabledTracers, err := tracertypes.Parse("luajit")
-					require.NoError(t, err)
-					enabledTracers.Enable(tracertypes.LuaJITTracer)
-					traceCh, trc := testutils.StartTracer(ctx, t, enabledTracers, false)
+					interpreters := interpreterconfig.NoInterpreters()
+					interpreters.LuaJIT.Disabled = false
+					traceCh, trc := testutils.StartTracer(ctx, t, interpreters, false)
 
 					var waitGroup sync.WaitGroup
 					defer waitGroup.Wait()

@@ -35,9 +35,9 @@ import (
 	testcontainers "github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 
+	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/testutils"
-	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
 )
 
 const N_WORKERS int = 8
@@ -55,10 +55,11 @@ var files = []string{
 
 func runTest(t *testing.T, ctx context.Context, host string, port network.Port) {
 	t.Helper()
-	enabledTracers, err := tracertypes.Parse("labels,v8")
-	require.NoError(t, err)
+	interpreters := interpreterconfig.NoInterpreters()
+	interpreters.V8.Disabled = false
+	interpreters.CustomLabels.Disabled = false
 
-	traceCh, _ := testutils.StartTracer(ctx, t, enabledTracers, false)
+	traceCh, _ := testutils.StartTracer(ctx, t, interpreters, false)
 
 	testHTTPEndpoint(t, host, port)
 	framesPerWorkerId := make(map[int]int)

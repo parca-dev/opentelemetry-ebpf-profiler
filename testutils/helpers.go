@@ -16,10 +16,10 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 
+	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
-	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
 )
 
 type MockIntervals struct{}
@@ -59,7 +59,7 @@ func InitializeMetrics() {
 
 }
 
-func StartTracer(ctx context.Context, t *testing.T, et tracertypes.IncludedTracers,
+func StartTracer(ctx context.Context, t *testing.T, interpreters interpreterconfig.Config,
 	printBpfLogs bool) (<-chan TraceEvent, *tracer.Tracer) {
 	t.Helper()
 	traceCh := make(chan TraceEvent)
@@ -72,7 +72,7 @@ func StartTracer(ctx context.Context, t *testing.T, et tracertypes.IncludedTrace
 	trc, err := tracer.NewTracer(ctx, &tracer.Config{
 		TraceReporter:          tr,
 		Intervals:              &MockIntervals{},
-		InterpretersConfig:     et.ToInterpretersConfig(),
+		InterpretersConfig:     interpreters,
 		SamplesPerSecond:       20,
 		ProbabilisticInterval:  100,
 		ProbabilisticThreshold: 100,

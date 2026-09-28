@@ -16,11 +16,11 @@ import (
 	cebpf "github.com/cilium/ebpf"
 
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
+	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/testutils"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
-	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
@@ -115,13 +115,11 @@ func setupTest(t *testing.T) *testSetup {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Initialize the full tracer with debug output enabled
-	enabledTracers, _ := tracertypes.Parse("")
-
 	testutils.InitializeMetrics()
 
 	tr, err := tracer.NewTracer(ctx, &tracer.Config{
 		Intervals:              &mockIntervals{},
-		InterpretersConfig:     enabledTracers.ToInterpretersConfig(),
+		InterpretersConfig:     interpreterconfig.NoInterpreters(),
 		FilterErrorFrames:      false,
 		SamplesPerSecond:       20,
 		MapScaleFactor:         0,

@@ -15,12 +15,12 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
+	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
 	"go.opentelemetry.io/ebpf-profiler/support"
 	"go.opentelemetry.io/ebpf-profiler/testutils"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
-	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
 
@@ -44,9 +44,8 @@ func test(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Start the tracer with all tracers enabled
 	traceCh, trc := testutils.StartTracer(ctx, t,
-		tracertypes.IncludedTracers(0),
+		interpreterconfig.NoInterpreters(),
 		false)
 	defer trc.Close()
 

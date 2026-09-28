@@ -9,8 +9,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
 	"go.opentelemetry.io/ebpf-profiler/testutils"
-	tracertypes "go.opentelemetry.io/ebpf-profiler/tracer/types"
 )
 
 func TestNativeCustomLabels(t *testing.T) {
@@ -18,11 +18,10 @@ func TestNativeCustomLabels(t *testing.T) {
 		t.Skip("root privileges required")
 	}
 
-	enabledTracers, _ := tracertypes.Parse("all")
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
-	traceCh, _ := testutils.StartTracer(ctx, t, enabledTracers, false)
+	traceCh, _ := testutils.StartTracer(ctx, t, interpreterconfig.AllInterpreters(), false)
 	// TODO - change this to `cargo build --release --bin custom-labels-example`
 	// once we have the Rust workspace from upstream.
 	cmd := exec.Command("cargo", "build", "--release",
