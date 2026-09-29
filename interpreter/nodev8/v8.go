@@ -169,7 +169,12 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
 	"github.com/elastic/go-freelru"
+	"golang.org/x/arch/arm64/arm64asm"
+	"golang.org/x/arch/x86/x86asm"
 
+	"go.opentelemetry.io/ebpf-profiler/asm/amd"
+	"go.opentelemetry.io/ebpf-profiler/asm/arm"
+	"go.opentelemetry.io/ebpf-profiler/asm/expression"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
@@ -2415,17 +2420,48 @@ func findJsDispatchTableOffset(ef *pfelf.File, syms relevantSymbols) (uint64, er
 		return 0, fmt.Errorf("failed to read js_dispatch_table_address code: %w", err)
 	}
 
-	switch ef.Machine {
+	return decodeJsDispatchTableOffset(ef.Machine, code, uint64(sym.Address))
+}
+
+// decodeJsDispatchTableOffset runs js_dispatch_table_address(), whose code
+// starts at addr, up to its first `ret`, and returns the offset in
+// IsolateGroup that the return value was loaded from.
+func decodeJsDispatchTableOffset(machine elf.Machine, code []byte, addr uint64) (uint64, error) {
+	var retval expression.Expression
+	switch machine {
 	case elf.EM_AARCH64:
-		if offset, ok := GetJsDispatchTableOffsetAarch64(code); ok {
-			return offset, nil
+		it := arm.NewInterpreter()
+		it.ResetCode(code, expression.Imm(addr))
+		_, err := it.LoopWithBreak(func(i arm64asm.Inst) bool {
+			return i.Op == arm64asm.RET
+		})
+		if err != nil {
+			return 0, err
 		}
-		return 0, errors.New("failed to find js_dispatch_table_ field offset")
+		retval = it.Regs.Get(arm.X0)
 	case elf.EM_X86_64:
-		return GetJsDispatchTableOffsetX64(code)
+		it := amd.NewInterpreter()
+		it.ResetCode(code, expression.Imm(addr))
+		_, err := it.LoopWithBreak(func(i x86asm.Inst) bool {
+			return i.Op == x86asm.RET
+		})
+		if err != nil {
+			return 0, err
+		}
+		retval = it.Regs.Get(amd.RAX)
 	default:
-		return 0, fmt.Errorf("unsupported arch %s", ef.Machine.String())
+		return 0, fmt.Errorf("unsupported arch %s", machine.String())
 	}
+	// The IsolateGroup pointer is loaded either directly from
+	// default_isolate_group_ or through its GOT entry.
+	slot := expression.NewImmediateCapture("slot")
+	offset := expression.NewImmediateCapture("offset")
+	group := expression.Mem8(slot)
+	if retval.Match(expression.Mem8(expression.Add(group, offset))) ||
+		retval.Match(expression.Mem8(expression.Add(expression.Mem8(group), offset))) {
+		return offset.CapturedValue(), nil
+	}
+	return 0, errors.New("failed to find js_dispatch_table_ field offset")
 }
 
 // loadNodeClData loads various offsets that are needed for custom labels handling.
