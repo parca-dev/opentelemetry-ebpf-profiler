@@ -358,8 +358,13 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 		return nil, fmt.Errorf("failed to load eBPF code: %v", err)
 	}
 
+	// The eBPF handler is created before the Tracer, but interpreter loaders only
+	// call EnsureMmapEventMonitor once the process manager is running, by which
+	// point tracer is set.
+	var tracer *Tracer
 	ebpfHandler, err := pmebpf.LoadMaps(ctx, cfg.InterpretersConfig, ebpfMaps,
-		stackdeltaInnerMapSpec, ebpfProgs, coll)
+		stackdeltaInnerMapSpec, ebpfProgs, coll,
+		func() error { return tracer.ensureMmapEventMonitor() })
 	if err != nil {
 		return nil, fmt.Errorf("failed to load eBPF maps: %v", err)
 	}
@@ -386,7 +391,7 @@ func NewTracer(ctx context.Context, cfg *Config) (*Tracer, error) {
 
 	perfEventList := []*perf.Event{}
 
-	tracer := &Tracer{
+	tracer = &Tracer{
 		lifecycleCtx:              lifecycleCtx,
 		lifecycleCancel:           lifecycleCancel,
 		kernelSymbolizer:          kernelSymbolizer,

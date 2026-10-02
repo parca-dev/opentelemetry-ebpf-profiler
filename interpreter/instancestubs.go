@@ -93,3 +93,7 @@ func (mockup *EbpfHandlerStubs) AttachUprobe(
 	libpf.PID, string, uint64, string) (LinkCloser, error) {
 	return nil, nil
 }
+
+func (mockup *EbpfHandlerStubs) EnsureMmapEventMonitor() error {
+	return nil
+}

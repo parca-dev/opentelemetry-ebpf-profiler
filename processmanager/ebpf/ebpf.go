@@ -76,6 +76,9 @@ type ebpfMapsImpl struct {
 	errCounterLock sync.Mutex
 	errCounter     map[metrics.MetricID]int64
 
+	// ensureMmapEventMonitor starts the tracer's MMAP event monitor on demand.
+	ensureMmapEventMonitor func() error
+
 	// Support for batch operations on LPM eBPF maps was only
 	// introduced with Linux kernel 5.13.
 	hasLPMTrieBatchOperations bool
@@ -107,8 +110,10 @@ var _ ebpfapi.EbpfHandler = &ebpfMapsImpl{}
 // context can be used to terminate them on shutdown.
 func LoadMaps(ctx context.Context, interpretersConfig interpreterconfig.Config,
 	maps map[string]*cebpf.Map, stackdeltaInnerMapSpec *cebpf.MapSpec,
-	_ map[string]*cebpf.Program, coll *cebpf.CollectionSpec) (ebpfapi.EbpfHandler, error) {
+	_ map[string]*cebpf.Program, coll *cebpf.CollectionSpec,
+	ensureMmapEventMonitor func() error) (ebpfapi.EbpfHandler, error) {
 	impl := &ebpfMapsImpl{
+		ensureMmapEventMonitor:     ensureMmapEventMonitor,
 		stackdeltaInnerMapTemplate: stackdeltaInnerMapSpec,
 		coll:                       coll,
 		perfProgsFD:                maps["perf_progs"].FD(),
@@ -436,6 +441,14 @@ func (impl *ebpfMapsImpl) AttachUprobe(pid libpf.PID, path string, offset uint64
 	}
 	log.Infof("Attached uprobe %s to %s at offset 0x%x in PID %d", progName, path, offset, pid)
 	return &usdt.ProbeLinks{Links: []link.Link{lnk}}, nil
+}
+
+// EnsureMmapEventMonitor implements interpreter.EbpfHandler.
+func (impl *ebpfMapsImpl) EnsureMmapEventMonitor() error {
+	if impl.ensureMmapEventMonitor == nil {
+		return nil
+	}
+	return impl.ensureMmapEventMonitor()
 }
 
 func (impl *ebpfMapsImpl) CoredumpTest() bool {

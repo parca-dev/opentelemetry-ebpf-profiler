@@ -141,6 +141,13 @@ type EbpfHandler interface {
 	// named BPF_MAP_TYPE_PROG_ARRAY at the given key.  The program is loaded
 	// once and cached; subsequent calls with the same progName reuse it.
 	UpdateProgArray(mapName string, key uint32, progName string) error
+
+	// EnsureMmapEventMonitor starts the system-wide perf MMAP event monitor if it
+	// is not running yet. Interpreters whose target libraries may be loaded after a
+	// process was first synchronized (e.g. via dlopen) call this so that the new
+	// executable mapping triggers a process resynchronization. Safe to call
+	// repeatedly; only the first call starts the monitor.
+	EnsureMmapEventMonitor() error
 }
 
 type LinkCloser interface {
