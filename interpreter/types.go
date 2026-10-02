@@ -134,9 +134,6 @@ type EbpfHandler interface {
 	AttachUSDTProbes(pid libpf.PID, path, multiProgName string, probes []pfelf.USDTProbe,
 		cookies []uint64, singleProgNames []string) (LinkCloser, error)
 
-	// AttachUprobe attaches an eBPF uprobe to a function at a specific offset in a binary
-	AttachUprobe(pid libpf.PID, path string, offset uint64, progName string) (LinkCloser, error)
-
 	// UpdateProgArray loads an eBPF program by name and inserts it into the
 	// named BPF_MAP_TYPE_PROG_ARRAY at the given key.  The program is loaded
 	// once and cached; subsequent calls with the same progName reuse it.
