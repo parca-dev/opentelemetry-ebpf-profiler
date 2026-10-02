@@ -21,7 +21,6 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/oomwatcher"
-	"go.opentelemetry.io/ebpf-profiler/interpreter/rtld"
 	"go.opentelemetry.io/ebpf-profiler/libc"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
@@ -107,8 +106,7 @@ func NewExecutableInfoManager(
 		loaders = append(loaders, interpreter.NewLoader(customlabels.Loader, nil))
 	}
 	loaders = append(loaders,
-		interpreter.NewLoader(oomwatcher.Loader, nil),
-		interpreter.NewLoader(rtld.Loader, nil))
+		interpreter.NewLoader(oomwatcher.Loader, nil))
 
 	if !interpretersConfig.CUDA.IsDisabled() {
 		// USDT support requires cookies

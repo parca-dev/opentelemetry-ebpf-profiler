@@ -4,7 +4,7 @@
 package tracer // import "go.opentelemetry.io/ebpf-profiler/tracer"
 
 // NB: upstream also defines GetEbpfMaps here. parca keeps it in tracer.go because
-// out-of-package tests (interpreter/rtld, test/cudaverify, support/usdt/test) need
+// out-of-package tests (test/cudaverify, support/usdt/test) need
 // it, and methods declared in a _test.go file are not visible to other packages.
 // Taking upstream's copy of this file would duplicate the method and break the build.
 //

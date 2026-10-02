@@ -255,7 +255,20 @@ type CuptiKernelEvent struct {
 	KernelName              [256]byte
 }
 
+// mmapMonitorWarnOnce makes sure a failed MMAP monitor start is only logged
+// once. The tracer keeps returning the same error on every Loader call.
+var mmapMonitorWarnOnce sync.Once
+
 func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpreter.Data, error) {
+	// Start the MMAP event monitor so that if the parcagpu library is loaded
+	// after the process was synced, Attach is called for it.
+	if err := ebpf.EnsureMmapEventMonitor(); err != nil {
+		mmapMonitorWarnOnce.Do(func() {
+			log.Warnf("parcagpu: MMAP event monitor unavailable, libraries loaded "+
+				"after process discovery may be missed: %v", err)
+		})
+	}
+
 	ef, err := info.GetELF()
 	if err != nil {
 		return nil, err

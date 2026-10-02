@@ -728,9 +728,6 @@ const (
 	// Number of failed attempts to read Node.js custom labels
 	IDUnwindNodeCustomLabelsFailures = 313
 
-	// Number of times dlopen uprobe was fired
-	IDDlopenUprobeHits = 314
-
 	// Number of GPU timing events waiting for matching traces
 	IDCudaTimesAwaitingTraces = 315
 

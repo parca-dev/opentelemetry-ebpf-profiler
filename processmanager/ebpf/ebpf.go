@@ -76,6 +76,9 @@ type ebpfMapsImpl struct {
 	errCounterLock sync.Mutex
 	errCounter     map[metrics.MetricID]int64
 
+	// ensureMmapEventMonitor starts the tracer's MMAP event monitor on demand.
+	ensureMmapEventMonitor func() error
+
 	// Support for batch operations on LPM eBPF maps was only
 	// introduced with Linux kernel 5.13.
 	hasLPMTrieBatchOperations bool
@@ -107,8 +110,10 @@ var _ ebpfapi.EbpfHandler = &ebpfMapsImpl{}
 // context can be used to terminate them on shutdown.
 func LoadMaps(ctx context.Context, interpretersConfig interpreterconfig.Config,
 	maps map[string]*cebpf.Map, stackdeltaInnerMapSpec *cebpf.MapSpec,
-	_ map[string]*cebpf.Program, coll *cebpf.CollectionSpec) (ebpfapi.EbpfHandler, error) {
+	_ map[string]*cebpf.Program, coll *cebpf.CollectionSpec,
+	ensureMmapEventMonitor func() error) (ebpfapi.EbpfHandler, error) {
 	impl := &ebpfMapsImpl{
+		ensureMmapEventMonitor:     ensureMmapEventMonitor,
 		stackdeltaInnerMapTemplate: stackdeltaInnerMapSpec,
 		coll:                       coll,
 		perfProgsFD:                maps["perf_progs"].FD(),
@@ -402,40 +407,12 @@ func (impl *ebpfMapsImpl) loadUSDTProgram(progName string, useMulti bool) error 
 	return nil
 }
 
-// AttachUprobe attaches an eBPF uprobe to a function at a specific offset in a binary
-func (impl *ebpfMapsImpl) AttachUprobe(pid libpf.PID, path string, offset uint64,
-	progName string) (interpreter.LinkCloser, error) {
-	containerPath := fmt.Sprintf("/proc/%d/root/%s", pid, path)
-
-	exe, err := link.OpenExecutable(containerPath)
-	if err != nil {
-		log.Warnf("failed to open executable in AttachUprobe %v", err)
-		return nil, err
+// EnsureMmapEventMonitor implements interpreter.EbpfHandler.
+func (impl *ebpfMapsImpl) EnsureMmapEventMonitor() error {
+	if impl.ensureMmapEventMonitor == nil {
+		return nil
 	}
-
-	if impl.userProgs == nil {
-		impl.userProgs = make(map[string]*cebpf.Program)
-	}
-
-	// Load the program if not already loaded
-	prog := impl.userProgs[progName]
-	if prog == nil {
-		if loadErr := impl.loadUSDTProgram(progName, false); loadErr != nil {
-			return nil, loadErr
-		}
-		prog = impl.userProgs[progName]
-	}
-
-	// Attach the uprobe
-	lnk, err := exe.Uprobe("", prog, &link.UprobeOptions{
-		Address: offset,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to attach uprobe to %s at offset 0x%x: %w",
-			path, offset, err)
-	}
-	log.Infof("Attached uprobe %s to %s at offset 0x%x in PID %d", progName, path, offset, pid)
-	return &usdt.ProbeLinks{Links: []link.Link{lnk}}, nil
+	return impl.ensureMmapEventMonitor()
 }
 
 func (impl *ebpfMapsImpl) CoredumpTest() bool {

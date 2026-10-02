@@ -46,7 +46,7 @@ esac
 # Build test binaries.
 echo "Building test binaries for ${GOARCH}..."
 REPO_ROOT="$(cd ../.. && pwd)"
-TEST_PKGS="./interpreter/rtld ./support/usdt/test ./test/cudaverify"
+TEST_PKGS="./support/usdt/test ./test/cudaverify"
 
 (
     cd "${REPO_ROOT}"
@@ -118,17 +118,8 @@ for bin in "${BUILD_DIR}"/*.test "${PARCAGPU_DIR}/libparcagpucupti.so" "$ROOTFS_
     copy_lib_deps "$bin"
 done
 
-# Ensure libm.so is present (rtld test does runtime dlopen of libm).
-LIBM=$(find /lib* /usr/lib* -name 'libm.so.6' 2>/dev/null | head -1)
-if [ -n "$LIBM" ]; then
-    copy_lib_deps "$LIBM"
-    local_dir=$(dirname "$LIBM")
-    mkdir -p "$ROOTFS_DIR$local_dir"
-    [ -f "$ROOTFS_DIR$LIBM" ] || cp "$(readlink -f "$LIBM")" "$ROOTFS_DIR$LIBM"
-fi
-
 # Copy ld.so into the rootfs (needed as the ELF interpreter).
-LDSO=$(readelf -l "${BUILD_DIR}/rtld.test" 2>/dev/null \
+LDSO=$(readelf -l "${BUILD_DIR}/cudaverify.test" 2>/dev/null \
     | sed -n 's|.*\[\(.*\)\]|\1|p' | head -1)
 if [ -n "$LDSO" ] && [ -f "$LDSO" ]; then
     mkdir -p "$ROOTFS_DIR$(dirname "$LDSO")"
@@ -136,7 +127,7 @@ if [ -n "$LDSO" ] && [ -f "$LDSO" ]; then
 fi
 
 echo "Test binary dependencies:"
-ldd "${BUILD_DIR}/rtld.test" || true
+ldd "${BUILD_DIR}/cudaverify.test" || true
 
 # Create init script.
 cat << 'INIT_EOF' > "$ROOTFS_DIR/init"
@@ -160,7 +151,7 @@ export TRITON_CUPTI_LIB_PATH=/usr/local/cuda/lib64
 
 # Run the tests
 echo ""
-/rtld.test -test.v && /test.test -test.v && /cudaverify.test -test.v -so-path=/libparcagpucupti.so
+/test.test -test.v && /cudaverify.test -test.v -so-path=/libparcagpucupti.so
 RESULT=$?
 
 if [ $RESULT -eq 0 ]; then

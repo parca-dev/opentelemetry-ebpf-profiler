@@ -8,6 +8,8 @@ import (
 	"errors"
 	"flag"
 	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 	"unsafe"
@@ -24,32 +26,42 @@ import (
 
 var soPath = flag.String("so-path", "/libparcagpucupti.so", "path to libparcagpucupti.so")
 
+// libparcagpucupti.so is loaded at most once per process: dlclose does not unmap
+// it and InitializeInjection only registers its CUPTI callbacks on the first call.
+var (
+	loadOnce sync.Once
+	loadRC   int
+)
+
 func TestMain(m *testing.M) {
 	flag.Parse()
 
-	if os.Getuid() == 0 {
-		rc := cInitParcaGPU(*soPath)
-		if rc != 0 {
-			os.Exit(1)
-		}
-	}
-
 	code := m.Run()
 
-	if os.Getuid() == 0 {
+	if loadRC == 0 && os.Getuid() == 0 {
 		cCleanupParcaGPU()
 	}
 
 	os.Exit(code)
 }
 
+// isMapped reports whether a file with the given base name is mapped into this process.
+func isMapped(t *testing.T, path string) bool {
+	t.Helper()
+	maps, err := os.ReadFile("/proc/self/maps")
+	require.NoError(t, err)
+	return bytes.Contains(maps, []byte("/"+filepath.Base(path)+"\n"))
+}
+
 // runEndToEnd exercises the full process-manager driven GPU probe attachment flow:
 //
 //  1. Start the full tracer pipeline (PID event processor, map monitors, profiling).
-//  2. ForceProcessPID to trigger process sync — the tracer reads /proc/self/maps,
-//     discovers libc and libparcagpucupti.so (loaded in TestMain), and attaches
-//     the GPU USDT probes.
-//  3. Verify GPU interpreter instance is attached, then simulate kernel launches
+//  2. ForceProcessPID to trigger the initial process sync, before
+//     libparcagpucupti.so is loaded.
+//  3. dlopen libparcagpucupti.so, as CUDA does for CUDA_INJECTION64_PATH. Nothing
+//     forces a resync: the GPU interpreter must be discovered through the MMAP
+//     event that the new mapping generates.
+//  4. Verify GPU interpreter instance is attached, then simulate kernel launches
 //     and check that timing events arrive on the perf buffer.
 func runEndToEnd(t *testing.T, multiProbe bool) {
 	t.Helper()
@@ -65,18 +77,26 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 
 	interpreters := interpreterconfig.NoInterpreters()
 	interpreters.CUDA.Disabled = false
+	// The Go interpreter attaches to this (Go) test binary on the initial sync,
+	// which gives the wait below a signal that does not depend on the GPU library.
+	interpreters.Go.Disabled = false
 
 	_, trc := testutils.StartTracer(ctx, t, interpreters, false)
 	defer trc.Close()
 
+	// Only the first test to run loads the library after the initial sync; later
+	// tests find it mapped and discover it on the initial sync instead.
+	if isMapped(t, *soPath) {
+		t.Logf("%s is already mapped; the late dlopen path is not exercised", *soPath)
+	}
+
 	// Trigger initial process sync for our PID so the tracer discovers our
-	// mappings and attaches the dlopen uprobe to libc.
+	// mappings. The first Loader call starts the MMAP event monitor.
 	pid := libpf.PID(uint32(os.Getpid()))
 	trc.ForceProcessPID(pid)
 
-	// Wait until the process manager has processed our PID and attached
-	// interpreter instances (the rtld instance attaches the dlopen uprobe
-	// to libc as a side effect).
+	// Wait until the process manager has processed our PID and attached the Go
+	// interpreter instance.
 	require.Eventually(t, func() bool {
 		instances := trc.GetInterpretersForPID(pid)
 		if len(instances) > 0 {
@@ -88,6 +108,13 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 		return false
 	}, 30*time.Second, 200*time.Millisecond, "process manager never synced our PID")
 
+	// Let any ForceProcessPID still queued from the loop above be processed, so
+	// that it cannot be what discovers the library loaded below.
+	time.Sleep(time.Second)
+
+	loadOnce.Do(func() { loadRC = cInitParcaGPU(*soPath) })
+	require.Zero(t, loadRC, "loading %s failed", *soPath)
+
 	// Set up ringbuf reader on the cupti_events map BEFORE the dlopen so we
 	// don't miss any events.
 	cuptiEventsMap := trc.GetEbpfMaps()["cupti_events"]
@@ -97,12 +124,9 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 	require.NoError(t, err, "ringbuf.NewReader failed")
 	defer reader.Close()
 
-	// libparcagpucupti.so was loaded in TestMain — ForceProcessPID will
-	// discover it from /proc/self/maps and attach the GPU USDT probes.
-	trc.ForceProcessPID(pid)
-
-	// Wait until the GPU interpreter instance appears, confirming the USDT
-	// probes were attached by the process manager.
+	// Wait until the GPU interpreter instance appears, confirming that the MMAP
+	// event for the dlopen'ed library led the process manager to attach the USDT
+	// probes. Deliberately no ForceProcessPID here.
 	//
 	// Attach fails outright if either tail-called program is rejected by the
 	// verifier, so an eBPF program that outgrows a kernel's complexity cap shows
@@ -116,7 +140,6 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 			}
 		}
 		t.Logf("waiting for GPU interpreter instance (%d interpreters so far)...", len(instances))
-		trc.ForceProcessPID(pid)
 		return false
 	}, 30*time.Second, 200*time.Millisecond, "GPU interpreter never attached after dlopen")
 

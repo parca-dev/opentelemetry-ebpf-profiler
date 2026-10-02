@@ -1,6 +1,6 @@
 # Distro QEMU Testing
 
-This directory contains scripts to test USDT/RTLD (runtime linker) mechanisms on different kernel versions using QEMU. These tests need a libc with dlopen and systemtap support.
+This directory contains scripts to test USDT probe attachment and CUDA (parcagpu) probe discovery on different kernel versions using QEMU.
 
 ## Prerequisites
 
@@ -48,27 +48,27 @@ DISTRO=debian RELEASE=bullseye ./build-and-run.sh 5.10.217
 
 ## What These Tests Do
 
-1. **Creates a minimal rootfs** using debootstrap with:
-   - glibc (with ld.so that has USDT probes)
-   - Basic Linux userspace
-   - Our compiled rtld test binary
+1. **Builds a minimal initramfs** with busybox, the compiled test binaries and
+   their shared library dependencies, and the parcagpu library with a stub libcupti.
 
 2. **Boots QEMU** with:
    - Selected kernel version
    - Minimal initramfs containing our test environment
    - Serial console output
 
-3. **Runs the RTLD tests**:
-   - `TestIntegration` - Tests USDT probe attachment
-   - `TestIntegrationPoller` - Tests polling fallback
-   - `TestIntegrationSingleShot` - Tests single-shot mode (pre-6.6 kernels)
+3. **Runs the tests**:
+   - `support/usdt/test` - USDT probe attachment and argument decoding, in
+     single-shot and multi-uprobe mode
+   - `test/cudaverify` - end-to-end CUDA probe flow: libparcagpucupti.so is
+     dlopen'ed after the process was first synchronized and must be discovered
+     through MMAP events, then simulated kernel launches must produce timing events
 
 ## Expected Behavior
 
-- **Kernel < 6.6**: Should use single-shot mode for USDT probes (if available), poller as fallback
-- **Kernel >= 6.6**: Should use multi-uprobe mode for USDT probes (if available)
-- All tests should pass regardless of kernel version
-- **USDT probe availability**: Ubuntu 22.04+ has rtld USDT probes, older versions use poller fallback
+- **Kernel < 5.15**: Tests that need `bpf_get_attach_cookie` are skipped
+- **Kernel < 6.6**: Single-shot mode only; multi-uprobe tests are skipped
+- **Kernel >= 6.6**: Both single-shot and multi-uprobe modes are tested
+- All tests that are not skipped should pass
 
 ## Available Kernels
 

@@ -64,7 +64,7 @@ const (
 const UnwindInfoMaxEntries = 0x4000
 
 const (
-	MetricIDBeginCumulative = 0x87
+	MetricIDBeginCumulative = 0x86
 )
 
 const (
@@ -560,7 +560,6 @@ var MetricsTranslation = []metrics.MetricID{
 	0x6d: metrics.IDUnwindNodeCustomLabelsFailures,
 	0x67: metrics.IDUnwindLuaJITAttempts,
 	0x68: metrics.IDUnwindLuaJITErrNoProcInfo,
-	0x77: metrics.IDDlopenUprobeHits,
 	0x60: metrics.IDUnwindNativeCustomLabelsErrReadTsdBase,
 	0x61: metrics.IDUnwindNativeCustomLabelsErrReadData,
 	0x62: metrics.IDUnwindNativeCustomLabelsErrReadKey,
@@ -572,19 +571,19 @@ var MetricsTranslation = []metrics.MetricID{
 	0x6a: metrics.IDUnwindLuaJITErrLMismatch,
 	0x6e: metrics.IDUnwindGoLabelsAttempts,
 	0x6f: metrics.IDUnwindGoLabelsFailures,
-	0x78: metrics.IDBPFRingbufOutputErr,
-	0x79: metrics.IDUnwindNativeErrNoVMA,
-	0x7a: metrics.IDUnwindNativeErrUnsupportedAnonymousMapping,
-	0x7b: metrics.IDUnwindNativeErrNonExecutableVMA,
-	0x7d: metrics.IDSamplesSkippedProcessTooNew,
-	0x7e: metrics.IDNumSyncsFromPrctl,
-	0x7f: metrics.IDNumPriorityEventDeferred,
-	0x80: metrics.IDUnwindGoAsmcgocallAttempts,
-	0x81: metrics.IDUnwindGoAsmcgocallSuccess,
-	0x82: metrics.IDUnwindGoAsmcgocallUnwindFailure,
-	0x83: metrics.IDUnwindThreadContextErrReadTlsPtr,
-	0x84: metrics.IDUnwindThreadContextErrReadThreadCtxBuf,
-	0x85: metrics.IDUnwindThreadContextReadSuccesses,
-	0x86: metrics.IDUnwindThreadContextAttrsTruncated,
-	0x7c: metrics.IDCUPTIEventsRingbufFull,
+	0x77: metrics.IDBPFRingbufOutputErr,
+	0x78: metrics.IDUnwindNativeErrNoVMA,
+	0x79: metrics.IDUnwindNativeErrUnsupportedAnonymousMapping,
+	0x7a: metrics.IDUnwindNativeErrNonExecutableVMA,
+	0x7c: metrics.IDSamplesSkippedProcessTooNew,
+	0x7d: metrics.IDNumSyncsFromPrctl,
+	0x7e: metrics.IDNumPriorityEventDeferred,
+	0x7f: metrics.IDUnwindGoAsmcgocallAttempts,
+	0x80: metrics.IDUnwindGoAsmcgocallSuccess,
+	0x81: metrics.IDUnwindGoAsmcgocallUnwindFailure,
+	0x82: metrics.IDUnwindThreadContextErrReadTlsPtr,
+	0x83: metrics.IDUnwindThreadContextErrReadThreadCtxBuf,
+	0x84: metrics.IDUnwindThreadContextReadSuccesses,
+	0x85: metrics.IDUnwindThreadContextAttrsTruncated,
+	0x7b: metrics.IDCUPTIEventsRingbufFull,
 }

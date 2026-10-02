@@ -68,7 +68,7 @@ func (td *testInterpreterData) Unload(interpreter.EbpfHandler) {}
 
 type testEbpfHandler struct {
 	// EbpfHandlerStubs supplies the parca-fork additions to the EbpfHandler
-	// interface (AttachUSDTProbes, AttachUprobe, ...) that this double does
+	// interface (AttachUSDTProbes, UpdateProgArray, ...) that this double does
 	// not exercise. Methods defined below override it.
 	interpreter.EbpfHandlerStubs
 	pidPageMappingInfoUpdates []struct {

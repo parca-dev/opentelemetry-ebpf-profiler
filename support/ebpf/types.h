@@ -371,9 +371,6 @@ enum {
 
   // number of failures to read TLS variables via the DTV
   metricID_UnwindErrBadDTVRead,
-  // number of times dlopen uprobe was fired
-  metricID_DlopenUprobeHits,
-
   // number of bpf_ringbuf_output failures
   metricID_BPFRingbufOutputErr,
 

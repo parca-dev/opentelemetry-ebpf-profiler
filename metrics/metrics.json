@@ -2288,6 +2288,7 @@
     "id": 313
   },
   {
+    "obsolete": true,
     "description": "Number of times dlopen uprobe was fired",
     "type": "counter",
     "name": "DlopenUprobeHits",
