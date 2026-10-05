@@ -185,11 +185,13 @@ func (impl *ebpfMapsImpl) deleteSpecIDRange(start, count uint32) {
 // When both multiProgName and singleProgNames are provided, multi-probe
 // attachment is attempted first (if the kernel supports it).  On failure the
 // function automatically falls back to single-shot per-probe attachment.
-func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, multiProgName string,
+func (impl *ebpfMapsImpl) AttachUSDTProbes(pid libpf.PID, path, openPath, multiProgName string,
 	probes []pfelf.USDTProbe, cookies []uint64, singleProgNames []string) (interpreter.LinkCloser, error) {
 
-	containerPath := fmt.Sprintf("/proc/%d/root/%s", pid, path)
-	exe, err := link.OpenExecutable(containerPath)
+	if openPath == "" {
+		openPath = fmt.Sprintf("/proc/%d/root/%s", pid, path)
+	}
+	exe, err := link.OpenExecutable(openPath)
 	if err != nil {
 		log.Warnf("failed to open executable in AttachUSDTProbes %v", err)
 		return nil, err

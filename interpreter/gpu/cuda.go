@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	"go.opentelemetry.io/ebpf-profiler/metrics"
+	"go.opentelemetry.io/ebpf-profiler/process"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
@@ -227,6 +229,8 @@ type linkEntry struct {
 }
 
 type data struct {
+	// path is the library's path in the first process it was loaded for;
+	// only the Attach fallback uses it (see AttachMapping).
 	path   string
 	probes []pfelf.USDTProbe
 
@@ -367,8 +371,54 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 	return nil, nil
 }
 
+// AttachMapping implements interpreter.MappingAttacher. Data is shared by
+// every process mapping a file with this content (FileID), and those
+// processes may have the library at different paths or as different copies
+// (e.g. containers that mount the shim elsewhere). So open the file this
+// process actually maps, via /proc/<pid>/map_files, rather than a path.
+func (d *data) AttachMapping(ebpf interpreter.EbpfHandler, pr process.Process,
+	mapping *process.RawMapping, _ libpf.Address,
+	_ remotememory.RemoteMemory) (interpreter.Instance, error) {
+	f, err := pr.OpenMappingFile(mapping)
+	if err != nil {
+		return nil, fmt.Errorf("[cuda] open mapping %s: %w", mapping.Path, err)
+	}
+	defer f.Close()
+	osf, ok := f.(*os.File)
+	if !ok {
+		return nil, fmt.Errorf("[cuda] mapping %s has no file descriptor", mapping.Path)
+	}
+	// OpenMappingFile verified the file matches the mapping's device and
+	// inode. The fd stays open until the probes are attached; uprobes are
+	// keyed by inode, so they outlive it.
+	return d.attach(ebpf, pr.PID(), strings.Clone(mapping.Path), mapping.GetOnDiskFileIdentifier(),
+		fmt.Sprintf("/proc/self/fd/%d", osf.Fd()))
+}
+
+// Attach is the fallback when the mapping isn't available: it can only use
+// the path of the first process that loaded this file.
 func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Address,
 	_ remotememory.RemoteMemory) (interpreter.Instance, error) {
+	// Stat the path via /proc/<pid>/root so this works when parca-agent runs
+	// in a container that doesn't share the target's mount namespace.
+	containerPath := "/proc/" + strconv.Itoa(int(pid)) + "/root/" + d.path
+	st, err := os.Stat(containerPath)
+	if err != nil {
+		return nil, fmt.Errorf("[cuda] stat %s: %w", containerPath, err)
+	}
+	sys, ok := st.Sys().(*syscall.Stat_t)
+	if !ok || sys == nil {
+		return nil, fmt.Errorf("[cuda] failed to get stat_t for %s", containerPath)
+	}
+	key := util.OnDiskFileIdentifier{DeviceID: uint64(sys.Dev), InodeNum: uint64(sys.Ino)}
+	return d.attach(ebpf, pid, d.path, key, "")
+}
+
+// attach sets up the probes for pid. path is the library's path in pid's
+// mount namespace (for logs); openPath, if set, is how the agent opens the
+// file (otherwise /proc/<pid>/root/<path>); key is the file's inode.
+func (d *data) attach(ebpf interpreter.EbpfHandler, pid libpf.PID, path string,
+	key util.OnDiskFileIdentifier, openPath string) (interpreter.Instance, error) {
 	// Populate the cuda_progs tail-call array. UpdateProgArray is idempotent
 	// (programs are cached, map updates are atomic), so it is safe to call on
 	// every Attach.
@@ -428,34 +478,20 @@ func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Addre
 		}
 	}
 
-	// Stat the path via /proc/<pid>/root so this works when parca-agent runs
-	// in a container that doesn't share the target's mount namespace. The
-	// subsequent AttachUSDTProbes call already opens the file via the same
-	// /proc/<pid>/root prefix.
-	containerPath := "/proc/" + strconv.Itoa(int(pid)) + "/root/" + d.path
-	st, err := os.Stat(containerPath)
-	if err != nil {
-		return nil, fmt.Errorf("[cuda] stat %s: %w", containerPath, err)
-	}
-	sys, ok := st.Sys().(*syscall.Stat_t)
-	if !ok || sys == nil {
-		return nil, fmt.Errorf("[cuda] failed to get stat_t for %s", containerPath)
-	}
-	key := util.OnDiskFileIdentifier{DeviceID: uint64(sys.Dev), InodeNum: uint64(sys.Ino)}
-
 	if d.links == nil {
 		d.links = make(map[util.OnDiskFileIdentifier]*linkEntry)
 	}
 	le := d.links[key]
 	if le == nil {
-		lc, err := ebpf.AttachUSDTProbes(pid, d.path, USDTProgCudaProbe, d.probes, cookies, progNames)
+		lc, err := ebpf.AttachUSDTProbes(pid, path, openPath, USDTProgCudaProbe, d.probes,
+			cookies, progNames)
 		if err != nil {
 			return nil, err
 		}
 		le = &linkEntry{link: lc}
 		d.links[key] = le
 		log.Debugf("[cuda] parcagpu USDT probes attached for %s (dev=%d ino=%d)",
-			d.path, key.DeviceID, key.InodeNum)
+			path, key.DeviceID, key.InodeNum)
 	}
 	le.refs++
 
@@ -477,7 +513,7 @@ func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Addre
 	gpuFixers.Store(pid, newGpuTraceFixer(pcSampleHasDevice))
 	return &Instance{
 		d:    d,
-		path: d.path,
+		path: path,
 		pid:  pid,
 		odfi: key,
 	}, nil
@@ -490,7 +526,7 @@ func (i *Instance) Detach(_ interpreter.EbpfHandler, _ libpf.PID) error {
 		le.refs--
 		if le.refs <= 0 {
 			log.Debugf("[cuda] last ref for %s (dev=%d ino=%d), unloading probes",
-				i.d.path, i.odfi.DeviceID, i.odfi.InodeNum)
+				i.path, i.odfi.DeviceID, i.odfi.InodeNum)
 			if err := le.link.Unload(); err != nil {
 				log.Errorf("error closing cuda usdt link: %s", err)
 			}
