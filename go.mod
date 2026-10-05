@@ -16,7 +16,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.113.4
 	github.com/aws/smithy-go v1.28.1
 	github.com/cilium/ebpf v0.22.0
-	github.com/coreos/pkg v0.0.0-20240122114842-bbd7aa9bf6fb
 	github.com/elastic/go-freelru v0.16.0
 	github.com/elastic/go-perf v0.0.0-20260224073651-af0ee0c731b7
 	github.com/gnurizen/sass-table v0.0.3
@@ -26,7 +25,7 @@ require (
 	github.com/minio/sha256-simd v1.0.1
 	github.com/moby/moby/api v1.56.0
 	github.com/open-telemetry/sig-profiling/profcheck v0.0.0-20260922105303-198ebe3624db
-	github.com/parca-dev/oomprof v0.1.6
+	github.com/parca-dev/oomprof v0.1.7
 	github.com/parca-dev/usdt v0.0.2
 	github.com/peterbourgon/ff/v3 v3.4.0
 	github.com/stretchr/testify v1.12.1
