@@ -211,13 +211,15 @@ const (
 	RubyFrameTypeIseq     = C.RUBY_FRAME_TYPE_ISEQ
 	RubyFrameTypeGc       = C.RUBY_FRAME_TYPE_GC
 	RubyFrameTypeJit      = C.RUBY_FRAME_TYPE_JIT
-
-	LJCframeSpaceX86 = C.LUAJIT_CFRAME_SPACE_X86_64
-	LJCframeSpaceArm = C.LUAJIT_CFRAME_SPACE_AARCH64
 )
 
 const (
-	LJJitMarker = C.LUAJIT_JIT_MARKER
+	LJFFIFunc        = C.LUAJIT_FFI_FUNC
+	LJJitMarker      = C.LUAJIT_JIT_MARKER
+	LJNormalFrame    = C.LUAJIT_NORMAL_FRAME
+	LJGReport        = C.LUAJIT_G_REPORT
+	LJCframeSpaceX86 = C.LUAJIT_CFRAME_SPACE_X86_64
+	LJCframeSpaceArm = C.LUAJIT_CFRAME_SPACE_AARCH64
 )
 
 var MetricsTranslation = []metrics.MetricID{
