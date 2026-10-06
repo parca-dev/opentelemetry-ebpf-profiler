@@ -3,10 +3,29 @@
 
 package luajit // import "go.opentelemetry.io/ebpf-profiler/interpreter/luajit"
 
+import (
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"hash/fnv"
+
+	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
+	"go.opentelemetry.io/ebpf-profiler/remotememory"
+)
+
 // This offset is the same in arm64/x86_64 for all known versions of luajit.
 // (gdb) p &((GCtrace*)0)->startins
 // $7 = (uint16_t *) 0x50
 const tracePartOffset = 0x50
+
+// Definition:
+// https://github.com/openresty/luajit2/blob/7952882d/src/lj_jit.h#L423
+type jitStatePart struct {
+	trace     libpf.Address
+	_         uint32 // freetrace
+	sizetrace uint32
+}
 
 // Definition:
 // https://github.com/openresty/luajit2/blob/7952882d/src/lj_jit.h#L259
@@ -23,4 +42,59 @@ type trace struct {
 	traceno  uint16 /* Trace number. */
 	_        uint16 /* Linked trace (or self for loops). */
 	root     uint16 /* Root trace of side trace (or 0 for root traces). */
+}
+
+// key == traceId
+type traceMap map[uint16]trace
+
+// getAndHashTraceAddrs attempts to read the addresses of the luaJIT traces from process memory,
+// returning the traces and a hash of their addresses.
+func getAndHashTraceAddrs(tracesAddr libpf.Address, rm remotememory.RemoteMemory) (
+	hash uint64, sizetrace int, traceAddrs []libpf.Address, err error) {
+	j := jitStatePart{}
+	if err := rm.Read(tracesAddr, pfunsafe.FromPointer(&j)); err != nil {
+		return 0, 0, nil, err
+	}
+	if j.sizetrace > 65535 {
+		return 0, 0, nil, fmt.Errorf("invalid sizetrace %d (traces:%x)", j.sizetrace, tracesAddr)
+	}
+	traceAddrs = []libpf.Address{}
+	b := make([]byte, 8)
+	h := fnv.New64()
+	binary.LittleEndian.PutUint32(b, j.sizetrace)
+	_, _ = h.Write(b[:4])
+	addrs := make([]libpf.Address, j.sizetrace)
+	if err := rm.Read(j.trace, pfunsafe.FromSlice(addrs)); err != nil {
+		return 0, 0, nil, err
+	}
+	for _, addr := range addrs {
+		if addr == 0 {
+			continue
+		}
+		binary.LittleEndian.PutUint64(b, uint64(addr))
+		_, _ = h.Write(b)
+		traceAddrs = append(traceAddrs, addr)
+	}
+	return h.Sum64(), int(j.sizetrace), traceAddrs, nil
+}
+
+// loadTraces attempts to load the LuaJIT traces from process memory.
+func loadTraces(tracesAddr libpf.Address, rm remotememory.RemoteMemory) (uint64, traceMap, error) {
+	h, sztrace, traceAddrs, err := getAndHashTraceAddrs(tracesAddr, rm)
+	if err != nil {
+		return 0, nil, err
+	}
+	traces := traceMap{}
+	for _, addr := range traceAddrs {
+		t := trace{}
+		if err := rm.Read(addr+tracePartOffset, pfunsafe.FromPointer(&t)); err != nil {
+			return 0, nil, err
+		}
+		if t.traceno > uint16(sztrace) {
+			return 0, nil, errors.New("invalid traceno")
+		}
+		logf("lj: added trace(%d) from %x", t.traceno, tracesAddr)
+		traces[t.traceno] = t
+	}
+	return h, traces, nil
 }
