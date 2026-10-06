@@ -82,7 +82,19 @@ func (d *luajitData) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf
 func (d *luajitData) Unload(_ interpreter.EbpfHandler) {}
 
 func (l *luajitInstance) Detach(ebpf interpreter.EbpfHandler, pid libpf.PID) error {
-	return nil
+	// Clear memory ranges
+	for _, prefixes := range l.prefixes {
+		for _, prefix := range prefixes {
+			_ = ebpf.DeletePidInterpreterMapping(pid, prefix)
+		}
+	}
+	// Clear trace ranges
+	for _, prefixes := range l.prefixesByG {
+		for _, prefix := range prefixes {
+			_ = ebpf.DeletePidInterpreterMapping(pid, prefix)
+		}
+	}
+	return ebpf.DeleteProcData(libpf.LuaJIT, pid)
 }
 
 func GetLoader(_ Config) interpreter.Loader {
