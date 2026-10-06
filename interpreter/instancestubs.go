@@ -80,7 +80,7 @@ func (m *EbpfHandlerStubs) UpdateInterpreterOffsets(ebpfProgIndex uint16, fileID
 	return nil
 }
 
-func (m *EbpfHandlerStubs) AttachUSDTProbes(libpf.PID, string, string, []pfelf.USDTProbe,
+func (m *EbpfHandlerStubs) AttachUSDTProbes(libpf.PID, string, string, string, []pfelf.USDTProbe,
 	[]uint64, []string) (LinkCloser, error) {
 	return nil, nil
 }

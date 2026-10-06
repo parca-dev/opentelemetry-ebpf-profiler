@@ -118,7 +118,11 @@ type EbpfHandler interface {
 	//
 	// Parameters:
 	//  - pid: The process ID. Required for getting path to exe via procfs.
-	//  - path: Full path to the binary containing the USDT probes.
+	//  - path: Full path to the binary containing the USDT probes, in pid's
+	//    mount namespace.
+	//  - openPath: If non-empty, the path the agent opens the binary through
+	//    instead of /proc/<pid>/root/<path> -- e.g. /proc/self/fd/<n> for a
+	//    mapping opened with process.Process.OpenMappingFile.
 	//  - multiProgName: Name of eBPF program to use for multi-uprobe attachment (newer kernels).
 	//  - probes: The USDT probe definitions to attach to.
 	//  - cookies: Optional cookies to pass to the eBPF program (one per probe, or nil).
@@ -131,7 +135,7 @@ type EbpfHandler interface {
 	//       detach the probes)
 	//    2. Call LinkCloser.Detach() from Instance.Detach() to detach from the specific PID
 	//    3. Call LinkCloser.Unload() from Data.Unload() to fully clean up the eBPF program
-	AttachUSDTProbes(pid libpf.PID, path, multiProgName string, probes []pfelf.USDTProbe,
+	AttachUSDTProbes(pid libpf.PID, path, openPath, multiProgName string, probes []pfelf.USDTProbe,
 		cookies []uint64, singleProgNames []string) (LinkCloser, error)
 
 	// UpdateProgArray loads an eBPF program by name and inserts it into the
@@ -200,6 +204,18 @@ type Data interface {
 
 	// Unload can undo any allocations or eBPF entries the Loader function created
 	Unload(ebpf EbpfHandler)
+}
+
+// MappingAttacher is optionally implemented by Data that needs the process
+// and the mapping that triggered the attach -- e.g. to open the mapped file
+// with process.Process.OpenMappingFile. Data is shared by every process
+// mapping a file with the same content, which may sit at a different path
+// in each process's mount namespace. When Data implements it, ProcessManager
+// calls AttachMapping instead of Attach. The mapping is valid only for the
+// duration of the call (see processmanager.ProbeAttacher).
+type MappingAttacher interface {
+	AttachMapping(ebpf EbpfHandler, pr process.Process, mapping *process.RawMapping,
+		bias libpf.Address, rm remotememory.RemoteMemory) (Instance, error)
 }
 
 // Instance is the interface to operate on per-PID data.

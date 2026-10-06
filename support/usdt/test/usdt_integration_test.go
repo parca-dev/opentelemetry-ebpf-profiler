@@ -238,6 +238,7 @@ func TestUSDTProbeWithEBPFSingle(t *testing.T) {
 	lc, err := setup.ebpfHandler.AttachUSDTProbes(
 		libpf.PID(os.Getpid()),
 		setup.testBinary,
+		"", // open via /proc/<pid>/root/<path>
 		"", // no multi-prog (use individual programs)
 		setup.probeList,
 		nil, // no user cookies, just spec IDs
@@ -276,6 +277,7 @@ func TestUSDTProbeWithEBPFMulti(t *testing.T) {
 	lc, err := setup.ebpfHandler.AttachUSDTProbes(
 		libpf.PID(os.Getpid()),
 		setup.testBinary,
+		"",                // open via /proc/<pid>/root/<path>
 		"usdt_test_multi", // multi-probe program name
 		setup.probeList,
 		cookies, // cookies for dispatch (probe IDs 1-8)
