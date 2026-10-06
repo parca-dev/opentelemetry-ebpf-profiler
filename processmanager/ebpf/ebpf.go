@@ -79,6 +79,10 @@ type ebpfMapsImpl struct {
 // Compile time check to make sure ebpfMapsImpl satisfies the interface .
 var _ ebpfapi.EbpfHandler = &ebpfMapsImpl{}
 
+func (m *ebpfMapsImpl) CoredumpTest() bool {
+	return false
+}
+
 // LoadMaps checks if the needed maps for the process manager are available
 // and loads their references into a package-internal structure.
 //

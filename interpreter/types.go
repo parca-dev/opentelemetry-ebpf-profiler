@@ -39,6 +39,9 @@ var (
 	UnknownFunctionName = libpf.Intern("<unknown>")
 
 	ErrMismatchInterpreterType = errors.New("mismatched interpreter type")
+
+	// ErrLJRestart is a special coredump-only error used to restart ConvertTrace processing.
+	ErrLJRestart = errors.New("lj_restart")
 )
 
 // The following function Loader and interfaces Data and Instance work together
@@ -107,6 +110,9 @@ type EbpfHandler interface {
 	// DeletePidInterpreterMapping removes the element specified by pid, prefix
 	// rom the eBPF map pid_page_to_mapping_info.
 	DeletePidInterpreterMapping(libpf.PID, lpm.Prefix) error
+
+	// CoredumpTest returns whether we are running in a coredump test.
+	CoredumpTest() bool
 }
 
 // InterpreterResource describes an eBPF resource owned by a Loader.
