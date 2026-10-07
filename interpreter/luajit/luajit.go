@@ -218,3 +218,98 @@ func (l *luajitInstance) getGCproto(pt libpf.Address) (*proto, error) {
 	l.protos[pt] = gc
 	return gc, nil
 }
+
+// symbolizeFrame symbolizes the previous (up the stack)
+func (l *luajitInstance) symbolizeFrame(funcName string, ptAddr libpf.Address,
+	pc uint32, frames *libpf.Frames) error {
+	pt, err := l.getGCproto(ptAddr)
+	if err != nil {
+		return err
+	}
+	line := pt.getLine(pc)
+	fileName := pt.getName()
+	logf("lj: [%x] %v+%v at %v:%v", ptAddr, funcName, pc, fileName, line)
+	frames.Append(&libpf.Frame{
+		Type:           libpf.LuaJITFrame,
+		FunctionOffset: pc,
+		FunctionName:   libpf.Intern(funcName),
+		SourceFile:     libpf.Intern(fileName),
+		SourceLine:     libpf.SourceLineno(line),
+	})
+	return nil
+}
+
+func (l *luajitInstance) Symbolize(frame libpf.EbpfFrame, frames *libpf.Frames, fm libpf.FrameMapping) error {
+	if !frame.Type().IsInterpType(libpf.LuaJIT) {
+		return interpreter.ErrMismatchInterpreterType
+	}
+
+	var funcName string
+	ljkind := frame.Data()
+	switch ljkind {
+	case support.LJNormalFrame:
+		if frame.NumVariables() < 3 {
+			return errors.New("LuaJIT normal frame not large enough")
+		}
+		callerPT := libpf.Address(frame.Variable(1))
+
+		pt, err := l.getGCproto(callerPT)
+		if err != nil {
+			return err
+		}
+
+		var0 := frame.Variable(0)
+		callerPC := uint32(var0 & 0xFFFFFFFF)
+		calleePC := uint32(var0 >> 32)
+		funcName, err := pt.getFunctionName(callerPC)
+		if err != nil {
+			return err
+		}
+		calleePT := libpf.Address(frame.Variable(2))
+		if err := l.symbolizeFrame(funcName, calleePT,
+			calleePC, frames); err != nil {
+			return err
+		}
+
+		return nil
+	case support.LJFFIFunc:
+		if frame.NumVariables() < 1 {
+			return errors.New("LuaJIT FFI frame not large enough")
+		}
+		funcId := libpf.Address(frame.Variable(0)) & 7
+		switch funcId {
+		case 0:
+			funcName = "lua-frame"
+		case 1:
+			funcName = "c-frame"
+		case 2:
+			funcName = "cont-frame"
+		case 3:
+			return errors.New("unexpected frame type 3")
+		case 4:
+			funcName = "lua-pframe"
+		case 5:
+			funcName = "cpcall"
+		case 6:
+			funcName = "ff-pcall"
+		case 7:
+			funcName = "ff-pcall-hook"
+		}
+		frames.Append(&libpf.Frame{
+			Type:         libpf.LuaJITFrame,
+			FunctionName: libpf.Intern("LuaJIT FFI: " + funcName),
+		})
+		return nil
+	case support.LJGReport:
+		// TODO -- The unwinder backend has reported the location of
+		// the "g" variable for the current VM.
+		// This will be handled in a future PR, when we submit the
+		// unwinder code. Since it's not strictly related to symbolization, we omit it
+		// for now.
+		return nil
+	default:
+		return fmt.Errorf("unrecognized LuaJIT frame kind: %d", ljkind)
+	}
+
+	return nil
+}

@@ -4,6 +4,15 @@
 // to this value to indicate that it contains JITted code.
 #define LUAJIT_JIT_MARKER 42
 
+// Special value for FFI functions
+#define LUAJIT_FFI_FUNC 0xff1
+
+// A normal LuaJIT frame
+#define LUAJIT_NORMAL_FRAME 0
+
+// A fake "frame" that just reports the G pointer.
+#define LUAJIT_G_REPORT 0xff2
+
 // This is CFRAME_SIZE in src/lj_frame.h
 // We could dynamically get this from lj_vm_ffi_callback disassembly and look for:
 // lea rax, [rsp+CFRAME_SIZE]
