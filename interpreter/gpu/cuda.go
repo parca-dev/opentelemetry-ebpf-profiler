@@ -797,13 +797,24 @@ type fixerStats struct {
 	pendingSamplesEvicted int
 }
 
-// Map-size thresholds for the per-fixer clearing sweep run from
-// MaybeClearAll. Bumped 10x from the original 10000/5000 because the
-// tighter values dropped late-arriving symbolized traces on
-// high-launch-rate workloads (e.g. PyTorch ~5K kernels/sec). At those
-// rates the retention window of 5K correlation IDs corresponds to
-// only ~1 second of history, which is too short for the trace
-// symbolization pipeline.
+// Retention for the per-fixer sweep run from MaybeClearAll (every ~2 s).
+//
+// Entries are evicted once older than maxEntryAge. Matching is otherwise
+// what removes them, but graph-launch traces stay in tracesAwaitingTimes
+// (more kernels may follow under the same correlation ID) and every trace
+// stays in pcTraces for PC sample lookup, so without an age limit those
+// maps only shrank at clearTriggerThreshold entries -- ~80 minutes of
+// sampled graph launches, ~14 KB of agent memory each, per process. Kernel
+// times and PC samples arrive within seconds of their launch, so a minute
+// leaves ample slack at any launch rate.
+//
+// The map-size thresholds remain as a backstop: past clearTriggerThreshold
+// entries, keep only those within retentionWindow of the max correlation ID.
+// (They were bumped 10x from 10000/5000 because the tighter values dropped
+// late-arriving symbolized traces on high-launch-rate workloads, e.g.
+// PyTorch ~5K kernels/sec, where 5K correlation IDs are ~1 second.)
+const maxEntryAge = 60 * time.Second
+
 const (
 	clearTriggerThreshold = 100000
 	retentionWindow       = 50000
@@ -846,82 +857,80 @@ func logWait(kind, outcome string, waitNs int64, corrID uint32, pid uint32, extr
 func (f *gpuTraceFixer) maybeClear() fixerStats {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	return f.clearAt(time.Now().UnixNano())
+}
 
+// clearAt evicts entries stored before nowNs-maxEntryAge, and, past the
+// map-size thresholds, those outside retentionWindow. Caller must hold f.mu.
+func (f *gpuTraceFixer) clearAt(nowNs int64) fixerStats {
 	timesLen := len(f.timesAwaitingTraces)
 	tracesLen := len(f.tracesAwaitingTimes)
+	stats := fixerStats{timesLen: timesLen, tracesLen: tracesLen}
 
-	stats := fixerStats{
-		timesLen:  timesLen,
-		tracesLen: tracesLen,
+	overThreshold := timesLen > clearTriggerThreshold || tracesLen > clearTriggerThreshold ||
+		len(f.pcTraces) > clearTriggerThreshold || len(f.pendingPCSamples) > clearTriggerThreshold
+	cutoffNs := nowNs - maxEntryAge.Nanoseconds()
+	evict := func(k uint32, storedAtNs int64) bool {
+		// Signed distance handles correlation ID wrap-around.
+		return storedAtNs < cutoffNs ||
+			(overThreshold && int32(f.maxCorrelationId-k) > retentionWindow)
 	}
 
-	pcLen := len(f.pcTraces)
-	pendingLen := len(f.pendingPCSamples)
-
-	if timesLen > clearTriggerThreshold || tracesLen > clearTriggerThreshold ||
-		pcLen > clearTriggerThreshold || pendingLen > clearTriggerThreshold {
-		nowNs := time.Now().UnixNano()
-		// Keep entries within retentionWindow of the max correlation ID.
-		// Use signed distance to handle wrap-around correctly.
-		for k, evs := range f.timesAwaitingTraces {
-			if int32(f.maxCorrelationId-k) > retentionWindow {
-				if waitLogEnabled {
-					storedAt := f.timesStoredAtNs[k]
-					pid := uint32(0)
-					if len(evs) > 0 {
-						pid = evs[0].Pid
-					}
-					logWait("time_aw_trace", "evicted", nowNs-storedAt, k, pid,
-						fmt.Sprintf("n_times=%d", len(evs)))
-				}
-				delete(f.timesAwaitingTraces, k)
-				delete(f.timesStoredAtNs, k)
-			}
+	for k, evs := range f.timesAwaitingTraces {
+		storedAt := f.timesStoredAtNs[k]
+		if !evict(k, storedAt) {
+			continue
 		}
-		for k, st := range f.tracesAwaitingTimes {
-			if int32(f.maxCorrelationId-k) > retentionWindow {
-				if waitLogEnabled {
-					logWait("trace_aw_time", "evicted", nowNs-st.StoredAtNs, k,
-						uint32(st.Meta.PID))
-				}
-				delete(f.tracesAwaitingTimes, k)
+		if waitLogEnabled {
+			pid := uint32(0)
+			if len(evs) > 0 {
+				pid = evs[0].Pid
 			}
+			logWait("time_aw_trace", "evicted", nowNs-storedAt, k, pid,
+				fmt.Sprintf("n_times=%d", len(evs)))
 		}
-		for k, st := range f.pcTraces {
-			if int32(f.maxCorrelationId-k) > retentionWindow {
-				if waitLogEnabled {
-					logWait("pc_trace", "evicted", nowNs-st.StoredAtNs, k,
-						uint32(st.Meta.PID))
-				}
-				delete(f.pcTraces, k)
-			}
+		delete(f.timesAwaitingTraces, k)
+		delete(f.timesStoredAtNs, k)
+	}
+	for k, st := range f.tracesAwaitingTimes {
+		if !evict(k, st.StoredAtNs) {
+			continue
 		}
-		for k, samples := range f.pendingPCSamples {
-			if int32(f.maxCorrelationId-k) > retentionWindow {
-				stats.pendingSamplesEvicted += len(samples)
-				if waitLogEnabled {
-					pid := uint32(0)
-					if len(samples) > 0 {
-						pid = samples[0].ev.Pid
-					}
-					// Age of the oldest sample in this entry.
-					oldest := samples[0].arrivalNs
-					for i := range samples {
-						if samples[i].arrivalNs < oldest {
-							oldest = samples[i].arrivalNs
-						}
-					}
-					logWait("pc_sample", "evicted", nowNs-oldest, k, pid,
-						fmt.Sprintf("nsamples=%d", len(samples)))
-				}
-				delete(f.pendingPCSamples, k)
-			}
+		if waitLogEnabled {
+			logWait("trace_aw_time", "evicted", nowNs-st.StoredAtNs, k,
+				uint32(st.Meta.PID))
 		}
-
-		stats.timesCleared = timesLen - len(f.timesAwaitingTraces)
-		stats.tracesCleared = tracesLen - len(f.tracesAwaitingTimes)
+		delete(f.tracesAwaitingTimes, k)
+	}
+	for k, st := range f.pcTraces {
+		if !evict(k, st.StoredAtNs) {
+			continue
+		}
+		if waitLogEnabled {
+			logWait("pc_trace", "evicted", nowNs-st.StoredAtNs, k,
+				uint32(st.Meta.PID))
+		}
+		delete(f.pcTraces, k)
+	}
+	for k, samples := range f.pendingPCSamples {
+		// Age of the oldest sample in this entry.
+		oldest := samples[0].arrivalNs
+		for i := range samples {
+			oldest = min(oldest, samples[i].arrivalNs)
+		}
+		if !evict(k, oldest) {
+			continue
+		}
+		stats.pendingSamplesEvicted += len(samples)
+		if waitLogEnabled {
+			logWait("pc_sample", "evicted", nowNs-oldest, k, samples[0].ev.Pid,
+				fmt.Sprintf("nsamples=%d", len(samples)))
+		}
+		delete(f.pendingPCSamples, k)
 	}
 
+	stats.timesCleared = timesLen - len(f.timesAwaitingTraces)
+	stats.tracesCleared = tracesLen - len(f.tracesAwaitingTimes)
 	return stats
 }
 
