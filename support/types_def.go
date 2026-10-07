@@ -122,6 +122,7 @@ type BEAMProcInfo C.BEAMProcInfo
 type DotnetProcInfo C.DotnetProcInfo
 type GoRuntimeOffsets C.GoRuntimeOffsets
 type HotspotProcInfo C.HotspotProcInfo
+type LuaJITProcInfo C.LuaJITProcInfo
 type PHPProcInfo C.PHPProcInfo
 type PerlProcInfo C.PerlProcInfo
 type PyProcInfo C.PyProcInfo
