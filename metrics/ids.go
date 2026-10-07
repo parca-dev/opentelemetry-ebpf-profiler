@@ -716,6 +716,12 @@ const (
 	// Number of thread context attribute payloads truncated to fit the buffer
 	IDUnwindThreadContextAttrsTruncated = 309
 
+	// Number of failures to read LuaJIT context pointer
+	IDUnwindLuaJITErrNoContext = 310
+
+	// Number of failures in context pointer validity check
+	IDUnwindLuaJITErrLMismatch = 311
+
 	// max number of ID values, keep this as *last entry*
-	IDMax = 310
+	IDMax = 312
 )

@@ -62,7 +62,7 @@ const (
 const UnwindInfoMaxEntries = 0x4000
 
 const (
-	MetricIDBeginCumulative = 0x79
+	MetricIDBeginCumulative = 0x7b
 )
 
 const (
@@ -539,14 +539,16 @@ var MetricsTranslation = []metrics.MetricID{
 	0x6c: metrics.IDUnwindNativeErrNonExecutableVMA,
 	0x6d: metrics.IDUnwindLuaJITAttempts,
 	0x6e: metrics.IDUnwindLuaJITErrNoProcInfo,
-	0x6f: metrics.IDSamplesSkippedProcessTooNew,
-	0x70: metrics.IDNumSyncsFromPrctl,
-	0x71: metrics.IDNumPriorityEventDeferred,
-	0x72: metrics.IDUnwindGoAsmcgocallAttempts,
-	0x73: metrics.IDUnwindGoAsmcgocallSuccess,
-	0x74: metrics.IDUnwindGoAsmcgocallUnwindFailure,
-	0x75: metrics.IDUnwindThreadContextErrReadTlsPtr,
-	0x76: metrics.IDUnwindThreadContextErrReadThreadCtxBuf,
-	0x77: metrics.IDUnwindThreadContextReadSuccesses,
-	0x78: metrics.IDUnwindThreadContextAttrsTruncated,
+	0x71: metrics.IDSamplesSkippedProcessTooNew,
+	0x72: metrics.IDNumSyncsFromPrctl,
+	0x73: metrics.IDNumPriorityEventDeferred,
+	0x74: metrics.IDUnwindGoAsmcgocallAttempts,
+	0x75: metrics.IDUnwindGoAsmcgocallSuccess,
+	0x76: metrics.IDUnwindGoAsmcgocallUnwindFailure,
+	0x77: metrics.IDUnwindThreadContextErrReadTlsPtr,
+	0x78: metrics.IDUnwindThreadContextErrReadThreadCtxBuf,
+	0x79: metrics.IDUnwindThreadContextReadSuccesses,
+	0x7a: metrics.IDUnwindThreadContextAttrsTruncated,
+	0x6f: metrics.IDUnwindLuaJITErrNoContext,
+	0x70: metrics.IDUnwindLuaJITErrLMismatch,
 }

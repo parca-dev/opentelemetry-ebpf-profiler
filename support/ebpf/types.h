@@ -346,6 +346,12 @@ enum {
   // number of failures to read LuaJIT proc info
   metricID_UnwindLuaJITErrNoProcInfo,
 
+  // number of failures to read LuaJIT context pointer
+  metricID_UnwindLuaJITErrNoContext,
+
+  // number of failures in context pointer validity check
+  metricID_UnwindLuaJITErrLMismatch,
+
   // number of samples skipped because the process is too new
   metricID_SamplesSkippedProcessTooNew,
 
@@ -611,9 +617,10 @@ typedef struct BEAMProcInfo {
   u8 ranges_sizeof;
 } BEAMProcInfo;
 
-// Stub until we land the full LuaJIT interpreter.
 typedef struct LuaJITProcInfo {
-  u8 dummy;
+  u16 g2dispatch;
+  u16 cur_L_offset;
+  u16 cframe_size_jit;
 } LuaJITProcInfo;
 
 // COMM_LEN defines the maximum length we will receive for the comm of a task.
@@ -740,7 +747,7 @@ typedef struct UnwindState {
       // The per-CPU registers which are not unwound, but needed to be accessed
       // on leaf frames.
 #if defined(__x86_64__)
-      u64 rax, rdi, r8, r9, r11, r13, r15;
+      u64 rax, rdi, r8, r9, r11, r13, r14, r15;
 #elif defined(__aarch64__)
       u64 r20, r22, r28;
 #endif
@@ -816,6 +823,59 @@ typedef struct RubyUnwindState {
   // Detect if JIT code ran in the process (at any time)
   bool jit_detected;
 } RubyUnwindState;
+
+typedef u64 LJTValue;
+
+// This layout hasn't changed over LuaJIT versions.
+typedef struct LJState {
+  void *glref;
+  void *dummy3;
+  LJTValue *base;     /* Base of currently executing function. */
+  LJTValue *top;      /* First free slot in the stack. */
+  LJTValue *maxstack; /* Last free slot in the stack. */
+  LJTValue *stack;    /* Stack base. */
+  void *openupval;    /* List of open upvalues in the stack. */
+  void *env;          /* Thread environment (table of globals). */
+  void *cframe;       /* End of C stack frame chain. */
+} LJState;
+
+// These two are always adjacent, cur_L offset comes from HA.
+typedef struct LJGlobalPart {
+  void *cur_L;
+  LJTValue *jit_base;
+} LJGlobalPart;
+
+// Part of a function we need access to, skips first 8 bytes.  Again
+// this layout (from GCfuncL type) hasn't changed in the history of openresty.
+typedef struct LJFuncPart {
+  u8 marked;
+  u8 gct;
+  u8 ffid;
+  u8 nupvalues;
+  u32 dummy;
+  void *env;
+  void *gclist;
+  void *pc; // BCIns* to end of GCproto (i.e. startpc)
+} LJFuncPart;
+
+typedef struct LJScratchSpace {
+  LJState L;
+  LJGlobalPart G;
+  LJFuncPart f;
+  void *G_to_report;
+  u32 *prev_proto;
+  u32 prev_pc;
+} LJScratchSpace;
+
+typedef struct LJUnwindState {
+  LJTValue *frame;
+  LJTValue *prevframe;
+  void *L_ptr;
+  // If we have intertwined interpreter and native frames use cframe to track we have more
+  // jumps back to native unwinder to do.
+  void *cframe;
+  bool is_jit;
+} LJUnwindState;
 
 // Container for additional scratch space needed by the HotSpot unwinder.
 typedef struct DotnetUnwindScratchSpace {
@@ -923,6 +983,8 @@ typedef struct PerCPURecord {
   PHPUnwindState phpUnwindState;
   // The current Ruby unwinder state.
   RubyUnwindState rubyUnwindState;
+  // The current LuaJIT unwinder state.
+  LJUnwindState luajitUnwindState;
   // State for Go and Native custom labels
   CustomLabelsState customLabelsState;
   // Per-process Go runtime offsets, preloaded once per trace from go_procs in
@@ -939,6 +1001,8 @@ typedef struct PerCPURecord {
     PythonUnwindScratchSpace pythonUnwindScratch;
     // Scratch space for the Go unwinder
     GoUnwindScratchSpace goUnwindScratch;
+    // Scratch space for the LuaJIT unwinder
+    LJScratchSpace luajitUnwindScratch;
     // Go labels scratch
     GoMapBucket goMapBucket;
     // Scratch for Go 1.24 labels
@@ -962,6 +1026,10 @@ typedef struct PerCPURecord {
   // usesAnonymousMappings is copied from the per-PID marker in
   // pid_page_to_mapping_info during trace initialization.
   bool usesAnonymousMappings;
+
+  // initialUnwinder is the unwinder for the leaf frame, set in
+  // `collect_trace`.
+  int initialUnwinder;
 } PerCPURecord;
 
 // https://github.com/torvalds/linux/blob/e9a6fb0bcdd7609be6969112f3fbfcce3b1d4a7c/include/linux/percpu.h#L24C39-L24C47
