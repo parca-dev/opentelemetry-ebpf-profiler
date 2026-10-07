@@ -512,6 +512,11 @@ static inline EBPF_INLINE PerCPURecord *get_pristine_per_cpu_record()
   record->rubyUnwindState.stack_ptr         = 0;
   record->rubyUnwindState.last_stack_frame  = 0;
   record->rubyUnwindState.cfunc_saved_frame = 0;
+  record->luajitUnwindState.frame           = 0;
+  record->luajitUnwindState.prevframe       = 0;
+  record->luajitUnwindState.L_ptr           = 0;
+  record->luajitUnwindState.cframe          = 0;
+  record->luajitUnwindState.is_jit          = false;
   record->rubyUnwindState.jit_detected      = false;
   record->unwindersDone                     = 0;
   record->tailCalls                         = 0;
@@ -1041,6 +1046,7 @@ copy_state_regs(UnwindState *state, struct pt_regs *regs, bool interrupted_kerne
   state->r9  = regs->r9;
   state->r11 = regs->r11;
   state->r13 = regs->r13;
+  state->r14 = regs->r14;
   state->r15 = regs->r15;
 
   // Treat syscalls as return addresses, but not IRQ handling, page faults, etc..
@@ -1237,7 +1243,8 @@ static inline EBPF_INLINE int collect_trace(
 
   record->usesAnonymousMappings = pid_uses_anonymous_mappings(pidInfo);
 
-  error = get_next_unwinder_after_native_frame(record, &unwinder);
+  error                   = get_next_unwinder_after_native_frame(record, &unwinder);
+  record->initialUnwinder = unwinder;
 
 exit:
   record->state.unwind_error = error;

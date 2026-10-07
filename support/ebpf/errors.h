@@ -240,6 +240,18 @@ typedef enum ErrorCode {
   // LuaJIT: No entry for this process exists in the LuaJIT process info array
   ERR_LUAJIT_NO_PROC_INFO = 8000,
 
+  // LuaJIT: Unable to read the Lua context
+  ERR_LUAJIT_READ_LUA_CONTEXT = 8001,
+
+  // LuaJIT: Unable to read the Lua frame
+  ERR_LUAJIT_FRAME_READ = 8002,
+
+  // LuaJIT: context pointer validity check failed
+  ERR_LUAJIT_L_MISMATCH = 8003,
+
+  // LuaJIT: PC exceeds 24 bits
+  ERR_LUAJIT_INVALID_PC = 8004,
+
   // Go: required runtime offsets or layout are missing or invalid
   ERR_GO_NO_OFFSETS = 9000,
 
