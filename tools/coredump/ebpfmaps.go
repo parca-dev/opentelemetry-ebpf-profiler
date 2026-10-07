@@ -36,6 +36,10 @@ type ebpfMapsCoredump struct {
 
 var _ interpreter.EbpfHandler = &ebpfMapsCoredump{}
 
+func (emc *ebpfMapsCoredump) CoredumpTest() bool {
+	return true
+}
+
 func (emc *ebpfMapsCoredump) RemoveReportedPID(libpf.PID) {
 }
 

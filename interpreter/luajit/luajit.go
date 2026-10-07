@@ -9,8 +9,10 @@ import (
 	"debug/elf"
 	"errors"
 	"fmt"
+	"sync"
 
 	"go.opentelemetry.io/ebpf-profiler/host"
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/lpm"
@@ -48,11 +50,23 @@ type luajitInstance struct {
 	rm         remotememory.RemoteMemory
 	protos     map[libpf.Address]*proto
 	jitRegions regionMap
+	ebpf       interpreter.EbpfHandler
+	// Map of g's we've seen, populated by the symbolizer goroutine and
+	// consumed in SynchronizeMappings so needs to be protected by a mutex.
+	mu  sync.Mutex
+	vms vmMap
+
+	// Currently mapped prefixes for each vms traces
+	prefixesByG map[libpf.Address][]lpm.Prefix
 
 	// Currently mapped prefixes for entire memory regions
 	prefixes map[regionKey][]lpm.Prefix
 
-	cycle int
+	// Hash of the traces for each vm
+	traceHashes map[libpf.Address]uint64
+	cycle       int
+
+	g2Traces uint16
 }
 
 var (
@@ -68,7 +82,19 @@ func (d *luajitData) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf
 func (d *luajitData) Unload(_ interpreter.EbpfHandler) {}
 
 func (l *luajitInstance) Detach(ebpf interpreter.EbpfHandler, pid libpf.PID) error {
-	return nil
+	// Clear memory ranges
+	for _, prefixes := range l.prefixes {
+		for _, prefix := range prefixes {
+			_ = ebpf.DeletePidInterpreterMapping(pid, prefix)
+		}
+	}
+	// Clear trace ranges
+	for _, prefixes := range l.prefixesByG {
+		for _, prefix := range prefixes {
+			_ = ebpf.DeletePidInterpreterMapping(pid, prefix)
+		}
+	}
+	return ebpf.DeleteProcData(libpf.LuaJIT, pid)
 }
 
 func GetLoader(_ Config) interpreter.Loader {
@@ -133,6 +159,16 @@ DeltasLoop:
 	return util.Range{}, errors.New("failed to find interpreter range")
 }
 
+func (l *luajitInstance) getVMList() []libpf.Address {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	gs := make([]libpf.Address, 0, len(l.vms))
+	for g := range l.vms {
+		gs = append(gs, g)
+	}
+	return gs
+}
+
 func (l *luajitInstance) addJITRegion(ebpf interpreter.EbpfHandler, pid libpf.PID,
 	start, end uint64) error {
 	prefixes, err := lpm.CalculatePrefixList(start, end)
@@ -151,6 +187,25 @@ func (l *luajitInstance) addJITRegion(ebpf interpreter.EbpfHandler, pid libpf.PI
 	k := regionKey{start: start, end: end}
 	l.prefixes[k] = prefixes
 	return nil
+}
+
+func (l *luajitInstance) addTrace(ebpf interpreter.EbpfHandler, pid libpf.PID, t trace, g,
+	spadjust uint64) ([]lpm.Prefix, error) {
+	start, end := t.mcode, t.mcode+uint64(t.szmcode)
+	prefixes, err := lpm.CalculatePrefixList(start, end)
+	if err != nil {
+		logf("lj: failed to calculate lpm: %v", err)
+		return nil, err
+	}
+	logf("lj: add trace mapping for pid(%v) %x:%x", pid, start, end)
+	for _, prefix := range prefixes {
+		fileID := support.LJJitMarker<<32 | spadjust
+		if err := ebpf.UpdatePidInterpreterMapping(pid, prefix, support.ProgUnwindLuaJIT,
+			host.FileID(fileID), g); err != nil {
+			return nil, err
+		}
+	}
+	return prefixes, nil
 }
 
 func (l *luajitInstance) SynchronizeMappings(ebpf interpreter.EbpfHandler,
@@ -198,10 +253,81 @@ func (l *luajitInstance) synchronizeMappings(ebpf interpreter.EbpfHandler, pid l
 }
 
 func (l *luajitInstance) processVMs(ebpf interpreter.EbpfHandler, pid libpf.PID) error {
-	// TODO - When the full LuaJIT interpreter lands, this will process the "g" objects
-	// that we learned about from the eBPF side, and add the traces they contain to the
-	// interpreter mapping. Until then, it is a no-op.
+	var badVMs []libpf.Address
+	for _, g := range l.getVMList() {
+		hash, traces, err := loadTraces(g+libpf.Address(l.g2Traces), l.rm)
+		if err != nil {
+			// if g is bad remove it
+			log.Warnf("LuaJIT instance (%v) deleted: %v", g, err)
+			badVMs = append(badVMs, g)
+			continue
+		}
+		// Don't do anything if nothing changed.
+		if hash == l.traceHashes[g] {
+			continue
+		}
+
+		// We don't bother trying to keep things in sync, just delete them all and re-add them.
+		prefixes := l.prefixesByG[g]
+		l.prefixesByG[g] = nil
+		for _, prefix := range prefixes {
+			_ = ebpf.DeletePidInterpreterMapping(pid, prefix)
+		}
+
+		newPrefixes := []lpm.Prefix{}
+	traceLoop:
+		for i := range traces {
+			t := traces[i]
+			// Validate the trace
+			foundRegion := false
+			for reg := range l.jitRegions {
+				if t.mcode >= reg.Vaddr && t.mcode < reg.Vaddr+reg.Length {
+					foundRegion = true
+					end := t.mcode + uint64(t.szmcode)
+					if end > reg.Vaddr+reg.Length {
+						log.Errorf("trace %v end goes beyond JIT region, bad szmcode", t)
+						continue traceLoop
+					}
+					break
+				}
+			}
+
+			if !foundRegion {
+				log.Errorf("trace %v not in a JIT region", t)
+				continue
+			}
+
+			stackDelta := uint64(t.spadjust) + uint64(cframeSizeJIT)
+			// If this is a side trace, we need to add the spadjust of the root trace but
+			// only if they are different.
+			//https://github.com/openresty/luajit2/blob/7952882d/src/lj_gdbjit.c#L597
+			if t.root != 0 && traces[t.root].spadjust != t.spadjust {
+				stackDelta += uint64(traces[t.root].spadjust) + uint64(cframeSizeJIT)
+			}
+			p, err := l.addTrace(ebpf, pid, t, uint64(g), stackDelta)
+			if err != nil {
+				log.Errorf("Error adding trace(%d): %v", t.traceno, err)
+				continue
+			}
+			newPrefixes = append(newPrefixes, p...)
+		}
+
+		log.Infof("LuaJIT traces for pid(%v) added: %d with %d prefixes and removed %d prefixes",
+			pid, len(traces), len(newPrefixes), len(prefixes))
+
+		l.prefixesByG[g] = newPrefixes
+		l.traceHashes[g] = hash
+	}
+	l.removeVMs(badVMs)
 	return nil
+}
+
+func (l *luajitInstance) removeVMs(gs []libpf.Address) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, g := range gs {
+		delete(l.vms, g)
+	}
 }
 
 func (l *luajitInstance) getGCproto(pt libpf.Address) (*proto, error) {
@@ -237,6 +363,16 @@ func (l *luajitInstance) symbolizeFrame(funcName string, ptAddr libpf.Address,
 		SourceLine:     libpf.SourceLineno(line),
 	})
 	return nil
+}
+
+func (l *luajitInstance) addVM(g libpf.Address) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	_, ok := l.vms[g]
+	if !ok {
+		l.vms[g] = struct{}{}
+	}
+	return !ok
 }
 
 func (l *luajitInstance) Symbolize(frame libpf.EbpfFrame, frames *libpf.Frames, fm libpf.FrameMapping) error {
@@ -301,11 +437,19 @@ func (l *luajitInstance) Symbolize(frame libpf.EbpfFrame, frames *libpf.Frames, 
 		})
 		return nil
 	case support.LJGReport:
-		// TODO -- The unwinder backend has reported the location of
-		// the "g" variable for the current VM.
-		// This will be handled in a future PR, when we submit the
-		// unwinder code. Since it's not strictly related to symbolization, we omit it
-		// for now.
+		if frame.NumVariables() < 1 {
+			return errors.New("LuaJIT G report frame not large enough")
+		}
+		g := libpf.Address(frame.Variable(0))
+		if g != 0 {
+			unseen := l.addVM(g)
+			if unseen {
+				log.Infof("New LuaJIT instance detected: %v", g)
+				if l.ebpf.CoredumpTest() {
+					return interpreter.ErrLJRestart
+				}
+			}
+		}
 		return nil
 	default:
 		return fmt.Errorf("unrecognized LuaJIT frame kind: %d", ljkind)

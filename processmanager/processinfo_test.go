@@ -93,6 +93,10 @@ func (h *testEbpfHandler) UpdatePidInterpreterMapping(
 	return nil
 }
 
+func (m *testEbpfHandler) CoredumpTest() bool {
+	return false
+}
+
 func (h *testEbpfHandler) DeletePidInterpreterMapping(libpf.PID, lpm.Prefix) error {
 	return nil
 }
