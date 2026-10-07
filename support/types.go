@@ -240,6 +240,11 @@ type HotspotProcInfo struct {
 	Nmethod_uses_offsets   uint8
 	Pad_cgo_0              [6]byte
 }
+type LuaJITProcInfo struct {
+	G2dispatch      uint16
+	Cur_L_offset    uint16
+	Cframe_size_jit uint16
+}
 type PHPProcInfo struct {
 	Current_execute_data                uint64
 	Jit_return_address                  uint64

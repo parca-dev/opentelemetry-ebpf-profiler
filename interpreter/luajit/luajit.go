@@ -1,15 +1,16 @@
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
-// Boilerplate stubs for LuaJIT implementation.
-
 package luajit // import "go.opentelemetry.io/ebpf-profiler/interpreter/luajit"
 
 import (
 	"debug/elf"
 	"errors"
 	"fmt"
+	"path"
+	"strings"
 	"sync"
+	"unsafe"
 
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
@@ -50,6 +51,7 @@ type luajitInstance struct {
 	rm         remotememory.RemoteMemory
 	protos     map[libpf.Address]*proto
 	jitRegions regionMap
+	pid        libpf.PID
 	ebpf       interpreter.EbpfHandler
 	// Map of g's we've seen, populated by the symbolizer goroutine and
 	// consumed in SynchronizeMappings so needs to be protected by a mutex.
@@ -76,10 +78,37 @@ var (
 
 func (d *luajitData) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Address,
 	rm remotememory.RemoteMemory) (interpreter.Instance, error) {
-	return &luajitInstance{}, nil
+	cdata := support.LuaJITProcInfo{
+		G2dispatch:      d.g2Dispatch,
+		Cur_L_offset:    d.currentLOffset,
+		Cframe_size_jit: uint16(cframeSizeJIT),
+	}
+	if err := ebpf.UpdateProcData(libpf.LuaJIT, pid, unsafe.Pointer(&cdata)); err != nil {
+		return nil, err
+	}
+
+	return &luajitInstance{rm: rm,
+		pid:         pid,
+		ebpf:        ebpf,
+		protos:      make(map[libpf.Address]*proto),
+		jitRegions:  make(regionMap),
+		prefixes:    make(map[regionKey][]lpm.Prefix),
+		prefixesByG: make(map[libpf.Address][]lpm.Prefix),
+		vms:         make(vmMap),
+		traceHashes: make(map[libpf.Address]uint64),
+		g2Traces:    d.g2Traces,
+	}, nil
 }
 
 func (d *luajitData) Unload(_ interpreter.EbpfHandler) {}
+
+// UsesAnonymousMappings reports that LuaJIT executes JIT-compiled traces from
+// anonymous memory. Without it, the unwinder aborts with
+// native_no_pid_page_mapping on an anonymous mapping miss instead of treating
+// it as an expected JIT region.
+func (l *luajitInstance) UsesAnonymousMappings() bool {
+	return true
+}
 
 func (l *luajitInstance) Detach(ebpf interpreter.EbpfHandler, pid libpf.PID) error {
 	// Clear memory ranges
@@ -99,12 +128,42 @@ func (l *luajitInstance) Detach(ebpf interpreter.EbpfHandler, pid libpf.PID) err
 
 func GetLoader(_ Config) interpreter.Loader {
 	return interpreter.NewLoader(loader, []interpreter.InterpreterResource{
-		{MapName: BPFMapName},
+		{MapName: BPFMapName, ProgID: uint32(support.ProgUnwindLuaJIT), ProgName: "unwind_luajit"},
 	})
 }
 
 func loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpreter.Data, error) {
-	return nil, nil
+	base := path.Base(info.FileName())
+	if !strings.HasPrefix(base, "libluajit-5.1.so") &&
+		!strings.HasPrefix(base, "luajit") &&
+		base != "nginx" && base != "openresty" {
+		return nil, nil
+	}
+
+	ef, err := info.GetELF()
+	if err != nil {
+		return nil, err
+	}
+
+	luaInterp, err := extractInterpreterBounds(ef.Machine, *info.Intervals(), cframeSize)
+	if err != nil {
+		return nil, err
+	}
+	logf("lj: interp range %v", luaInterp)
+
+	ljd, err := newLuajitData(ef, luaInterp)
+	if err != nil {
+		return nil, err
+	}
+
+	logf("lj: offsets %+v", ljd)
+
+	if err = ebpf.UpdateInterpreterOffsets(support.ProgUnwindLuaJIT, info.FileID(),
+		[]util.Range{luaInterp}); err != nil {
+		return nil, err
+	}
+
+	return ljd, nil
 }
 
 const (
