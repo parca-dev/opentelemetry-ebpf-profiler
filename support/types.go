@@ -330,7 +330,12 @@ type ThreadContextProcInfo struct {
 	Tls TLSVarInfo
 }
 type V8ProcInfo struct {
+	Default_isolate_group        uint64
+	Isolate_sym                  uint64
 	Version                      uint32
+	Js_dispatch_table_offset     uint32
+	Cped_offset                  uint32
+	Wrapped_object_offset        uint32
 	Type_JSFunction_first        uint16
 	Type_JSFunction_last         uint16
 	Type_Code                    uint16
@@ -350,12 +355,7 @@ type V8ProcInfo struct {
 	Codekind_mask                uint8
 	Codekind_baseline            uint8
 	Codekind_interpreted         uint8
-	Isolate_sym                  uint64
-	Cped_offset                  uint32
-	Wrapped_object_offset        uint32
-	Default_isolate_group        uint64
 	Leaptiering                  uint8
-	Js_dispatch_table_offset     uint32
 }
 type NativeCustomLabelsProcInfo struct {
 	Current_set_tls_offset       uint64
@@ -428,12 +428,11 @@ const (
 
 	V8FpContextSize = 0x40
 
-	V8FileTypeMarker       = 0x0
-	V8FileTypeByteCode     = 0x1
-	V8FileTypeNativeSFI    = 0x2
-	V8FileTypeNativeCode   = 0x3
-	V8FileTypeNativeJSFunc = 0x4
-	V8FileTypeMask         = 0x7
+	V8FrameTypeMarker     = 0x0
+	V8FrameTypeByteCode   = 0x1
+	V8FrameTypeNativeSFI  = 0x2
+	V8FrameTypeNativeCode = 0x3
+	V8FrameTypeMask       = 0x7
 
 	V8LineCookieShift = 0x20
 	V8LineCookieMask  = 0xffffffff00000000
