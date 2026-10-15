@@ -7,7 +7,7 @@ use super::*;
 use crate::symbfile::proto::MessageType;
 use crate::VirtAddr;
 use fallible_iterator::FallibleIterator;
-use std::io;
+use std::{io, iter};
 
 /// Reader for the `symbfile` file format.
 #[derive(Debug)]
@@ -119,18 +119,21 @@ impl<I: io::Read> Reader<I> {
             if lt.offset.len() != lt.line_number.len() {
                 return Err(Error::ColumnLengthMismatch);
             }
+            let discriminators = optional_column(lt.discriminator, lt.offset.len())?;
 
             let mut prev_offset = 0;
             lt.line_number
                 .into_iter()
                 .zip(lt.offset)
-                .map(|(l, o)| {
+                .zip(discriminators)
+                .map(|((l, o), discriminator)| {
                     let offset = prev_offset + o;
                     prev_offset += o;
 
                     LineTableEntry {
                         offset,
                         line_number: l,
+                        discriminator,
                     }
                 })
                 .collect()
@@ -157,13 +160,11 @@ impl<I: io::Read> Reader<I> {
                 Some(CallFile::CallFileStr(s)) => Some(s),
                 None => None,
             },
-            call_line: if range.call_line == 0 {
-                None
-            } else {
-                Some(range.call_line)
-            },
+            call_line: nonzero(range.call_line),
+            call_discriminator: range.call_discriminator,
             depth: range.depth,
             line_table,
+            start_line: nonzero(range.start_line),
         })
     }
 
@@ -173,6 +174,9 @@ impl<I: io::Read> Reader<I> {
             return Err(Error::ColumnLengthMismatch);
         }
 
+        let discriminators = optional_column(pad.discriminator, pad.file.len())?;
+        let start_lines = optional_column(pad.start_line, pad.file.len())?;
+
         use proto::return_pad_v1::ElfVa;
         Ok(ReturnPad {
             elf_va: elf_va_rel2abs!(self, pad),
@@ -181,13 +185,17 @@ impl<I: io::Read> Reader<I> {
                 .into_iter()
                 .zip(pad.func)
                 .zip(pad.line)
-                .map(|((file, func), line)| {
+                .zip(discriminators)
+                .zip(start_lines)
+                .map(|((((file, func), line), discriminator), start_line)| {
                     let file = self.str_by_idx(file)?.to_owned();
 
                     Ok(ReturnPadEntry {
                         func: self.str_by_idx(func)?.to_owned(),
                         file: if file.is_empty() { None } else { Some(file) },
-                        line: if line == 0 { None } else { Some(line) },
+                        line: nonzero(line),
+                        discriminator,
+                        start_line: nonzero(start_line),
                     })
                 })
                 .collect::<Result<_, Error>>()?,
@@ -213,6 +221,23 @@ impl<I: io::Read> FallibleIterator for Reader<I> {
     fn next(&mut self) -> Result<Option<Self::Item>, Self::Error> {
         self.read()
     }
+}
+
+/// Maps the wire format's "0 = unknown" convention to an [`Option`].
+fn nonzero(x: u32) -> Option<u32> {
+    (x != 0).then_some(x)
+}
+
+/// Reads a column that writers omit if all of its values are 0.
+///
+/// Such columns were added to the format later, so files written by older
+/// versions never contain them. Missing columns are padded with zeros, but
+/// partially filled ones are rejected.
+fn optional_column(column: Vec<u32>, len: usize) -> Result<impl Iterator<Item = u32>> {
+    if !column.is_empty() && column.len() != len {
+        return Err(Error::ColumnLengthMismatch);
+    }
+    Ok(column.into_iter().chain(iter::repeat(0)))
 }
 
 /// Reads the var-int encoded message length and type.
@@ -311,5 +336,123 @@ mod tests {
         assert!(matches!(read_leb128(&[0x80, 0x01][..]), Ok(Some(128))));
         assert!(matches!(read_leb128(&[0xff, 0x01][..]), Ok(Some(255))));
         assert!(matches!(read_leb128(&[0x80, 0x02][..]), Ok(Some(256))));
+    }
+
+    /// Build a `Reader` with a pre-populated string table for unit-testing the
+    /// `deserialize_*` helpers directly, without going through a real stream.
+    fn test_reader(string_table: Vec<String>) -> Reader<io::Empty> {
+        Reader {
+            inner: io::empty(),
+            read_buf: Vec::new(),
+            string_table,
+            prev_elf_va: None,
+        }
+    }
+
+    /// Return pads written before the `start_line` and `discriminator` columns
+    /// existed omit them entirely. Such files must still decode, with every
+    /// entry reporting an unknown (`None`) start line and no discriminator.
+    #[test]
+    fn retpad_without_optional_columns_is_backward_compatible() {
+        use proto::return_pad_v1::ElfVa;
+
+        let mut reader = test_reader(vec!["".into(), "main".into(), "main.c".into()]);
+        let pad = proto::ReturnPadV1 {
+            elf_va: Some(ElfVa::SetElfVa(0x1000)),
+            func: vec![1, 1],
+            file: vec![2, 2],
+            line: vec![10, 20],
+            // Old format: the columns are absent (decode to empty vecs).
+            discriminator: vec![],
+            start_line: vec![],
+        };
+
+        let decoded = reader.deserialize_return_pad(pad).unwrap();
+        assert_eq!(decoded.elf_va, 0x1000);
+        assert_eq!(decoded.entries.len(), 2);
+        assert!(decoded.entries.iter().all(|e| e.start_line.is_none()));
+        assert!(decoded.entries.iter().all(|e| e.discriminator == 0));
+    }
+
+    /// A new-format pad carries fully-populated optional columns, with 0
+    /// meaning "unknown" or "none".
+    #[test]
+    fn retpad_with_optional_columns() {
+        use proto::return_pad_v1::ElfVa;
+
+        let mut reader = test_reader(vec!["".into(), "main".into(), "main.c".into()]);
+        let pad = proto::ReturnPadV1 {
+            elf_va: Some(ElfVa::SetElfVa(0x1000)),
+            func: vec![1, 1],
+            file: vec![2, 2],
+            line: vec![10, 20],
+            discriminator: vec![0, 7],
+            start_line: vec![5, 0],
+        };
+
+        let decoded = reader.deserialize_return_pad(pad).unwrap();
+        assert_eq!(decoded.entries[0].start_line, Some(5));
+        assert_eq!(decoded.entries[1].start_line, None);
+        assert_eq!(decoded.entries[0].discriminator, 0);
+        assert_eq!(decoded.entries[1].discriminator, 7);
+    }
+
+    /// A partially-filled optional column (present but the wrong length) is
+    /// corrupt and must be rejected rather than silently misaligned.
+    #[test]
+    fn retpad_with_partial_optional_column_is_rejected() {
+        use proto::return_pad_v1::ElfVa;
+
+        let pad = |discriminator, start_line| proto::ReturnPadV1 {
+            elf_va: Some(ElfVa::SetElfVa(0x1000)),
+            func: vec![1, 1],
+            file: vec![2, 2],
+            line: vec![10, 20],
+            discriminator,
+            start_line,
+        };
+
+        // Only one entry for two frames.
+        for pad in [pad(vec![], vec![5]), pad(vec![3], vec![])] {
+            let mut reader = test_reader(vec!["".into(), "main".into(), "main.c".into()]);
+            assert!(matches!(
+                reader.deserialize_return_pad(pad),
+                Err(Error::ColumnLengthMismatch)
+            ));
+        }
+    }
+
+    /// Same as for return pads: line tables written before the discriminator
+    /// column existed omit it, and partially filled columns are rejected.
+    #[test]
+    fn line_table_discriminator_column() {
+        use proto::range_v1::{ElfVa, Func};
+
+        let range = |discriminator| proto::RangeV1 {
+            elf_va: Some(ElfVa::SetElfVa(0x1000)),
+            length: 0x10,
+            func: Some(Func::FuncStr("main".into())),
+            line_table: Some(proto::LineTable {
+                offset: vec![0, 4],
+                line_number: vec![10, 10],
+                discriminator,
+            }),
+            ..Default::default()
+        };
+
+        let mut reader = test_reader(vec![]);
+        let decoded = reader.deserialize_range(range(vec![])).unwrap();
+        assert!(decoded.line_table.iter().all(|x| x.discriminator == 0));
+
+        let mut reader = test_reader(vec![]);
+        let decoded = reader.deserialize_range(range(vec![1, 2])).unwrap();
+        let discriminators: Vec<_> = decoded.line_table.iter().map(|x| x.discriminator).collect();
+        assert_eq!(discriminators, [1, 2]);
+
+        let mut reader = test_reader(vec![]);
+        assert!(matches!(
+            reader.deserialize_range(range(vec![1])),
+            Err(Error::ColumnLengthMismatch)
+        ));
     }
 }

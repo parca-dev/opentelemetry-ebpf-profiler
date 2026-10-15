@@ -729,6 +729,8 @@ pub struct SubprogramInfo<'dwarf, 'units> {
     link_name: Option<UnitAV<'dwarf, 'units>>,
     call_file: Option<UnitAV<'dwarf, 'units>>,
     call_line: Option<NonZeroU64>,
+    call_discriminator: u64,
+    decl_line: Option<NonZeroU64>,
     die_ranges: Option<gimli::RangeIter<R<'dwarf>>>,
 }
 
@@ -753,6 +755,9 @@ impl<'dwarf, 'units> SubprogramInfo<'dwarf, 'units> {
         }
         if self.link_name.is_none() {
             self.link_name = other.link_name;
+        }
+        if self.decl_line.is_none() {
+            self.decl_line = other.decl_line;
         }
         if self.die_ranges.is_none() {
             self.die_ranges = other.die_ranges;
@@ -789,6 +794,8 @@ impl<'dwarf, 'units> SubprogramInfo<'dwarf, 'units> {
         let mut spec = None;
         let mut call_line = None;
         let mut call_file = None;
+        let mut call_discriminator = None;
+        let mut decl_line = None;
         let attrs = die.attrs();
         for attr in attrs {
             match attr.name() {
@@ -799,6 +806,8 @@ impl<'dwarf, 'units> SubprogramInfo<'dwarf, 'units> {
 
                 // Reading is cheap: decode immediately.
                 DW_AT_call_line => call_line = attr.value().udata_value(),
+                DW_AT_GNU_discriminator => call_discriminator = attr.value().udata_value(),
+                DW_AT_decl_line => decl_line = attr.value().udata_value(),
                 DW_AT_abstract_origin => abstract_origin = Some(attr.value()),
                 DW_AT_specification => spec = Some(attr.value()),
 
@@ -813,6 +822,8 @@ impl<'dwarf, 'units> SubprogramInfo<'dwarf, 'units> {
             link_name,
             call_file,
             call_line: call_line.and_then(NonZeroU64::new),
+            call_discriminator: call_discriminator.unwrap_or(0),
+            decl_line: decl_line.and_then(NonZeroU64::new),
             die_ranges: Some(unit.dwarf().die_ranges(&unit.unit.gimli_unit, die)?),
         };
 
@@ -884,6 +895,25 @@ impl<'dwarf, 'units> SubprogramInfo<'dwarf, 'units> {
     /// Reads the call line for this function, if present.
     pub fn call_line(&self) -> Option<NonZeroU64> {
         self.call_line
+    }
+
+    /// Reads the discriminator of the call to this function
+    /// (`DW_AT_GNU_discriminator`), or `0` if there is none.
+    ///
+    /// This tells apart calls in different basic blocks on the same call line.
+    pub fn call_discriminator(&self) -> u64 {
+        self.call_discriminator
+    }
+
+    /// Reads the declaration line (`DW_AT_decl_line`) for this function, if
+    /// present.
+    ///
+    /// This is the source line of the function's definition, taken from the
+    /// most concrete DIE available (preferring the concrete instance over any
+    /// abstract origin or specification). For inlined subroutines this is the
+    /// definition line of the inlined function itself, not its call site.
+    pub fn decl_line(&self) -> Option<NonZeroU64> {
+        self.decl_line
     }
 }
 
@@ -972,6 +1002,8 @@ pub struct LineTableEntry<'dwarf> {
     pub file: SourceFile<'dwarf>,
     /// Line number within the source file, starting at `1`.
     pub line: Option<NonZeroU64>,
+    /// Discriminator telling apart basic blocks on the same line, or `0`.
+    pub discriminator: u64,
 }
 
 /// Internal state of [`LineIter`].
@@ -994,6 +1026,7 @@ impl<'dwarf> LineTableIterState<'dwarf> {
             file: SourceFile::read_from_linetab(unit, header, SourceFileId(row.file_index()))?,
             rng: row.address()..row.address(),
             line: row.line(),
+            discriminator: row.discriminator(),
         }))
     }
 
@@ -1081,8 +1114,11 @@ impl<'dwarf, 'units> FallibleIterator for LineIter<'dwarf, 'units> {
             // Extend range.
             active.rng.end = row.address();
 
-            // Neither line number nor the file changed: done here.
-            if active.file.id == SourceFileId(row.file_index()) && active.line == row.line() {
+            // Neither line number, discriminator nor the file changed: done here.
+            if active.file.id == SourceFileId(row.file_index())
+                && active.line == row.line()
+                && active.discriminator == row.discriminator()
+            {
                 continue;
             }
 

@@ -580,8 +580,39 @@ impl symbconv::PointResolver for GoRuntimeInfo<'_> {
             function_name: func.name().ok().map(|s| s.to_string()),
             file_name: source_file,
             line_number: line_number,
+            start_line: func.start_line().filter(|&x| x != 0),
         });
 
         Ok(symbols)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::symbconv::PointResolver as _;
+    use crate::tests::go_testdata;
+
+    #[test]
+    fn point_resolver_start_line() {
+        for test_file in go_testdata() {
+            let obj = objfile::File::load(&test_file).unwrap();
+            let obj = obj.parse().unwrap();
+            let go = GoRuntimeInfo::open(&obj).unwrap();
+
+            let mut funcs = go.funcs().unwrap();
+            let main_main = loop {
+                let func = funcs.next().unwrap().expect("main.main not found");
+                if func.name().unwrap() == "main.main" {
+                    break func;
+                }
+            };
+
+            let symbols = go.symbols_for_pc(main_main.start_addr()).unwrap();
+            assert_eq!(symbols.len(), 1);
+            assert_eq!(symbols[0].function_name.as_deref(), Some("main.main"));
+            // `func main()` is at line 5 of testdata/main.go.
+            assert_eq!(symbols[0].start_line, Some(5), "{test_file:?}");
+        }
     }
 }

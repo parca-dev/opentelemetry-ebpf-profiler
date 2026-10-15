@@ -34,8 +34,8 @@ kind.
 More details about the format itself can be found in the documentation comments
 of the [protobuf definition][symbfile-proto].
 
-[`RangeV1`]: ./symbfile.proto#L120
-[`ReturnPadV1`]: ./symbfile.proto#L212
+[`RangeV1`]: ./symbfile.proto#L118
+[`ReturnPadV1`]: ./symbfile.proto#L264
 [symbfile-proto]: ./symbfile.proto
 
 ## REST API

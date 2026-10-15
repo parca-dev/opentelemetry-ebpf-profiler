@@ -20,6 +20,8 @@ SymblibStatus retpad_visitor(void* user_data, const SymblibReturnPad* ret_pad) {
         printf("\t\tFunction: %s\n", entry->func ? entry->func : "(null)");
         printf("\t\tFile: %s\n", entry->file ? entry->file : "(null)");
         printf("\t\tLine: %u\n", entry->line);
+        printf("\t\tDiscriminator: %u\n", entry->discriminator);
+        printf("\t\tStart Line: %u\n", entry->start_line);
     }
 
     return 0;
@@ -32,7 +34,9 @@ SymblibStatus range_visitor(void* user_data, const SymblibRange* range) {
     printf("\tFile: %s\n", range->file ? range->file : "(null)");
     printf("\tCall File: %s\n", range->call_file ? range->call_file : "(null)");
     printf("\tCall Line: %u\n", range->call_line);
+    printf("\tCall Discriminator: %u\n", range->call_discriminator);
     printf("\tDepth: %u\n", range->depth);
+    printf("\tStart Line: %u\n", range->start_line);
     printf("\tLine Table Length: %zu\n", range->line_table.len);
 
     // Submit the range to the return pad extractor.

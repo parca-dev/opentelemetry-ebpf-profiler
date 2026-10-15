@@ -19,6 +19,9 @@ use symblib::{dwarf, symbconv as sc, symbfile, VirtAddr};
 /// 3) ELF debug symbols
 /// 4) ELF dynamic symbols
 ///
+/// For Go executables, start lines missing from the DWARF info (Go < 1.22)
+/// are filled in from the Go symbols.
+///
 /// This extractor is then run to completion and the visitor is invoked for
 /// every range found in the executable. The user_data pointer is passed to
 /// the visitor untouched and may be NULL.
@@ -82,6 +85,7 @@ unsafe fn rangeextr_impl(
         "dyn-obj-sym",
         sc::obj::Extractor::new(&obj_reader, SymbolSource::Dynamic),
     );
+    let extr = sc::go::StartLineBackfill::new(&obj_reader, extr);
 
     // Run the extractor with the user's callback.
     let result = extr.extract(&mut |rng| {
@@ -151,6 +155,8 @@ pub struct SymblibRange {
     pub call_line: u32,           // 0 = unknown
     pub depth: u32,
     pub line_table: SymblibSlice<SymblibLineTableEntry>,
+    pub start_line: u32,         // 0 = unknown
+    pub call_discriminator: u32, // 0 = none
 
     // Internal, for return pad code use.
     pub(crate) rust_range: Box<symbfile::Range>,
@@ -171,6 +177,8 @@ impl From<symbfile::Range> for SymblibRange {
             call_line: rng.call_line.unwrap_or(0),
             depth: rng.depth,
             line_table: SymblibSlice::from(table),
+            start_line: rng.start_line.unwrap_or(0),
+            call_discriminator: rng.call_discriminator,
             rust_range,
         }
     }
@@ -182,6 +190,7 @@ impl From<symbfile::Range> for SymblibRange {
 pub struct SymblibLineTableEntry {
     pub offset: u32,
     pub line_number: u32,
+    pub discriminator: u32, // 0 = none
 }
 
 impl From<symbfile::LineTableEntry> for SymblibLineTableEntry {
@@ -189,6 +198,7 @@ impl From<symbfile::LineTableEntry> for SymblibLineTableEntry {
         Self {
             offset: entry.offset,
             line_number: entry.line_number,
+            discriminator: entry.discriminator,
         }
     }
 }

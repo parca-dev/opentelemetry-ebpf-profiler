@@ -1,8 +1,8 @@
 .PHONY: inline inline-compressed-dwarf inline-split-dwarf inline-big-fake-compressed-dwarf \
-	inline-no-tco clean inline-compressed-dwarf-zstd go-toolchains
+	inline-no-tco clean inline-compressed-dwarf-zstd go-toolchains cxx-decl-line discriminators
 
 all: inline inline-compressed-dwarf inline-split-dwarf inline-big-fake-compressed-dwarf \
-	inline-no-tco inline-compressed-dwarf-zstd go-toolchains
+	inline-no-tco inline-compressed-dwarf-zstd go-toolchains cxx-decl-line discriminators
 
 inline: inline.c
 	cc $< -o $@ -O2 -g
@@ -26,6 +26,13 @@ inline-big-fake-compressed-dwarf: inline
 inline-split-dwarf: inline
 	cp inline inline-split-dwarf
 	dwz -M meow -m inline-split-dwarf.dwp inline-split-dwarf inline-split-dwarf
+
+cxx-decl-line: cxx-decl-line.cc
+	c++ $< -o $@ -O2 -g
+
+# Clang only emits call site discriminators with `-fdebug-info-for-profiling`.
+discriminators: discriminators.c
+	clang $< -o $@ -O2 -g -fdebug-info-for-profiling -fuse-ld=lld
 
 go-toolchains:
 	GOTOOLCHAIN=go1.20.14 go build -o go-1.20.14 main.go

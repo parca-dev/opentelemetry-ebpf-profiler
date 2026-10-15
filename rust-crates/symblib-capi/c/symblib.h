@@ -45,9 +45,11 @@ typedef struct {
 //
 // See symbfile.proto for details.
 typedef struct {
-    SymblibString func; // never null
-    SymblibString file; // may be null
-    uint32_t line;      // 0 = unknown
+    SymblibString func;     // linkage (mangled) name, never null
+    SymblibString file;     // may be null
+    uint32_t line;          // 0 = unknown
+    uint32_t start_line;    // 0 = unknown
+    uint32_t discriminator; // 0 = none
 } SymblibReturnPadEntry;
 
 // Symbol info for a return pad.
@@ -64,12 +66,14 @@ typedef struct {
 typedef struct {
     uint64_t elf_va;
     uint32_t length;
-    SymblibString func;
+    SymblibString func; // linkage (mangled) name
     SymblibString file;
     SymblibString call_file;
     uint32_t call_line;
     uint32_t depth;
     SymblibSlice/*<SymblibLineTableEntry>*/ line_table;
+    uint32_t start_line;         // 0 = unknown
+    uint32_t call_discriminator; // 0 = none
     // Omitted internal Rust-specific field rust_range
 } SymblibRange;
 
@@ -79,6 +83,7 @@ typedef struct {
 typedef struct {
     uint32_t offset;
     uint32_t line_number;
+    uint32_t discriminator; // 0 = none
 } SymblibLineTableEntry;
 
 // Visitor callback for extracted ranges.
@@ -156,6 +161,7 @@ typedef struct SymblibResolvedSymbol {
     SymblibString function_name;
     SymblibString file_name;
     uint32_t line_number;
+    uint32_t start_line; // 0 = unknown
 } SymblibResolvedSymbol;
 
 // Enveloping struct that contains len number of symbols in data.

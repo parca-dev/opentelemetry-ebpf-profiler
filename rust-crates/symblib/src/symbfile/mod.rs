@@ -123,13 +123,23 @@ mod tests {
                 11 | 22 | 33 => None,
                 other => Some(other as u32 + 1),
             },
+            call_discriminator: (seed % 4) as u32,
             depth: (seed % 3) as u32,
             line_table: (0..seed % 31)
                 .map(|i| LineTableEntry {
                     offset: (seed + i * (seed % 3)) as u32,
                     line_number: (i * (seed % 7) + 1) as u32,
+                    // Leave some tables without any discriminators.
+                    discriminator: match seed % 3 {
+                        0 => 0,
+                        _ => (i % 3) as u32,
+                    },
                 })
                 .collect(),
+            start_line: match seed % 5 {
+                0 | 1 => None,
+                other => Some(other as u32 + 1),
+            },
         }
     }
 
@@ -157,6 +167,14 @@ mod tests {
                         func: func.to_owned(),
                         file: Some(file.to_owned()),
                         line: Some((i * (seed % 7)) as u32 + 1),
+                        discriminator: match seed % 5 {
+                            0 => 0,
+                            _ => (i % 2) as u32,
+                        },
+                        start_line: match (seed ^ i) % 4 {
+                            0 => None,
+                            other => Some(other as u32),
+                        },
                     }
                 })
                 .collect(),

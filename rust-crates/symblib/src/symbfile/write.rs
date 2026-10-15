@@ -88,6 +88,7 @@ impl<O: io::Write> Writer<O> {
             let mut columnar = proto::LineTable {
                 offset: Vec::with_capacity(range.line_table.len()),
                 line_number: Vec::with_capacity(range.line_table.len()),
+                discriminator: Vec::with_capacity(range.line_table.len()),
             };
 
             let mut prev_offset = 0;
@@ -99,11 +100,13 @@ impl<O: io::Write> Writer<O> {
 
                 columnar.offset.push(offset_delta);
                 columnar.line_number.push(row.line_number);
+                columnar.discriminator.push(row.discriminator);
 
                 prev_offset = row.offset;
             }
 
             debug_assert_eq!(columnar.offset.len(), columnar.line_number.len());
+            omit_if_zero(&mut columnar.discriminator);
 
             Some(columnar)
         };
@@ -117,11 +120,13 @@ impl<O: io::Write> Writer<O> {
                 .file
                 .map(|x| File::FileRef(self.string_table.index_for_str(x))),
             call_line: range.call_line.unwrap_or(0),
+            call_discriminator: range.call_discriminator,
             call_file: range
                 .call_file
                 .map(|x| CallFile::CallFileRef(self.string_table.index_for_str(x))),
             depth: range.depth,
             line_table,
+            start_line: range.start_line.unwrap_or(0),
         })
     }
 
@@ -133,6 +138,8 @@ impl<O: io::Write> Writer<O> {
             func: Vec::with_capacity(pad.entries.len()),
             file: Vec::with_capacity(pad.entries.len()),
             line: Vec::with_capacity(pad.entries.len()),
+            discriminator: Vec::with_capacity(pad.entries.len()),
+            start_line: Vec::with_capacity(pad.entries.len()),
         };
 
         for entry in pad.entries {
@@ -144,7 +151,14 @@ impl<O: io::Write> Writer<O> {
                     .index_for_str(entry.file.unwrap_or_default()),
             );
             return_pads.line.push(entry.line.unwrap_or_default());
+            return_pads.discriminator.push(entry.discriminator);
+            return_pads
+                .start_line
+                .push(entry.start_line.unwrap_or_default());
         }
+
+        omit_if_zero(&mut return_pads.discriminator);
+        omit_if_zero(&mut return_pads.start_line);
 
         Ok(return_pads)
     }
@@ -259,8 +273,85 @@ impl<O: io::Write> Writer<O> {
     }
 }
 
+/// Clears a column that may be omitted if all of its values are 0.
+///
+/// See `read::optional_column` for the reading side.
+fn omit_if_zero(column: &mut Vec<u32>) {
+    if column.iter().all(|&x| x == 0) {
+        column.clear();
+    }
+}
+
 #[derive(Debug)]
 enum BufferedMsg {
     Range(proto::RangeV1),
     ReturnPad(proto::ReturnPadV1),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use smallvec::smallvec;
+
+    fn entry(discriminator: u32, start_line: Option<u32>) -> ReturnPadEntry {
+        ReturnPadEntry {
+            func: "main".to_owned(),
+            file: Some("main.c".to_owned()),
+            line: Some(10),
+            discriminator,
+            start_line,
+        }
+    }
+
+    #[test]
+    fn retpad_optional_columns_omitted_if_zero() {
+        let mut writer = Writer::new(Vec::new()).unwrap();
+
+        let pad = ReturnPad {
+            elf_va: 0x1000,
+            entries: smallvec![entry(0, None), entry(0, None)],
+        };
+        let pad = writer.serialize_return_pad(pad).unwrap();
+        assert!(pad.discriminator.is_empty());
+        assert!(pad.start_line.is_empty());
+
+        let pad = ReturnPad {
+            elf_va: 0x1000,
+            entries: smallvec![entry(0, None), entry(3, Some(5))],
+        };
+        let pad = writer.serialize_return_pad(pad).unwrap();
+        assert_eq!(pad.discriminator, [0, 3]);
+        assert_eq!(pad.start_line, [0, 5]);
+    }
+
+    #[test]
+    fn line_table_discriminator_column_omitted_if_zero() {
+        let mut writer = Writer::new(Vec::new()).unwrap();
+        let range = |discriminators: [u32; 2]| Range {
+            elf_va: 0x1000,
+            length: 0x10,
+            func: "main".to_owned(),
+            file: None,
+            call_file: None,
+            call_line: None,
+            call_discriminator: 0,
+            depth: 0,
+            line_table: discriminators
+                .into_iter()
+                .enumerate()
+                .map(|(i, discriminator)| LineTableEntry {
+                    offset: i as u32 * 4,
+                    line_number: 10,
+                    discriminator,
+                })
+                .collect(),
+            start_line: None,
+        };
+
+        let rng = writer.serialize_range(range([0, 0])).unwrap();
+        assert!(rng.line_table.unwrap().discriminator.is_empty());
+
+        let rng = writer.serialize_range(range([0, 2])).unwrap();
+        assert_eq!(rng.line_table.unwrap().discriminator, [0, 2]);
+    }
 }

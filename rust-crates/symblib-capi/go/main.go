@@ -35,12 +35,13 @@ func rangeVisitorWrapper(userData unsafe.Pointer, rangePtr *C.SymblibRange) C.Sy
 	elfVA := uint64(rangePtr.elf_va)
 	length := uint32(rangePtr.length)
 	file := C.GoString(rangePtr.file)
+	startLine := uint32(rangePtr.start_line)
 	// cgo transforms the field func in SymblibRange to _func
 	// as func is a reserved keyword in Go.
 	function := C.GoString(rangePtr._func)
 
-	fmt.Printf("Range: ELF VA: 0x%x, Length: %d, Function: %s  File: %s\n",
-		elfVA, length, function, file)
+	fmt.Printf("Range: ELF VA: 0x%x, Length: %d, Function: %s  File: %s  StartLine: %d\n",
+		elfVA, length, function, file, startLine)
 
 	return C.symblib_retpadextr_submit(
 		(*C.SymblibRetPadExtractor)(userData),

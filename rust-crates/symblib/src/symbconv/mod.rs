@@ -89,6 +89,10 @@ pub struct ResolvedSymbol {
     pub file_name: Option<String>,
     /// Line number associated with this virtual address.
     pub line_number: Option<u32>,
+    /// Source line of the function's definition.
+    ///
+    /// See [`symbfile::Range::start_line`] for details.
+    pub start_line: Option<u32>,
 }
 
 /// Common interface to tesolve symbols for a specific program counter address.

@@ -77,6 +77,8 @@ fn go_stack_start_special_case(
             func: outer_func.func.clone(),
             file: outer_func.file.clone(),
             line: None,
+            discriminator: 0,
+            start_line: outer_func.start_line,
         }],
     })
 }
@@ -149,7 +151,8 @@ fn process_tree(
         let mut entries = SmallVec::new();
         let mut iter = matches.iter().peekable();
         while let Some(Element { value: cur, .. }) = iter.next() {
-            let (file, line) = if let Some(Element { value: next, .. }) = iter.peek() {
+            let (file, line, discriminator) = if let Some(Element { value: next, .. }) = iter.peek()
+            {
                 if cur.depth + 1 != next.depth {
                     debug!(
                         "Detected hole in inline chain for call @ {:#08X}, skipping",
@@ -159,16 +162,27 @@ fn process_tree(
                 }
 
                 // For the first n-1 non-leaf entries, use the call_X fields.
-                (&next.call_file, next.call_line)
+                (&next.call_file, next.call_line, next.call_discriminator)
             } else {
                 // For the leaf record, resolve the line using the line table.
-                (&cur.file, cur.line_number_for_va(call_va))
+                let entry = cur.line_table_entry_for_va(call_va);
+                (
+                    &cur.file,
+                    entry.map(|x| x.line_number),
+                    entry.map_or(0, |x| x.discriminator),
+                )
             };
 
             entries.push(symbfile::ReturnPadEntry {
                 func: cur.func.clone(),
                 file: file.clone(),
                 line,
+                discriminator,
+                // The `line` above always falls within `cur`'s body (either its
+                // call site into the next inline frame, or — for the leaf — the
+                // instruction itself), so the right anchor is `cur`'s own
+                // definition line.
+                start_line: cur.start_line,
             });
         }
 
@@ -287,6 +301,10 @@ mod tests {
 
         // Reference data created by scrolling through disassembly in IDA,
         // looking for any calls in functions with DWARF info.
+        //
+        // Line numbers are those of `inline.c` as it was when the test binaries
+        // were built. It has since gained a 3-line license header, so add 3 to
+        // find them in the checked-in copy.
 
         // .text:000648 6A 00 00 94  BL    a
         // .text:00064C 00 00 00 90+ ADRL  X0, aHello ; "hello!"
@@ -299,6 +317,8 @@ mod tests {
         assert_eq!(a_call.entries[0].func, "main");
         assert_eq!(a_call.entries[0].file, inline_file.clone());
         assert_eq!(a_call.entries[0].line, Some(39));
+        // `main` is defined at line 38 (`DW_AT_decl_line`).
+        assert_eq!(a_call.entries[0].start_line, Some(38));
 
         // .text:000654 F7 FF FF 97  BL    .puts
         // .text:000658 00 00 80 52  MOV   W0, #0
@@ -306,25 +326,34 @@ mod tests {
         assert_eq!(puts_call_in_main.elf_va, 0x658 - 1);
         assert_eq!(puts_call_in_main.entries.len(), 5);
 
+        // Each frame's `line` is an absolute line within that frame's own
+        // function; `start_line` is that same function's definition line, so
+        // the two together give a stable per-frame anchor for AutoFDO.
         assert_eq!(puts_call_in_main.entries[0].func, "main");
         assert_eq!(puts_call_in_main.entries[0].file, inline_file.clone());
         assert_eq!(puts_call_in_main.entries[0].line, Some(40));
+        assert_eq!(puts_call_in_main.entries[0].start_line, Some(38));
 
         assert_eq!(puts_call_in_main.entries[1].func, "a_inline");
         assert_eq!(puts_call_in_main.entries[1].file, inline_file.clone());
         assert_eq!(puts_call_in_main.entries[1].line, Some(35));
+        assert_eq!(puts_call_in_main.entries[1].start_line, Some(34));
 
         assert_eq!(puts_call_in_main.entries[2].func, "b_inline");
         assert_eq!(puts_call_in_main.entries[2].file, inline_file.clone());
         assert_eq!(puts_call_in_main.entries[2].line, Some(31));
+        assert_eq!(puts_call_in_main.entries[2].start_line, Some(30));
 
         assert_eq!(puts_call_in_main.entries[3].func, "c_inline");
         assert_eq!(puts_call_in_main.entries[3].file, inline_file.clone());
         assert_eq!(puts_call_in_main.entries[3].line, Some(27));
+        assert_eq!(puts_call_in_main.entries[3].start_line, Some(26));
 
         assert_eq!(puts_call_in_main.entries[4].func, "d_inline");
         assert_eq!(puts_call_in_main.entries[4].file, inline_file.clone());
         assert_eq!(puts_call_in_main.entries[4].line, Some(23));
+        // d_inline: defined at line 22, but the return-pad line is 23.
+        assert_eq!(puts_call_in_main.entries[4].start_line, Some(22));
 
         // .text:0007B0 A0 FF FF 97  BL   .puts
         // .text:0007B4 FD 7B C1 A8  LDP  X29, X30, [SP+var_s0],#0x10
@@ -334,6 +363,7 @@ mod tests {
         assert_eq!(puts_call_in_d.entries[0].func, "d");
         assert_eq!(puts_call_in_d.entries[0].file, inline_file.clone());
         assert_eq!(puts_call_in_d.entries[0].line, Some(7));
+        assert_eq!(puts_call_in_d.entries[0].start_line, Some(6));
 
         // .text:0007C8 F6 FF FF 97  BL    d
         // .text:0007CC FD 7B C1 A8  LDP   X29, X30, [SP+var_s0],#0x10
@@ -343,6 +373,7 @@ mod tests {
         assert_eq!(d_call_in_c.entries[0].func, "c");
         assert_eq!(d_call_in_c.entries[0].file, inline_file.clone());
         assert_eq!(d_call_in_c.entries[0].line, Some(11));
+        assert_eq!(d_call_in_c.entries[0].start_line, Some(10));
 
         // .text:00007DC F9 FF FF 97  BL    c
         // .text:00007E0 FD 7B C1 A8  LDP   X29, X30, [SP+var_s0],#0x10
@@ -352,6 +383,7 @@ mod tests {
         assert_eq!(c_call_in_b.entries[0].func, "b");
         assert_eq!(c_call_in_b.entries[0].file, inline_file.clone());
         assert_eq!(c_call_in_b.entries[0].line, Some(15));
+        assert_eq!(c_call_in_b.entries[0].start_line, Some(14));
 
         // .text:0007F8 F7 FF FF 97  BL    b
         // .text:0007FC FD 7B C1 A8  LDP   X29, X30, [SP+var_s0],#0x10
@@ -361,7 +393,58 @@ mod tests {
         assert_eq!(b_call_in_a.entries[0].func, "a");
         assert_eq!(b_call_in_a.entries[0].file, inline_file.clone());
         assert_eq!(b_call_in_a.entries[0].line, Some(19));
+        assert_eq!(b_call_in_a.entries[0].start_line, Some(18));
 
         assert!(record_iter.next().is_none());
+    }
+
+    /// Return pads carry the discriminators that tell apart calls on the same
+    /// line: call site discriminators for non-leaf frames, line table
+    /// discriminators for the leaf frame.
+    #[test]
+    fn discriminators() {
+        use crate::symbconv::{dwarf::Extractor, RangeExtractor as _};
+
+        let obj = objfile::File::load(&testdata("discriminators")).unwrap();
+        let obj = obj.parse().unwrap();
+        let dw = crate::dwarf::Sections::load(&obj).unwrap();
+        let mut ranges = Vec::new();
+        Extractor::new(&dw)
+            .extract(&mut |range| {
+                ranges.push(range);
+                Ok(())
+            })
+            .unwrap();
+
+        let mut pads = Vec::new();
+        let ranges = fallible_iterator::convert(ranges.into_iter().map(Ok));
+        extract_retpads(&obj, ranges, |pad| {
+            pads.push(pad);
+            Ok(())
+        })
+        .unwrap();
+
+        let entries = |elf_va| {
+            let pad = pads.iter().find(|x| x.elf_va == elf_va).unwrap();
+            let entries = pad.entries.iter();
+            entries
+                .map(|x| (x.func.as_str(), x.line.unwrap(), x.discriminator))
+                .collect::<Vec<_>>()
+        };
+
+        // The two inlined calls to `say` on line 22, each calling `puts`.
+        //
+        // 108f0:  bl  0x10a70 <puts@plt>
+        // 108f4:  ldp x29, x30, [sp], #0x10
+        assert_eq!(entries(0x108f4 - 1), [("pick", 22, 2), ("say", 10, 0)]);
+        // 10904:  bl  0x10a70 <puts@plt>
+        // 10908:  ldp x29, x30, [sp], #0x10
+        assert_eq!(entries(0x10908 - 1), [("pick", 22, 4), ("say", 10, 0)]);
+
+        // Call to `pick` in the body of the `for` loop on line 27.
+        //
+        // 10930:  bl  0x108dc <pick>
+        // 10934:  add w20, w20, #0x1
+        assert_eq!(entries(0x10934 - 1), [("main", 27, 4)]);
     }
 }

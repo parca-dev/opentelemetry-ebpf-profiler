@@ -13,6 +13,7 @@ pub struct SymblibResolvedSymbol {
     pub function_name: SymblibString,
     pub file_name: SymblibString, // may be empty
     pub line_number: u32,         // 0 = unknown
+    pub start_line: u32,          // 0 = unknown
 }
 
 impl From<symbconv::ResolvedSymbol> for SymblibResolvedSymbol {
@@ -22,6 +23,7 @@ impl From<symbconv::ResolvedSymbol> for SymblibResolvedSymbol {
             function_name: sym.function_name.into(),
             file_name: sym.file_name.unwrap_or("".to_string()).into(),
             line_number: sym.line_number.unwrap_or(0),
+            start_line: sym.start_line.unwrap_or(0),
         }
     }
 }

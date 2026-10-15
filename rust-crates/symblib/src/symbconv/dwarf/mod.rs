@@ -24,12 +24,11 @@ mod rangetree;
 
 use self::rangetree::*;
 use crate::symbconv::RangeVisitor;
-use crate::{debug, demangle, dwarf, range_overlap, symbfile, AnyError, VirtAddr};
+use crate::{debug, dwarf, range_overlap, symbfile, AnyError, VirtAddr};
 use fallible_iterator::FallibleIterator;
 use intervaltree::{Element, IntervalTree};
 use smallvec::SmallVec;
 use std::cell::RefCell;
-use std::num::NonZeroU64;
 use std::ops::Range;
 use std::rc::Rc;
 
@@ -69,6 +68,7 @@ struct IntermediateLineTableEntry {
     pub rng: Range<VirtAddr>,
     pub file: String,
     pub line: u64,
+    pub discriminator: u32,
 }
 
 /// Intermediate helper struct storing source lines for a VA range.
@@ -161,7 +161,7 @@ fn any_child_has_lines(node: &RangeTree<Node<'_, '_>>) -> bool {
 }
 
 fn process_subroutine(
-    unit_line_table: &IntervalTree<VirtAddr, (dwarf::SourceFile<'_>, Option<NonZeroU64>)>,
+    unit_line_table: &IntervalTree<VirtAddr, dwarf::LineTableEntry<'_>>,
     sub: dwarf::Subprogram<'_, '_>,
     mut visitor: impl FnMut(symbfile::Range) -> Result,
 ) -> Result {
@@ -185,7 +185,13 @@ fn process_subroutine(
 
         let mut im_linetab = imr.line_table.borrow_mut();
         for line_record in unit_line_table.query(range.clone()) {
-            let (ref file, Some(line)) = line_record.value else {
+            let dwarf::LineTableEntry {
+                ref file,
+                line: Some(line),
+                discriminator,
+                ..
+            } = line_record.value
+            else {
                 // Skip records without line/file info.
                 continue;
             };
@@ -199,13 +205,15 @@ fn process_subroutine(
                 rng: overlap,
                 file: file.to_string(),
                 line: line.get(),
+                discriminator: discriminator.try_into().unwrap_or(0),
             });
         }
 
         im_linetab.sort_unstable_by_key(|x| x.rng.start);
         im_linetab.dedup_by(|a, b| {
             let same_range = a.rng.start == b.rng.start;
-            let same_line = a.line == b.line && a.file == b.file;
+            let same_line =
+                a.line == b.line && a.file == b.file && a.discriminator == b.discriminator;
             same_range || same_line
         });
     }
@@ -226,12 +234,14 @@ fn process_subroutine(
         let mut record = symbfile::Range {
             elf_va: node.range.start,
             length: (node.range.end - node.range.start) as _,
-            func: demangle::demangle(&name).into_owned(),
+            func: name.into_owned(),
             file: None,
             call_file: imr.info.call_file()?.map(|x| x.to_string()),
             call_line: imr.info.call_line().map(|x| x.get() as u32),
+            call_discriminator: imr.info.call_discriminator().try_into().unwrap_or(0),
             depth: imr.info.depth() as _,
             line_table: SmallVec::new(),
+            start_line: imr.info.decl_line().and_then(|x| x.get().try_into().ok()),
         };
 
         let line_table = imr.line_table.borrow();
@@ -260,6 +270,7 @@ fn process_subroutine(
             record.line_table.push(symbfile::LineTableEntry {
                 offset: (lte.rng.start - record.elf_va) as _,
                 line_number: lte.line as _,
+                discriminator: lte.discriminator,
             });
         }
 
@@ -291,8 +302,8 @@ fn process_unit(
             .filter(|x| Ok(!x.rng.is_empty()))
             .map(|x| {
                 Ok(Element {
-                    range: x.rng,
-                    value: (x.file, x.line),
+                    range: x.rng.clone(),
+                    value: x,
                 })
             })
             .collect::<Vec<_>>()?,
@@ -404,6 +415,10 @@ mod tests {
         out_file.seek(SeekFrom::Start(0)).unwrap();
         let mut reader = symbfile::Reader::new(out_file).unwrap();
 
+        // Line numbers are those of `inline.c` as it was when the test binaries
+        // were built. It has since gained a 3-line license header, so add 3 to
+        // find them in the checked-in copy.
+
         let mut rng: symbfile::Range = reader.read().unwrap().unwrap().unwrap_range();
         let src_file = "/media/share/Development/prodfiler/libpf-rs/testdata/inline.c";
         assert_eq!(rng.elf_va, 0x640);
@@ -413,6 +428,9 @@ mod tests {
         assert_eq!(rng.call_line, None);
         assert_eq!(rng.call_file, None);
         assert_eq!(rng.depth, 0);
+        // `main` is defined at line 38 (`DW_AT_decl_line`), which here also
+        // happens to be the first line in the line table.
+        assert_eq!(rng.start_line, Some(38));
 
         // `symbtool dwarf -e inline dump` excerpt:
         //
@@ -429,14 +447,17 @@ mod tests {
                 LineTableEntry {
                     offset: 0x640 - 0x640,
                     line_number: 38,
+                    discriminator: 0,
                 },
                 LineTableEntry {
                     offset: 0x648 - 0x640,
                     line_number: 39,
+                    discriminator: 0,
                 },
                 LineTableEntry {
                     offset: 0x658 - 0x640,
                     line_number: 41,
+                    discriminator: 0,
                 },
             ]
         );
@@ -448,6 +469,9 @@ mod tests {
         assert_eq!(rng.func, "a_inline");
         assert_eq!(rng.call_file.unwrap(), src_file);
         assert_eq!(rng.call_line.unwrap(), 40);
+        // Definition line of the inlined function itself (`DW_AT_decl_line`),
+        // distinct from its call line (40) above.
+        assert_eq!(rng.start_line, Some(34));
         assert!(rng.line_table.is_empty());
 
         rng = reader.read().unwrap().unwrap().unwrap_range();
@@ -469,11 +493,17 @@ mod tests {
         assert_eq!(rng.length, 0x658 - 0x64c);
         assert_eq!(rng.depth, 4);
         assert_eq!(rng.func, "d_inline");
+        // The function is *defined* at line 22 (`DW_AT_decl_line`), but its
+        // first instruction maps to line 23. This is exactly why the start
+        // line is tracked separately from the line table: it gives a stable
+        // per-function anchor independent of the first executable statement.
+        assert_eq!(rng.start_line, Some(22));
         assert_eq!(
             &rng.line_table[..],
             &[LineTableEntry {
                 offset: 0,
                 line_number: 23,
+                discriminator: 0,
             }]
         );
 
@@ -487,6 +517,7 @@ mod tests {
             &[LineTableEntry {
                 offset: 0,
                 line_number: 19,
+                discriminator: 0,
             }]
         );
 
@@ -499,5 +530,83 @@ mod tests {
         assert_eq!(rng.func, "d");
 
         assert!(reader.read().unwrap().is_none());
+    }
+
+    /// The start line comes from the most concrete DIE that has one, following
+    /// abstract origins and specifications otherwise.
+    #[test]
+    fn cxx_member_start_lines() {
+        let obj = objfile::File::load(&testdata("cxx-decl-line")).unwrap();
+        let obj = obj.parse().unwrap();
+        let dwarf = dwarf::Sections::load(&obj).unwrap();
+        let mut ranges = Vec::new();
+        Extractor::new(&dwarf)
+            .extract(&mut |range| {
+                ranges.push(range);
+                Ok(())
+            })
+            .unwrap();
+
+        let start_line = |func: &str, depth: u32| {
+            let range = ranges.iter().find(|x| x.func == func && x.depth == depth);
+            let Some(range) = range else {
+                panic!("{func} not found");
+            };
+            range.start_line
+        };
+
+        // Functions are named by their linkage names.
+        assert_eq!(start_line("main", 0), Some(27));
+
+        // Concrete DIE without `DW_AT_decl_line` referring to an abstract
+        // origin, which in turn refers to the in-class declaration via
+        // `DW_AT_specification`. Only the latter has a decl line.
+        assert_eq!(start_line("_ZN1S16defined_in_classEv", 0), Some(10));
+
+        // The out-of-class definition has its own decl line, which must win
+        // over that of the in-class declaration (line 14).
+        assert_eq!(start_line("_ZN1S20defined_out_of_classEv", 0), Some(19));
+
+        // Inlined instance referring to an abstract origin with the decl line
+        // of the out-of-class definition, which must win over the in-class
+        // declaration (line 16) that the abstract origin refers to.
+        assert_eq!(start_line("_ZN1S7inlinedEv", 1), Some(23));
+    }
+
+    /// Discriminators tell apart basic blocks on the same line, both within
+    /// line tables and for calls to inline functions.
+    #[test]
+    fn discriminators() {
+        let obj = objfile::File::load(&testdata("discriminators")).unwrap();
+        let obj = obj.parse().unwrap();
+        let dwarf = dwarf::Sections::load(&obj).unwrap();
+        let mut ranges = Vec::new();
+        Extractor::new(&dwarf)
+            .extract(&mut |range| {
+                ranges.push(range);
+                Ok(())
+            })
+            .unwrap();
+
+        let lines = |func: &str| {
+            let range = ranges.iter().find(|x| x.func == func).unwrap();
+            let lines = range.line_table.iter();
+            lines
+                .map(|x| (x.line_number, x.discriminator))
+                .collect::<Vec<_>>()
+        };
+
+        // `for (int i = 0; i < argc; i++) pick(i & 1);`
+        assert_eq!(lines("main"), [(27, 2), (27, 4), (27, 6), (27, 2), (28, 0)]);
+
+        // `if (c) { say("a"); one(); } else { say("b"); two(); }`
+        assert_eq!(lines("pick"), [(21, 0), (22, 0), (22, 6), (22, 8)]);
+        let says: Vec<_> = ranges.iter().filter(|x| x.func == "say").collect();
+        assert_eq!(says.len(), 2);
+        for (say, discriminator) in says.into_iter().zip([2, 4]) {
+            assert_eq!(say.depth, 1);
+            assert_eq!(say.call_line, Some(22));
+            assert_eq!(say.call_discriminator, discriminator);
+        }
     }
 }

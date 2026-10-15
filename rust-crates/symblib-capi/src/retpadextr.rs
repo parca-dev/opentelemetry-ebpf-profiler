@@ -218,6 +218,8 @@ pub struct SymblibReturnPadEntry {
     pub func: SymblibString, // never null
     pub file: SymblibString, // may be null
     pub line: u32,           // 0 = unknown
+    pub start_line: u32,     // 0 = unknown
+    pub discriminator: u32,  // 0 = none
 }
 
 impl From<symbfile::ReturnPadEntry> for SymblibReturnPadEntry {
@@ -226,6 +228,8 @@ impl From<symbfile::ReturnPadEntry> for SymblibReturnPadEntry {
             func: entry.func.into(),
             file: entry.file.into(),
             line: entry.line.unwrap_or(0),
+            start_line: entry.start_line.unwrap_or(0),
+            discriminator: entry.discriminator,
         }
     }
 }

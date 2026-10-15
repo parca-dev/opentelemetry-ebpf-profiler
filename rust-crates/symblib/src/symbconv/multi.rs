@@ -254,8 +254,10 @@ mod tests {
                     file: Some("some_file".to_string()),
                     call_file: None,
                     call_line: None,
+                    call_discriminator: 0,
                     depth: *depth,
                     line_table: Default::default(),
+                    start_line: None,
                 })
                 .unwrap();
             }

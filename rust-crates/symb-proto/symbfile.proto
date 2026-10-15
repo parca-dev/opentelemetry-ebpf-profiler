@@ -129,7 +129,12 @@ message RangeV1 {
   // Length of the instruction sequence.
   uint64 length = 2;
 
-  // Demangled name of the function.
+  // Name of the function.
+  //
+  // This is the linkage (mangled) name if the symbol source has one (e.g.
+  // `DW_AT_linkage_name`), and the plain name otherwise (e.g. C and Go
+  // functions). Profiles such as AutoFDO's key functions by linkage name, so
+  // it is stored as-is: consumers that display names need to demangle them.
   oneof func {
     string funcStr = 3;
     uint32 funcRef = 9;
@@ -144,6 +149,13 @@ message RangeV1 {
   // Absolute line number of the call to the inline function. 0 if `depth` is 0.
   uint32 callLine = 5;
 
+  // Discriminator of the call to the inline function (DWARF's
+  // `DW_AT_GNU_discriminator`), telling apart calls in different basic blocks
+  // on the same `callLine`. See `LineTable.discriminator` for details.
+  //
+  // 0 if there is none or `depth` is 0.
+  uint32 callDiscriminator = 14;
+
   // The file that issued the call to the inline function. 0 if `depth` is 0 or
   // the call file is equal to the file of the parent record record (`depth - 1`).
   oneof callFile {
@@ -156,6 +168,33 @@ message RangeV1 {
 
   // Line table for this executable range.
   LineTable lineTable = 8;
+
+  // Source line of the function's definition, as opposed to the line of any
+  // particular instruction within it.
+  //
+  // This maps to DWARF's `DW_AT_decl_line` (following `DW_AT_abstract_origin`
+  // and `DW_AT_specification`) and Go's per-function start line (the latter is
+  // only available for Go >= 1.20). For inline functions (`depth > 0`) this is
+  // the definition line of the inlined function itself, not of its call site
+  // (see `callLine` for the latter).
+  //
+  // This is the anchor of AutoFDO-style profiles: they store lines as offsets
+  // from the start line of the function containing them, so that the lines
+  // stay valid when edits elsewhere in the file move the function. To match
+  // the offsets that compilers compute when loading such profiles (e.g. LLVM's
+  // `FunctionSamples::getOffset`), compute them as `(line - startLine) & 0xffff`
+  // using wrapping 32-bit arithmetic. Call sites of inline functions use the
+  // `callLine` of the child and the `startLine` of its parent (`depth - 1`).
+  //
+  // The start line refers to the file that the function is defined in, which
+  // isn't necessarily `file`: a function that includes code from other files
+  // into its body is split into one record per file, and all of these records
+  // carry the function's start line. Offsets of lines from other files can
+  // wrap around and aren't stable across edits, but compilers compute them the
+  // same way, so they must be used as-is.
+  //
+  // 0 if unknown.
+  uint32 startLine = 13;
 }
 
 // Columnar array mapping range offsets to line numbers.
@@ -198,6 +237,21 @@ message LineTable {
 
   // Line number in the source file.
   repeated uint32 lineNumber = 2;
+
+  // DWARF discriminator of each line, telling apart different basic blocks on
+  // the same line (e.g. the condition, body and increment of a `for` loop).
+  //
+  // Together with the line's offset from the function's start line (see
+  // `RangeV1.startLine`), this forms the source location key of AutoFDO-style
+  // profiles (LLVM's `LineLocation`). The value is stored as emitted by the
+  // compiler: LLVM packs a base discriminator, a duplication factor and a copy
+  // ID into it, which consumers need to decode the same way the compiler does.
+  //
+  // 0 if there is none. Writers omit this column entirely if all lines have a
+  // discriminator of 0, which includes all files written before this field
+  // was introduced, so readers must treat an empty column as all zeros.
+  // Otherwise, it must have the same length as `offset` and `lineNumber`.
+  repeated uint32 discriminator = 3;
 }
 
 // Information about an instruction that can serve as the next instruction after
@@ -224,7 +278,7 @@ message ReturnPadV1 {
     uint64 setElfVA = 5;
   }
 
-  // Name of the function.
+  // Name of the function, in the same form as `RangeV1.func`.
   //
   // Reference into the string table.
   repeated uint32 func = 2;
@@ -239,6 +293,30 @@ message ReturnPadV1 {
   // This is the call line for the first n-1 records and the line
   // number corresponding to the return pad for the nth record.
   repeated uint32 line = 4;
+
+  // Discriminator corresponding to each `line`.
+  //
+  // This is the call discriminator (`RangeV1.callDiscriminator`) for the first
+  // n-1 records and the line table discriminator (`LineTable.discriminator`)
+  // of the return pad for the nth record.
+  //
+  // Writers omit this column entirely if all entries have a discriminator of
+  // 0, including in files written before this field was introduced, so readers
+  // must treat an empty column as all zeros. Otherwise, it must have the same
+  // length as `func`, `file` and `line`.
+  repeated uint32 discriminator = 7;
+
+  // Source line of each frame's function definition.
+  //
+  // This is the start line of the function named in the corresponding `func`
+  // entry, mirroring `RangeV1.startLine`: the AutoFDO-style offset of each
+  // frame is `(line - startLine) & 0xffff`. See `RangeV1.startLine` for details.
+  //
+  // 0 if unknown. Writers omit this column entirely if no entry has a start
+  // line, which includes all files written before this field was introduced,
+  // so readers must treat an empty column as "all unknown". Otherwise, it must
+  // have the same length as `func`, `file` and `line`.
+  repeated uint32 startLine = 6;
 }
 
 // Replace the string lookup table in the reader.

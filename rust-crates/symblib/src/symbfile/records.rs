@@ -61,7 +61,9 @@ pub struct Range {
     pub elf_va: VirtAddr,
     /// Length of the instruction sequence.
     pub length: u32,
-    /// Demangled name of the function.
+    /// Name of the function: the linkage (mangled) name if the symbol source
+    /// has one, the plain name otherwise. Use [`crate::demangle::demangle`]
+    /// to get a human-readable name.
     pub func: String,
     /// Source file that these instructions were generated from.
     pub file: Option<String>,
@@ -71,10 +73,28 @@ pub struct Range {
     pub call_file: Option<String>,
     /// Absolute line number of the call to the inline function. 0 if depth is 0.
     pub call_line: Option<u32>,
+    /// Discriminator of the call to the inline function, telling apart calls
+    /// in different basic blocks on the same [`Range::call_line`]. 0 if there
+    /// is none or if depth is 0.
+    pub call_discriminator: u32,
     /// Depth in the inline function tree, starting at 0 for the top-level function.
     pub depth: u32,
     /// Line table for this executable range.
     pub line_table: SmallVec<[LineTableEntry; 8]>,
+    /// Source line of the function's definition (e.g. the line of its signature
+    /// or opening brace), as opposed to the line of any particular instruction.
+    ///
+    /// Maps to DWARF's `DW_AT_decl_line` and Go's per-function start line
+    /// (available for Go >= 1.20). For inline functions (`depth > 0`) this is
+    /// the definition line of the inlined function itself, not of its call site
+    /// (see [`Range::call_line`] for the latter).
+    ///
+    /// This is the anchor that AutoFDO-style profiles encode lines against, as
+    /// `(line - start_line) & 0xffff`. It refers to the file that the function
+    /// is defined in, which may differ from [`Range::file`] for functions that
+    /// include code from other files: see `symbfile.proto` for details. `None`
+    /// if the information isn't available.
+    pub start_line: Option<u32>,
 }
 
 impl Range {
@@ -90,19 +110,26 @@ impl Range {
     /// range. For ranges that are covered by other inline instances, please
     /// refer to the `call_line` field in the `depth + 1` range instead.
     pub fn line_number_for_va(&self, va: VirtAddr) -> Option<u32> {
+        self.line_table_entry_for_va(va).map(|x| x.line_number)
+    }
+
+    /// Looks up the line table entry for the given virtual address.
+    ///
+    /// The same restrictions as for [`Self::line_number_for_va`] apply.
+    pub fn line_table_entry_for_va(&self, va: VirtAddr) -> Option<&LineTableEntry> {
         let Some(max_offs) = va.checked_sub(self.elf_va) else {
             return None;
         };
 
-        let mut line = None;
+        let mut entry = None;
         for lte in &self.line_table {
             if lte.offset as VirtAddr > max_offs {
                 break;
             }
-            line = Some(lte.line_number);
+            entry = Some(lte);
         }
 
-        line
+        entry
     }
 }
 
@@ -113,6 +140,9 @@ pub struct LineTableEntry {
     pub offset: u32,
     /// Line number in the source file.
     pub line_number: u32,
+    /// DWARF discriminator, telling apart basic blocks on the same line.
+    /// 0 if there is none.
+    pub discriminator: u32,
 }
 
 /// High-level representation of the [`ReturnPadV1`] protobuf struct.
@@ -144,6 +174,15 @@ pub struct ReturnPadEntry {
     pub file: Option<String>,
     /// Absolute source line number.
     pub line: Option<u32>,
+    /// Discriminator corresponding to [`Self::line`], telling apart basic
+    /// blocks on the same line. 0 if there is none.
+    pub discriminator: u32,
+    /// Source line of this frame's function definition.
+    ///
+    /// The start line of [`Self::func`], mirroring [`Range::start_line`]:
+    /// AutoFDO-style profiles encode [`Self::line`] as an offset from it.
+    /// `None` if the information isn't available.
+    pub start_line: Option<u32>,
 }
 
 #[cfg(test)]
@@ -160,19 +199,24 @@ mod tests {
             func: "".into(),
             file: None,
             call_line: None,
+            call_discriminator: 0,
             call_file: None,
+            start_line: None,
             line_table: smallvec![
                 LineTableEntry {
                     offset: 2,
                     line_number: 2,
+                    discriminator: 0,
                 },
                 LineTableEntry {
                     offset: 4,
                     line_number: 5,
+                    discriminator: 3,
                 },
                 LineTableEntry {
                     offset: 100,
                     line_number: 99,
+                    discriminator: 0,
                 },
             ],
         };
@@ -186,5 +230,8 @@ mod tests {
         assert_eq!(range.line_number_for_va(0x123 + 99), Some(5));
         assert_eq!(range.line_number_for_va(0x123 + 100), Some(99));
         assert_eq!(range.line_number_for_va(0x123 + 10000), Some(99));
+
+        let entry = range.line_table_entry_for_va(0x123 + 99).unwrap();
+        assert_eq!((entry.line_number, entry.discriminator), (5, 3));
     }
 }
