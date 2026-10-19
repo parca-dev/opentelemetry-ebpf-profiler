@@ -33,6 +33,23 @@ type TraceReporter interface {
 	ReportTraceEvent(trace *libpf.Trace, meta *samples.TraceEventMeta) error
 }
 
+// LogReporter is an optional sink for log-shaped events that don't fit the
+// trace/profile model. Currently the only producers are NVTX events from the
+// CUDA interpreter (annotated regions, marks, resource naming). Reporters
+// that don't speak a log channel simply don't implement this; the caller
+// checks for the interface and skips emission if absent.
+type LogReporter interface {
+	// ReportNvtxEvent enqueues a single NVTX annotation for backend delivery.
+	// Returning an error means the event could not be queued (e.g. backpressure);
+	// the caller is responsible for choosing whether to retry or drop.
+	ReportNvtxEvent(ev *samples.NvtxLogEvent) error
+
+	// ReportNvtxResourceName enqueues a resource-name announcement.
+	// Resource names are low-rate and idempotent — the consumer is expected
+	// to maintain its own cache and not require dedup from the caller.
+	ReportNvtxResourceName(ev *samples.NvtxResourceNameEvent) error
+}
+
 type ExecutableMetadata struct {
 	// MappingFile is the reference to mapping file data.
 	MappingFile libpf.FrameMappingFile

@@ -9,6 +9,57 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 )
 
+// NvtxKind enumerates NVTX event kinds carried by NvtxLogEvent.
+// Values must match the NVTX_KIND_* constants in parcagpu/ebpf/cupti_bpf.h.
+type NvtxKind uint16
+
+const (
+	NvtxKindRangePush  NvtxKind = 1
+	NvtxKindRangePop   NvtxKind = 2
+	NvtxKindRangeStart NvtxKind = 3
+	NvtxKindRangeEnd   NvtxKind = 4
+	NvtxKindMark       NvtxKind = 5
+)
+
+// NvtxResourceKind enumerates resources that can be named via nvtxNameXxx APIs.
+// Values must match the NVTX_RESOURCE_* constants in parcagpu/ebpf/cupti_bpf.h.
+type NvtxResourceKind uint32
+
+const (
+	NvtxResourceOSThread   NvtxResourceKind = 1
+	NvtxResourceCUDAStream NvtxResourceKind = 2
+	NvtxResourceCUDADevice NvtxResourceKind = 3
+	NvtxResourceCUDAKernel NvtxResourceKind = 4
+)
+
+// NvtxLogEvent is the language-neutral representation of an NVTX event,
+// emitted by the GPU interpreter and consumed by a LogReporter. The
+// downstream reporter is expected to translate this into whatever log
+// representation it uses (e.g. OTLP/logs).
+type NvtxLogEvent struct {
+	TimestampNs    uint64
+	PID            uint32
+	TID            uint32
+	CorrelationID  uint32
+	DeviceID       uint32 // math.MaxUint32 if unknown
+	DomainID       uint32 // 0 = default (v1 always 0)
+	Kind           NvtxKind
+	Color          uint32 // ARGB; 0 if unset
+	Payload        uint64
+	RangeID        uint64 // RANGE_START/END pairing; 0 for stacked push/pop
+	Message        string
+}
+
+// NvtxResourceNameEvent reports a resource-naming call (nvtxNameOsThreadA,
+// nvtxNameCudaStreamA, ...). Consumers typically maintain a per-PID cache and
+// enrich subsequent NvtxLogEvents with the cached name.
+type NvtxResourceNameEvent struct {
+	PID  uint32
+	Kind NvtxResourceKind
+	ID   uint64
+	Name string
+}
+
 type TraceEventMeta struct {
 	Comm           libpf.Comm
 	ExecutablePath libpf.String

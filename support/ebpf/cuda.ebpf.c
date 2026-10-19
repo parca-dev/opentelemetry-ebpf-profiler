@@ -53,12 +53,16 @@ int BPF_USDT(cuda_correlation, u32 correlation_id, s32 cbid)
 #define EVENT_TYPE_STALL_REASON_MAP 4
 #define EVENT_TYPE_ERROR            5
 #define EVENT_TYPE_GPU_CONFIG       6
+#define EVENT_TYPE_NVTX             7
+#define EVENT_TYPE_NVTX_NAME        8
 
 #define MAX_KERNEL_NAME_LEN   256
 #define MAX_FUNC_NAME_LEN     128
 #define MAX_ERROR_MSG_LEN     256
 #define MAX_ERROR_COMP_LEN    64
 #define STALL_REASON_NAME_LEN 64
+// NVTX_MAX_MSG_LEN comes from cupti_bpf.h; resource names use a smaller cap.
+#define MAX_NVTX_NAME_LEN     128
 
 struct kernel_event {
   u32 event_type; // = EVENT_TYPE_KERNEL
@@ -136,6 +140,28 @@ struct error_event {
   char component[MAX_ERROR_COMP_LEN];
 };
 
+// nvtx_event embeds the producer's cupti_nvtx_event record (read directly from
+// user memory) and the resolved message string.  pid is observed in BPF since
+// nvtx callbacks don't carry it in cupti_nvtx_event.
+struct nvtx_event {
+  u32 event_type; // = EVENT_TYPE_NVTX
+  u32 pid;
+  struct cupti_nvtx_event data; // 56 bytes
+  char message[NVTX_MAX_MSG_LEN];
+};
+
+// nvtx_name_event reports a one-off resource naming call (nvtxNameOsThreadA,
+// nvtxNameCudaStreamA, ...). Fired immediately by the parcagpu collector with
+// no batching; the Go side caches name lookups for use enriching other events.
+struct nvtx_name_event {
+  u32 event_type; // = EVENT_TYPE_NVTX_NAME
+  u32 pid;
+  u32 kind; // NVTX_RESOURCE_*
+  u32 _pad;
+  u64 id;
+  char name[MAX_NVTX_NAME_LEN];
+};
+
 // Per-CPU scratch space for large structs that exceed the BPF 512-byte stack
 // limit (cupti_activity_kernel5 = 160 B; stall_reason_map_event ≈ 4 KB).
 // Also stashes pre-parsed USDT args for the activity_batch and pc_sample_batch
@@ -152,6 +178,9 @@ struct cuda_scratch {
   u32 pc_count;
   u32 pc_next_offset; // start of the next pc-sample chunk to process; 0 on entry
   u32 pc_device_id;
+  u64 nvtx_ptrs_base;
+  u32 nvtx_count;
+  u32 nvtx_next_offset; // start of the next nvtx chunk to process; 0 on entry
 };
 
 struct cuda_scratch_heap_t {
@@ -190,20 +219,30 @@ struct cuda_scratch_heap_t {
 #define BPF_PC_MAX_TAIL_CALLS 16
 #define BPF_PC_TOTAL_LIMIT    (BPF_PC_BATCH_LIMIT * BPF_PC_MAX_TAIL_CALLS)
 
+// Per-chunk limit for nvtx_event_batch.  Each iter reads a pointer, reads a
+// 56-byte cupti_nvtx_event, reserves a ringbuf event with a 240-byte inline
+// message, copies fields, and resolves the message via bpf_probe_read_user_str.
+// 64-per-chunk x 4 chunks = 256 max (matches PARCAGPU_NVTX_BATCH_SIZE default).
+#define BPF_NVTX_BATCH_LIMIT    64
+#define BPF_NVTX_MAX_TAIL_CALLS 4
+#define BPF_NVTX_TOTAL_LIMIT    (BPF_NVTX_BATCH_LIMIT * BPF_NVTX_MAX_TAIL_CALLS)
+
 // Tail-call prog array for cuda_probe and the pc_sample_batch chunk chain.
-// Heavy loop bodies (activity_batch, pc_sample_batch) push the inlined
-// dispatcher past BPF_COMPLEXITY_LIMIT_JMP_SEQ (8192), so they live in
-// dedicated tail-called programs.  pc_sample_batch additionally tail-chains
-// into itself (slot 1) up to BPF_PC_MAX_TAIL_CALLS times to process batches
-// larger than BPF_PC_BATCH_LIMIT records.
+// Heavy loop bodies (activity_batch, pc_sample_batch, nvtx_event_batch) push
+// the inlined dispatcher past BPF_COMPLEXITY_LIMIT_JMP_SEQ (8192), so they
+// live in dedicated tail-called programs.  pc_sample_batch additionally
+// tail-chains into itself (slot 1) up to BPF_PC_MAX_TAIL_CALLS times to
+// process batches larger than BPF_PC_BATCH_LIMIT records; nvtx_event_batch
+// follows the same pattern via slot 2.
 //
 // Key 0: cuda_activity_batch_tail
 // Key 1: cuda_pc_sample_batch_tail
+// Key 2: cuda_nvtx_batch_tail
 struct cuda_progs_t {
   __uint(type, BPF_MAP_TYPE_PROG_ARRAY);
   __type(key, u32);
   __type(value, u32);
-  __uint(max_entries, 2);
+  __uint(max_entries, 3);
 } cuda_progs SEC(".maps");
 
 // Unified ringbuf for all CUPTI events sent to user-space. Every event begins
@@ -690,6 +729,130 @@ int cuda_pc_sample_batch_tail(struct pt_regs *ctx)
     ctx, scratch->pc_ptrs_base, scratch->pc_count, scratch->pc_next_offset, scratch->pc_device_id);
 }
 
+// process_nvtx_chunk handles a chunk of up to BPF_NVTX_BATCH_LIMIT NVTX events
+// at [start_offset, end) within ptrs_base[0..count).  Each iter follows a user
+// pointer to a cupti_nvtx_event, reads it whole, resolves the message string,
+// and submits a single nvtx_event to cupti_events.  Tail-chains to slot 2 if
+// more records remain.
+static EBPF_INLINE int
+process_nvtx_chunk(struct pt_regs *ctx, u64 ptrs_base, u32 count, u32 start_offset)
+{
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid      = pid_tgid >> 32;
+
+  u32 end = count;
+  if (end > start_offset + BPF_NVTX_BATCH_LIMIT) {
+    end = start_offset + BPF_NVTX_BATCH_LIMIT;
+  }
+
+  u64 ptrs[PTR_BATCH] = {};
+
+  for (u32 batch = 0; batch < BPF_NVTX_BATCH_LIMIT / PTR_BATCH; batch++) {
+    u32 base = start_offset + batch * PTR_BATCH;
+    if (base >= end) {
+      break;
+    }
+
+    if (bpf_probe_read_user(ptrs, sizeof(ptrs), (void *)(ptrs_base + base * sizeof(u64))) != 0) {
+      break;
+    }
+
+    for (u32 j = 0; j < PTR_BATCH; j++) {
+      if (base + j >= end) {
+        break;
+      }
+
+      u64 rec_ptr = ptrs[j];
+
+      struct nvtx_event *evt = bpf_ringbuf_reserve(&cupti_events, sizeof(*evt), 0);
+      if (!evt) {
+        continue;
+      }
+      evt->event_type = EVENT_TYPE_NVTX;
+      evt->pid        = pid;
+      if (bpf_probe_read_user(&evt->data, sizeof(evt->data), (void *)rec_ptr) != 0) {
+        bpf_ringbuf_discard(evt, 0);
+        continue;
+      }
+      evt->message[0] = '\0';
+      if (evt->data.message_ptr) {
+        bpf_probe_read_user_str(
+          evt->message, sizeof(evt->message), (void *)evt->data.message_ptr);
+      }
+      bpf_ringbuf_submit(evt, 0);
+    }
+  }
+
+  if (end < count) {
+    u32 zero                     = 0;
+    struct cuda_scratch *scratch = bpf_map_lookup_elem(&cuda_scratch_heap, &zero);
+    if (scratch) {
+      scratch->nvtx_ptrs_base   = ptrs_base;
+      scratch->nvtx_count       = count;
+      scratch->nvtx_next_offset = end;
+      bpf_tail_call(ctx, &cuda_progs, 2);
+      DEBUG_PRINT("cuda_nvtx_batch: tail_call failed at offset=%u", end);
+    }
+  }
+  return 0;
+}
+
+// USDT: parcagpu/nvtx_event_batch(const void **events, uint32 count).
+// Entry for direct USDT attachment.  Processes the first chunk then tail-chains
+// via cuda_nvtx_batch_tail for any remaining chunks.
+SEC("usdt/parcagpu/nvtx_event_batch")
+int BPF_USDT(cuda_nvtx_event_batch, u64 ptrs_base, u32 count)
+{
+  DEBUG_PRINT("cuda_nvtx_event_batch: count=%u ptrs_base=0x%lx", count, ptrs_base);
+  if (count > BPF_NVTX_TOTAL_LIMIT) {
+    count = BPF_NVTX_TOTAL_LIMIT;
+  }
+  return process_nvtx_chunk(ctx, ptrs_base, count, 0);
+}
+
+// Tail-call entry for the nvtx_event_batch chunk chain.  Re-entered up to
+// BPF_NVTX_MAX_TAIL_CALLS times via bpf_tail_call from process_nvtx_chunk.
+SEC("usdt/cuda_nvtx_batch_tail")
+int cuda_nvtx_batch_tail(struct pt_regs *ctx)
+{
+  u32 zero                     = 0;
+  struct cuda_scratch *scratch = bpf_map_lookup_elem(&cuda_scratch_heap, &zero);
+  if (!scratch) {
+    return 0;
+  }
+  return process_nvtx_chunk(
+    ctx, scratch->nvtx_ptrs_base, scratch->nvtx_count, scratch->nvtx_next_offset);
+}
+
+// USDT: parcagpu/nvtx_resource_name(uint32 kind, uint64 id, const char *name).
+// One-off (no batching); the parcagpu collector fires this immediately on each
+// nvtxNameOsThread/NameCudaStream/etc. call. Cheap enough to ringbuf-submit
+// every call without dedup — these events are rare in real workloads.
+SEC("usdt/parcagpu/nvtx_resource_name")
+int BPF_USDT(cuda_nvtx_resource_name, u32 kind, u64 id, u64 name_ptr)
+{
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid      = pid_tgid >> 32;
+
+  struct nvtx_name_event *evt = bpf_ringbuf_reserve(&cupti_events, sizeof(*evt), 0);
+  if (!evt) {
+    return 0;
+  }
+  evt->event_type = EVENT_TYPE_NVTX_NAME;
+  evt->pid        = pid;
+  evt->kind       = kind;
+  evt->_pad       = 0;
+  evt->id         = id;
+  evt->name[0]    = '\0';
+  if (name_ptr) {
+    bpf_probe_read_user_str(evt->name, sizeof(evt->name), (void *)name_ptr);
+  }
+  bpf_ringbuf_submit(evt, 0);
+
+  DEBUG_PRINT("cuda_nvtx_resource_name: pid=%u kind=%u id=0x%lx", pid, kind, id);
+  return 0;
+}
+
 // USDT: parcagpu/error(int32 code, const char *message, const char *component).
 SEC("usdt/parcagpu/error")
 int BPF_USDT(cuda_error, s32 code, u64 message_ptr, u64 component_ptr)
@@ -722,14 +885,16 @@ int BPF_USDT(cuda_error, s32 code, u64 message_ptr, u64 component_ptr)
 
 // Cookie values for the cuda_probe multi-probe dispatcher.
 // Must match the cookie values set in cuda.go.
-#define CUDA_PROG_CORRELATION     0
-#define CUDA_PROG_KERNEL_EXEC     1
-#define CUDA_PROG_ACTIVITY_BATCH  2
-#define CUDA_PROG_CUBIN_LOADED    3
-#define CUDA_PROG_PC_SAMPLE_BATCH 4
-#define CUDA_PROG_STALL_REASON    5
-#define CUDA_PROG_ERROR           6
-#define CUDA_PROG_GPU_CONFIG      7
+#define CUDA_PROG_CORRELATION       0
+#define CUDA_PROG_KERNEL_EXEC       1
+#define CUDA_PROG_ACTIVITY_BATCH    2
+#define CUDA_PROG_CUBIN_LOADED      3
+#define CUDA_PROG_PC_SAMPLE_BATCH   4
+#define CUDA_PROG_STALL_REASON      5
+#define CUDA_PROG_ERROR             6
+#define CUDA_PROG_GPU_CONFIG        7
+#define CUDA_PROG_NVTX_EVENT_BATCH  8
+#define CUDA_PROG_NVTX_RESOURCE     9
 
 SEC("usdt/cuda_probe")
 int cuda_probe(struct pt_regs *ctx)
@@ -791,6 +956,24 @@ int cuda_probe(struct pt_regs *ctx)
   case CUDA_PROG_ERROR: return BPF_USDT_CALL(cuda_error, code, message_ptr, component_ptr);
   case CUDA_PROG_GPU_CONFIG:
     return BPF_USDT_CALL(cuda_gpu_config, device_id, sampling_factor, clock_khz, sm_count);
+  case CUDA_PROG_NVTX_EVENT_BATCH: {
+    u32 zero                     = 0;
+    struct cuda_scratch *scratch = bpf_map_lookup_elem(&cuda_scratch_heap, &zero);
+    if (!scratch) {
+      break;
+    }
+    u32 cnt = (u32)bpf_usdt_arg1(ctx);
+    if (cnt > BPF_NVTX_TOTAL_LIMIT) {
+      cnt = BPF_NVTX_TOTAL_LIMIT;
+    }
+    scratch->nvtx_ptrs_base   = (u64)bpf_usdt_arg0(ctx);
+    scratch->nvtx_count       = cnt;
+    scratch->nvtx_next_offset = 0;
+    bpf_tail_call(ctx, &cuda_progs, 2);
+    break;
+  }
+  case CUDA_PROG_NVTX_RESOURCE:
+    return BPF_USDT_CALL(cuda_nvtx_resource_name, kind, id, name_ptr);
   default: DEBUG_PRINT("cuda_probe: unknown cookie %u", cookie); break;
   }
   return 0;

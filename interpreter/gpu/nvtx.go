@@ -1,0 +1,66 @@
+// Copyright The OpenTelemetry Authors
+// SPDX-License-Identifier: Apache-2.0
+
+package gpu // import "go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
+
+import (
+	log "github.com/sirupsen/logrus"
+
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
+	"go.opentelemetry.io/ebpf-profiler/reporter"
+	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
+)
+
+// HandleNvtxEvent converts a single cupti_events EVENT_TYPE_NVTX record into a
+// language-neutral samples.NvtxLogEvent and forwards it via rep.ReportNvtxEvent.
+// rep may be nil (no log reporter wired) — in that case the event is silently
+// dropped; the BPF side already paid the ringbuf cost, but the trace pipeline
+// is unaffected.
+//
+// Unlike PC samples we do *not* defer or correlate with kernel timing: NVTX
+// emission is immediate. Any correlation against in-flight CUDA work is the
+// downstream reporter's job (via the carried CorrelationID / DeviceID).
+func HandleNvtxEvent(ev *CuptiNvtxEvent, rep reporter.LogReporter) {
+	if rep == nil {
+		return
+	}
+	// Transient: pfunsafe.ToString aliases the inline byte buffer; the
+	// LogReporter implementation must copy if it retains beyond this call.
+	msg := pfunsafe.ToString(nullTerm(ev.Message[:]))
+
+	out := &samples.NvtxLogEvent{
+		TimestampNs:   ev.Data.TimestampNs,
+		PID:           ev.Pid,
+		TID:           ev.Data.TID,
+		CorrelationID: ev.Data.CorrelationID,
+		DeviceID:      ev.Data.DeviceID,
+		DomainID:      ev.Data.DomainID,
+		Kind:          samples.NvtxKind(ev.Data.Kind),
+		Color:         ev.Data.Color,
+		Payload:       ev.Data.Payload,
+		RangeID:       ev.Data.RangeID,
+		Message:       msg,
+	}
+	if err := rep.ReportNvtxEvent(out); err != nil {
+		log.Debugf("[cuda] nvtx report dropped: %v", err)
+	}
+}
+
+// HandleNvtxResourceName converts a single cupti_events EVENT_TYPE_NVTX_NAME
+// record (one-off resource naming call) and forwards it via the LogReporter.
+// rep may be nil; see HandleNvtxEvent for rationale.
+func HandleNvtxResourceName(ev *CuptiNvtxNameEvent, rep reporter.LogReporter) {
+	if rep == nil {
+		return
+	}
+	name := pfunsafe.ToString(nullTerm(ev.Name[:]))
+	out := &samples.NvtxResourceNameEvent{
+		PID:  ev.Pid,
+		Kind: samples.NvtxResourceKind(ev.Kind),
+		ID:   ev.ID,
+		Name: name,
+	}
+	if err := rep.ReportNvtxResourceName(out); err != nil {
+		log.Debugf("[cuda] nvtx resource-name report dropped: %v", err)
+	}
+}

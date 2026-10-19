@@ -37,6 +37,9 @@ const (
 	USDTProgCudaStallReasonMap    = "cuda_stall_reason_map"
 	USDTProgCudaError             = "cuda_error"
 	USDTProgCudaGpuConfig         = "cuda_gpu_config"
+	USDTProgCudaNvtxEventBatch    = "cuda_nvtx_event_batch"
+	USDTProgCudaNvtxBatchTail     = "cuda_nvtx_batch_tail"
+	USDTProgCudaNvtxResourceName  = "cuda_nvtx_resource_name"
 	USDTProgCudaProbe             = "cuda_probe"
 
 	// BPF attach cookie values - must match CUDA_PROG_* in cuda.ebpf.c.
@@ -47,14 +50,16 @@ const (
 	// pc_sample_batch program additionally tail-chains into itself (slot 1) up
 	// to BPF_PC_MAX_TAIL_CALLS times to process batches larger than one chunk
 	// while keeping each program under the 1M-insn verifier complexity cap.
-	CudaProgCorrelation    = 0
-	CudaProgKernelExec     = 1
-	CudaProgActivityBatch  = 2
-	CudaProgCubinLoaded    = 3
-	CudaProgPCSampleBatch  = 4
-	CudaProgStallReasonMap = 5
-	CudaProgError          = 6
-	CudaProgGpuConfig      = 7
+	CudaProgCorrelation     = 0
+	CudaProgKernelExec      = 1
+	CudaProgActivityBatch   = 2
+	CudaProgCubinLoaded     = 3
+	CudaProgPCSampleBatch   = 4
+	CudaProgStallReasonMap  = 5
+	CudaProgError           = 6
+	CudaProgGpuConfig       = 7
+	CudaProgNvtxEventBatch  = 8
+	CudaProgNvtxResource    = 9
 )
 
 const cudaProgsMap = "cuda_progs"
@@ -68,7 +73,50 @@ const (
 	EventTypeStallReasonMap uint32 = 4
 	EventTypeError          uint32 = 5
 	EventTypeGpuConfig      uint32 = 6
+	EventTypeNvtx           uint32 = 7
+	EventTypeNvtxName       uint32 = 8
 )
+
+// MaxNvtxMsgLen mirrors NVTX_MAX_MSG_LEN from parcagpu/ebpf/cupti_bpf.h.
+const MaxNvtxMsgLen = 240
+
+// MaxNvtxNameLen mirrors MAX_NVTX_NAME_LEN from support/ebpf/cuda.ebpf.c.
+const MaxNvtxNameLen = 128
+
+// CuptiNvtxEventRecord mirrors struct cupti_nvtx_event in parcagpu/ebpf/cupti_bpf.h.
+// 56 bytes, all fields naturally aligned.
+type CuptiNvtxEventRecord struct {
+	TimestampNs   uint64
+	TID           uint32
+	CorrelationID uint32
+	DomainID      uint32
+	Kind          uint16
+	Flags         uint16
+	Color         uint32
+	DeviceID      uint32
+	Payload       uint64
+	RangeID       uint64
+	MessagePtr    uint64
+}
+
+// CuptiNvtxEvent matches struct nvtx_event in cuda.ebpf.c. The leading
+// EventType discriminator is shared with the rest of cupti_events.
+type CuptiNvtxEvent struct {
+	EventType uint32
+	Pid       uint32
+	Data      CuptiNvtxEventRecord
+	Message   [MaxNvtxMsgLen]byte
+}
+
+// CuptiNvtxNameEvent matches struct nvtx_name_event in cuda.ebpf.c.
+type CuptiNvtxNameEvent struct {
+	EventType uint32
+	Pid       uint32
+	Kind      uint32
+	_pad      uint32
+	ID        uint64
+	Name      [MaxNvtxNameLen]byte
+}
 
 // CuptiCubinEvent matches struct cubin_event in cuda.ebpf.c.
 // TODO: get rid of these definitions and generate them from C.
@@ -307,6 +355,8 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		var stallMapProbe *pfelf.USDTProbe
 		var errorProbe *pfelf.USDTProbe
 		var gpuConfigProbe *pfelf.USDTProbe
+		var nvtxEventBatchProbe *pfelf.USDTProbe
+		var nvtxResourceNameProbe *pfelf.USDTProbe
 		for i := range parcagpuProbes {
 			switch parcagpuProbes[i].Name {
 			case "cuda_correlation":
@@ -325,6 +375,10 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 				errorProbe = &parcagpuProbes[i]
 			case "gpu_config":
 				gpuConfigProbe = &parcagpuProbes[i]
+			case "nvtx_event_batch":
+				nvtxEventBatchProbe = &parcagpuProbes[i]
+			case "nvtx_resource_name":
+				nvtxResourceNameProbe = &parcagpuProbes[i]
 			}
 		}
 		if correlationProbe == nil {
@@ -358,6 +412,12 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		}
 		if gpuConfigProbe != nil {
 			requiredProbes = append(requiredProbes, *gpuConfigProbe)
+		}
+		if nvtxEventBatchProbe != nil {
+			requiredProbes = append(requiredProbes, *nvtxEventBatchProbe)
+		}
+		if nvtxResourceNameProbe != nil {
+			requiredProbes = append(requiredProbes, *nvtxResourceNameProbe)
 		}
 		parcagpuProbes = requiredProbes
 
@@ -442,6 +502,19 @@ func (d *data) attach(ebpf interpreter.EbpfHandler, pid libpf.PID, path string,
 		}
 		break
 	}
+	for i := 0; i < len(d.probes); {
+		if d.probes[i].Name != "nvtx_event_batch" {
+			i++
+			continue
+		}
+		if err := ebpf.UpdateProgArray(cudaProgsMap, 2,
+			USDTProgCudaNvtxBatchTail); err != nil {
+			log.Errorf("[cuda] nvtx_event_batch tail call failed: %v — dropping nvtx_event_batch", err)
+			d.probes = append(d.probes[:i], d.probes[i+1:]...)
+			continue
+		}
+		i++
+	}
 
 	// Map USDT probe names to eBPF program names and cookies.
 	// The cookie tells cuda_probe which inlined branch (or tail call) to take.
@@ -473,6 +546,12 @@ func (d *data) attach(ebpf interpreter.EbpfHandler, pid libpf.PID, path string,
 		case "gpu_config":
 			cookies[i] = CudaProgGpuConfig
 			progNames[i] = USDTProgCudaGpuConfig
+		case "nvtx_event_batch":
+			cookies[i] = CudaProgNvtxEventBatch
+			progNames[i] = USDTProgCudaNvtxEventBatch
+		case "nvtx_resource_name":
+			cookies[i] = CudaProgNvtxResource
+			progNames[i] = USDTProgCudaNvtxResourceName
 		default:
 			log.Debugf("unknown parcagpu USDT probe name: %s", probe.Name)
 		}
