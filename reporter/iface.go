@@ -33,20 +33,19 @@ type TraceReporter interface {
 	ReportTraceEvent(trace *libpf.Trace, meta *samples.TraceEventMeta) error
 }
 
-// LogReporter is an optional sink for log-shaped events that don't fit the
-// trace/profile model. Currently the only producers are NVTX events from the
-// CUDA interpreter (annotated regions, marks, resource naming). Reporters
-// that don't speak a log channel simply don't implement this; the caller
-// checks for the interface and skips emission if absent.
-type LogReporter interface {
-	// ReportNvtxEvent enqueues a single NVTX annotation for backend delivery.
-	// Returning an error means the event could not be queued (e.g. backpressure);
-	// the caller is responsible for choosing whether to retry or drop.
-	ReportNvtxEvent(ev *samples.NvtxLogEvent) error
+// NvtxReporter is an optional sink for NVTX annotations (ranges, marks,
+// resource names) from the CUDA interpreter. Events are delivered raw and in
+// per-thread order; turning ranges into spans, logs or anything else is the
+// implementation's job. Reporters that don't consume NVTX simply don't
+// implement this; the caller checks for the interface and skips emission.
+type NvtxReporter interface {
+	// ReportNvtxEvent hands over a single NVTX event. Returning an error means
+	// the event could not be accepted (e.g. backpressure); it is dropped.
+	ReportNvtxEvent(ev *samples.NvtxEvent) error
 
-	// ReportNvtxResourceName enqueues a resource-name announcement.
-	// Resource names are low-rate and idempotent — the consumer is expected
-	// to maintain its own cache and not require dedup from the caller.
+	// ReportNvtxResourceName hands over a resource-name announcement.
+	// Announcements are low-rate and may repeat; the consumer is expected to
+	// keep its own cache and not require dedup from the caller.
 	ReportNvtxResourceName(ev *samples.NvtxResourceNameEvent) error
 }
 

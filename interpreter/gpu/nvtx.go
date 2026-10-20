@@ -9,27 +9,30 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfunsafe"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
+	"go.opentelemetry.io/ebpf-profiler/times"
 )
 
 // HandleNvtxEvent converts a single cupti_events EVENT_TYPE_NVTX record into a
-// language-neutral samples.NvtxLogEvent and forwards it via rep.ReportNvtxEvent.
-// rep may be nil (no log reporter wired) — in that case the event is silently
+// language-neutral samples.NvtxEvent and forwards it via rep.ReportNvtxEvent.
+// rep may be nil (no NVTX reporter wired) — in that case the event is silently
 // dropped; the BPF side already paid the ringbuf cost, but the trace pipeline
 // is unaffected.
 //
 // Unlike PC samples we do *not* defer or correlate with kernel timing: NVTX
 // emission is immediate. Any correlation against in-flight CUDA work is the
 // downstream reporter's job (via the carried CorrelationID / DeviceID).
-func HandleNvtxEvent(ev *CuptiNvtxEvent, rep reporter.LogReporter) {
+func HandleNvtxEvent(ev *CuptiNvtxEvent, rep reporter.NvtxReporter) {
 	if rep == nil {
 		return
 	}
 	// Transient: pfunsafe.ToString aliases the inline byte buffer; the
-	// LogReporter implementation must copy if it retains beyond this call.
+	// NvtxReporter implementation must copy if it retains beyond this call.
 	msg := pfunsafe.ToString(nullTerm(ev.Message[:]))
 
-	out := &samples.NvtxLogEvent{
-		TimestampNs:   ev.Data.TimestampNs,
+	out := &samples.NvtxEvent{
+		// parcagpu stamps events with CLOCK_MONOTONIC, the same clock as
+		// bpf_ktime_get_ns.
+		TimeUnixNano:  times.KTime(ev.Data.TimestampNs).UnixNano(),
 		PID:           ev.Pid,
 		TID:           ev.Data.TID,
 		CorrelationID: ev.Data.CorrelationID,
@@ -47,9 +50,9 @@ func HandleNvtxEvent(ev *CuptiNvtxEvent, rep reporter.LogReporter) {
 }
 
 // HandleNvtxResourceName converts a single cupti_events EVENT_TYPE_NVTX_NAME
-// record (one-off resource naming call) and forwards it via the LogReporter.
+// record (one-off resource naming call) and forwards it via the NvtxReporter.
 // rep may be nil; see HandleNvtxEvent for rationale.
-func HandleNvtxResourceName(ev *CuptiNvtxNameEvent, rep reporter.LogReporter) {
+func HandleNvtxResourceName(ev *CuptiNvtxNameEvent, rep reporter.NvtxReporter) {
 	if rep == nil {
 		return
 	}
