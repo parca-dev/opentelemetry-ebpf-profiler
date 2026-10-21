@@ -126,8 +126,6 @@ func (cfg *Config) IsMapEnabled(mapName string) bool {
 		return !cfg.Hotspot.IsDisabled()
 	case ruby.BPFMapName:
 		return !cfg.Ruby.IsDisabled()
-	case dotnet.BPFMapName:
-		return !cfg.Dotnet.IsDisabled()
 	case beam.BPFMapName:
 		return !cfg.BEAM.IsDisabled()
 	case luajit.BPFMapName:

@@ -46,13 +46,12 @@ extern struct unwind_info_array_t unwind_info_array;
 
 extern struct apm_int_procs_t apm_int_procs;
 extern struct hotspot_procs_t hotspot_procs;
-extern struct dotnet_procs_t dotnet_procs;
+extern struct luajit_procs_t luajit_procs;
 extern struct perl_procs_t perl_procs;
 extern struct php_procs_t php_procs;
 extern struct py_procs_t py_procs;
 extern struct ruby_procs_t ruby_procs;
 extern struct v8_procs_t v8_procs;
-extern struct luajit_procs_t luajit_procs;
 #endif // TESTING_COREDUMP
 
 #endif // OPTI_EXTMAPS_H
