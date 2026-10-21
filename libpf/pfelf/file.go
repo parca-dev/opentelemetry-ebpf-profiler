@@ -1168,14 +1168,6 @@ func calcSysvHash(s libpf.SymbolName) uint32 {
 	return h & 0xfffffff
 }
 
-// roundUp rounds `value` up to the nearest multiple of `multiple`.
-func roundUp(value, multiple uint64) uint64 {
-	if multiple == 0 {
-		return value
-	}
-	return (value + multiple - 1) / multiple * multiple
-}
-
 // LookupTLSSymbolOffset computes the offset of a symbol
 // in thread-local storage of the main binary.
 //
@@ -1216,7 +1208,7 @@ func (f *File) AdjustTLSSymbol(tlsSym *libpf.Symbol) (int64, error) {
 		if err != nil {
 			return 0, err
 		}
-		offset := int64(tlsSym.Address) - int64(roundUp(tls.Memsz, tls.Align))
+		offset := int64(tlsSym.Address) - int64(roundUp(tls.Memsz, max(tls.Align, 1)))
 
 		return offset, nil
 	}
