@@ -56,11 +56,12 @@ apply (BPF blobs, go.mod, metrics, errors.h), and leaves the remaining
 files unmerged in the working tree. Finish with `git add … && git commit`
 and re-run.
 
-The default smoke test is fast (seconds) and stays on: `go vet` type-checks
-every package including tests without linking, which catches upstream API
-changes that fork-only code uses but that merged without a textual conflict;
-and `support/generate.sh` checks `support/types.go` is what upstream's
-generator produces. `--full-smoke` adds `make test`, which needs the Rust
+The default smoke test takes about a minute and stays on: `go vet`
+type-checks every package including tests, which catches upstream API changes
+that fork-only code uses but that merged without a textual conflict;
+`support/generate.sh` checks `support/types.go` is what upstream's generator
+produces; and `go test` runs the unit tests of every package except the Rust
+`symblib-capi` wrapper (so it links without the Rust lib). `--full-smoke` adds `make test`, which needs the Rust
 `symblib-capi` lib (`make rust-components`); run it once at the end.
 
 ## What the script auto-resolves
@@ -114,10 +115,9 @@ When the script stops, the workflow at each stop is the same:
    and don't hand-run `cgo -godefs` either: upstream's `generate.sh` passes
    flags (`-DEBPF_TRACE_HEADER_ONLY` since #1914) that a bare invocation
    misses, giving a different `Trace` layout.
-4. Run the unit tests of the packages the merge touched (`go test ./tracer/
-   ./interpreter/<x>/ ./tools/coredump/ …`). vet only type-checks; a fork test
-   that depends on fork-only sizes broke at #1849 and went unnoticed for six
-   merges because nothing ran it.
+4. `--regen`'s smoke includes the unit tests. Before it did, a fork test that
+   depends on fork-only sizes broke at #1849 and went unnoticed for six merges
+   because only vet ran.
 5. Commit with `git -c user.email=... -c user.name='...' commit --no-edit`
    to preserve the auto-generated `Merge commit '<sha>' into upstream-merge`
    message. **No `Co-Authored-By: Claude` trailers** — this repo follows the
@@ -350,8 +350,8 @@ A list of mistakes from prior cycles so future-you can recognize them:
   hunks; `git checkout -m <file>` brings the markers back.
 - **Regenerating `types.go` with a bare `go tool cgo -godefs types_def.go`.**
   Upstream's `generate.sh` adds flags; use `--regen`.
-- **Trusting vet alone between merges.** It doesn't run tests. Run the
-  touched packages' tests at each stop.
+- **Trusting vet alone between merges.** It doesn't run tests; the smoke
+  now does.
 - **Deleting and recreating `upstream-merge` between iterations.** Loses any
   remote tracking config on the branch and is just ceremony. The script now
   continues an existing branch by default; use `--fresh` only when you

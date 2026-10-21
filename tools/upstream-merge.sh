@@ -56,12 +56,16 @@ set -euo pipefail
 # ── smoke-test commands ────────────────────────────────────────────────
 # All must pass for a merge to be accepted.  Add more entries as needed.
 
-# Type-check every package, tests included, without linking. The disabled
-# analyzers flag pre-existing style issues upstream and the fork both carry.
+# Type-check every package, tests included, then run the unit tests. The
+# disabled vet analyzers flag pre-existing style issues upstream and the fork
+# both carry.
 SMOKE_CMDS=(
     "CGO_ENABLED=1 go vet -composites=false -unreachable=false -unsafeptr=false ./..."
     # types.go must match what upstream's generator produces from types_def.go.
     "(cd support && ./generate.sh); rc=\$?; rm -rf support/_obj support/types_gen.go; exit \$rc"
+    # Unit tests (~1 min). Everything links without the Rust symblib-capi lib
+    # except its own Go wrapper, so skip that one. Needs `make test-deps` once.
+    "CGO_ENABLED=1 go test \$(go list ./... | grep -v /rust-crates/symblib-capi/)"
 )
 FULL_SMOKE_CMDS=(
     "go test -run ^$ ./..."
