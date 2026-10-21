@@ -105,6 +105,7 @@ type ApmTraceID C.ApmTraceID
 type CustomLabel C.CustomLabel
 type CustomLabelsArray C.CustomLabelsArray
 type Event C.Event
+type GolangLabel C.GolangLabel
 type OffsetRange C.OffsetRange
 type PIDPage C.PIDPage
 type PIDPageMappingInfo C.PIDPageMappingInfo
@@ -136,7 +137,8 @@ type LuaJITProcInfo C.LuaJITProcInfo
 const (
 	Sizeof_StackDelta    = C.sizeof_StackDelta
 	Sizeof_TraceHeader   = C.sizeof_Trace
-	Sizeof_TraceWithData = C.sizeof_Trace + C.sizeof_TraceFrameData
+	Sizeof_TraceWithData = C.sizeof_Trace + C.sizeof_TraceData
+	Sizeof_GolangLabel   = C.sizeof_GolangLabel
 
 	sizeof_ApmIntProcInfo        = C.sizeof_ApmIntProcInfo
 	sizeof_DotnetProcInfo        = C.sizeof_DotnetProcInfo

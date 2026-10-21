@@ -734,12 +734,34 @@ typedef struct CustomLabelsArray {
   CustomLabel labels[MAX_CUSTOM_LABELS];
 } CustomLabelsArray;
 
-// The frame data of a stack trace. Each frame is variable length,
-// and is about 2 or 3 entries long. This array defines the ebpf buffer
-// to record the frames, and thus limits the number of frames we can
-// unwind. The 3kB entries here is chosen to allow about 1024 frames
-// in a trace to be sent.
-typedef u64 TraceFrameData[3072];
+// parca: sized to hold the same key/value lengths as native custom labels
+// (CUSTOM_LABEL_MAX_KEY_LEN/CUSTOM_LABEL_MAX_VAL_LEN plus a NUL) instead of
+// upstream's 16/48.
+typedef struct GolangLabel {
+  u8 key[26];
+  u8 val[54];
+} GolangLabel;
+
+// Maximum Golang labels to recover
+#define MAX_GO_LABELS 10
+
+// Maximum number of u64 frame data entries. This limits the number
+// of frames we can unwind, but also increases the memory needed for
+// buffering everything. The 3kB entries here is chosen to allow
+// about 1024 frames in a trace to be sent.
+#define MAX_FRAME_DATA_LEN 3072
+
+// Maximum number of u64 frame data entries for Go labels.
+#define MAX_GO_LABEL_DATA_LEN (MAX_GO_LABELS * sizeof(GolangLabel) / 8)
+
+// Number of u64 entries reserved for data after frames.
+#define MAX_FRAME_TRAILER_DATA_LEN MAX_GO_LABEL_DATA_LEN
+
+// The variable data portion of trace layout as:
+//   u64          kernel_frame[kernel_frame_end];
+//   u64          frame_data[(frame_data_end-kernel_frame_end)];
+//   GolangLabel  golang_labels[(golang_label_end-frame_data_end)*8/sizeof(GolangLabel)];
+typedef u64 TraceData[MAX_FRAME_DATA_LEN + MAX_FRAME_TRAILER_DATA_LEN];
 
 // Container for a stack trace
 typedef struct Trace {
@@ -757,16 +779,20 @@ typedef struct Trace {
   ApmSpanID apm_transaction_id;
   // APM trace ID or all-zero if not present.
   ApmTraceID apm_trace_id;
-  // Custom Labels
+  // Custom Labels (native and Node.js; Go labels are in variable_data)
   CustomLabelsArray custom_labels;
-  // The number of frame_data elements present.
-  u16 frame_data_len;
-  // The number of frames present.
-  u16 num_frames;
-  // The number of kernel stack frames at the start of frame_data.
-  // These are raw u64 addresses from bpf_get_stack(), not encoded frames.
-  u16 num_kernel_frames;
 
+  // The CPU that captured this trace.
+  u32 cpu_id;
+
+  // Variable data offsets
+  u16 kernel_frame_end;
+  u16 frame_data_end;
+  u16 golang_label_end;
+  u16 variable_data_end;
+
+  // The number of (variable length) frames present.
+  u16 num_frames;
   // origin indicates the source of the trace and it is set as
   // RODATA variable at load time.
   u16 origin;
@@ -775,17 +801,18 @@ typedef struct Trace {
   // e.g. time in nanoseconds for off-CPU traces
   u64 value;
 
-  // The CPU that captured this trace.
-  u32 cpu_id;
-
-  // NOTE: both send_trace in BPF and loadBpfTrace in UM code require `frame_data`
+  // NOTE: both send_trace in BPF and loadBpfTrace in UM code require `variable_data`
   // to be the last item in the struct. When sending via the ringbuffer, only the
-  // 'frame_data_len' elements of 'frame_data' are sent. And the UM code accesses
-  // the above header using this struct, and copies the frame data separately.
+  // elements up to 'variable_data_end' are sent.
 #ifndef EBPF_TRACE_HEADER_ONLY
-  TraceFrameData frame_data;
+  TraceData variable_data;
 #endif
 } Trace;
+
+// Trace can be defined with or without TraceData, and the offsetof variable_data
+// is expected to match sizeof the header portion. This holds true as long as the
+// alignment of the struct and the field matches. See tracer/tracer.go.
+_Static_assert(_Alignof(Trace) == _Alignof(TraceData), "Trace alignment mismatch");
 
 // Container for unwinding state
 typedef struct UnwindState {
@@ -988,11 +1015,14 @@ struct GoSlice {
   s64 cap;
 };
 
-// https://github.com/golang/go/blob/6885bad7dd/src/runtime/map.go#L109
+// https://github.com/golang/go/blob/6885bad7dd86880be6929c02085/src/internal/abi/map.go#L12
+#define GO_MAP_BUCKET_SIZE 8
+
+// https://github.com/golang/go/blob/6885bad7dd86880be6929c02085/src/runtime/map.go#L143
 typedef struct GoMapBucket {
-  char tophash[8];
-  struct GoString keys[8];
-  struct GoString values[8];
+  u8 tophash[GO_MAP_BUCKET_SIZE];
+  struct GoString keys[GO_MAP_BUCKET_SIZE];
+  struct GoString values[GO_MAP_BUCKET_SIZE];
   void *overflow;
 } GoMapBucket;
 
@@ -1011,9 +1041,9 @@ typedef struct GoRuntimeOffsets {
   u32 sched_bp_off;
 } GoRuntimeOffsets;
 
-typedef struct CustomLabelsState {
+typedef struct GolangLabelsState {
   void *go_m_ptr;
-} CustomLabelsState;
+} GolangLabelsState;
 
 // Container for additional scratch space needed by the Go unwinder.
 typedef struct GoUnwindScratchSpace {
@@ -1039,8 +1069,8 @@ typedef struct PerCPURecord {
   RubyUnwindState rubyUnwindState;
   // The current LuaJIT unwinder state.
   LJUnwindState luajitUnwindState;
-  // State for Go and Native custom labels
-  CustomLabelsState customLabelsState;
+  // State for Go labels
+  GolangLabelsState golangLabelsState;
   // Per-process Go runtime offsets, preloaded once per trace from go_procs in
   // collect_trace. m_offset is always non-zero for a Go process.
   GoRuntimeOffsets goOffsets;
@@ -1062,7 +1092,7 @@ typedef struct PerCPURecord {
     // Go labels scratch
     GoMapBucket goMapBucket;
     // Scratch for Go 1.24 labels
-    struct GoString labels[MAX_CUSTOM_LABELS * 2];
+    struct GoString goLabels[MAX_GO_LABELS * 2];
     // Signal frame registers for unwind_one_frame (avoids 272-byte stack alloc on arm64).
     // Sized to match the kernel rt_sigframe register array for the target architecture.
 #if defined(__x86_64__)
