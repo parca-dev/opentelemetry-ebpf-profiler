@@ -20,10 +20,10 @@ require (
 	github.com/elastic/go-perf v0.0.0-20260224073651-af0ee0c731b7
 	github.com/gnurizen/sass-table v0.0.3
 	github.com/google/uuid v1.6.0
-	github.com/klauspost/compress v1.20.0
+	github.com/klauspost/compress v1.20.1
 	github.com/mdlayher/kobject v0.0.0-20200520190114-19ca17470d7d
 	github.com/minio/sha256-simd v1.0.1
-	github.com/moby/moby/api v1.56.0
+	github.com/moby/moby/api v1.56.1
 	github.com/open-telemetry/sig-profiling/profcheck v0.0.0-20260922105303-198ebe3624db
 	github.com/parca-dev/oomprof v0.1.7
 	github.com/parca-dev/usdt v0.0.2
@@ -31,23 +31,22 @@ require (
 	github.com/stretchr/testify v1.12.1
 	github.com/testcontainers/testcontainers-go v0.44.0
 	github.com/zeebo/xxh3 v1.1.0
-	go.opentelemetry.io/collector/component v1.67.0
-	go.opentelemetry.io/collector/component/componenttest v0.161.0
-	go.opentelemetry.io/collector/confmap v1.67.0
-	go.opentelemetry.io/collector/consumer/consumertest v0.161.0
-	go.opentelemetry.io/collector/consumer/xconsumer v0.161.0
-	go.opentelemetry.io/collector/extension v1.67.0
-	go.opentelemetry.io/collector/pdata v1.67.0
-	go.opentelemetry.io/collector/pdata/pprofile v0.161.0
-	go.opentelemetry.io/collector/receiver v1.67.0
-	go.opentelemetry.io/collector/receiver/receivertest v0.161.0
-	go.opentelemetry.io/collector/receiver/xreceiver v0.161.0
+	go.opentelemetry.io/collector/component v1.68.0
+	go.opentelemetry.io/collector/component/componenttest v0.162.0
+	go.opentelemetry.io/collector/confmap v1.68.0
+	go.opentelemetry.io/collector/consumer/consumertest v0.162.0
+	go.opentelemetry.io/collector/consumer/xconsumer v0.162.0
+	go.opentelemetry.io/collector/extension v1.68.0
+	go.opentelemetry.io/collector/pdata v1.68.0
+	go.opentelemetry.io/collector/pdata/pprofile v0.162.0
+	go.opentelemetry.io/collector/receiver v1.68.0
+	go.opentelemetry.io/collector/receiver/receivertest v0.162.0
+	go.opentelemetry.io/collector/receiver/xreceiver v0.162.0
 	go.opentelemetry.io/otel v1.46.0
 	go.opentelemetry.io/otel/metric v1.46.0
 	go.opentelemetry.io/proto/otlp v1.11.0
 	go.opentelemetry.io/proto/otlp/processcontext/v1development v0.4.0
 	go.opentelemetry.io/proto/otlp/profiles/v1development v0.4.0
-	go.uber.org/goleak v1.3.0
 	go.uber.org/zap/exp v0.3.0
 	golang.org/x/arch v0.31.0
 	golang.org/x/exp v0.0.0-20260908205506-85c1c2202aba
@@ -128,11 +127,11 @@ require (
 	github.com/tklauser/numcpus v0.12.0 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
-	go.opentelemetry.io/collector/consumer v1.67.0 // indirect
-	go.opentelemetry.io/collector/consumer/consumererror v0.161.0 // indirect
-	go.opentelemetry.io/collector/featuregate v1.67.0 // indirect
-	go.opentelemetry.io/collector/internal/componentalias v0.161.0 // indirect
-	go.opentelemetry.io/collector/pipeline v1.67.0 // indirect
+	go.opentelemetry.io/collector/consumer v1.68.0 // indirect
+	go.opentelemetry.io/collector/consumer/consumererror v0.162.0 // indirect
+	go.opentelemetry.io/collector/featuregate v1.68.0 // indirect
+	go.opentelemetry.io/collector/internal/componentalias v0.162.0 // indirect
+	go.opentelemetry.io/collector/pipeline v1.68.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect
 	go.opentelemetry.io/otel/sdk v1.46.0 // indirect
 	go.opentelemetry.io/otel/sdk/metric v1.46.0 // indirect
