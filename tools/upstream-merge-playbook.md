@@ -15,14 +15,17 @@ landing as a single PR with one merge commit per resolved batch.
 
 ## Quick start
 
-Start in a clean worktree on `origin/main`:
+Start in a clean worktree on `origin/main`. Name the branch after the upstream
+PR you are merging up to, so it can't collide with an older cycle's
+`upstream-merge` branch still checked out in another worktree:
 
 ```bash
 git fetch upstream
-tools/upstream-merge.sh --no-smoke
+make test-deps          # once: test fixtures (pfelf, golabels, …) the tests need
+tools/upstream-merge.sh --branch upstream-merge-2017
 ```
 
-The script creates `upstream-merge` off `origin/main`, binary-searches the
+The script creates the branch off `origin/main`, binary-searches the
 unmerged upstream commits, merges the maximal auto-resolvable prefix, and
 stops before the first conflict it can't handle. Stopping output looks like:
 
@@ -36,7 +39,7 @@ Resolve that one commit by hand (see the decision matrix below), commit on
 `upstream-merge`, then re-run:
 
 ```bash
-tools/upstream-merge.sh --no-fetch --no-smoke
+tools/upstream-merge.sh --no-fetch --branch upstream-merge-2017
 ```
 
 The script detects the existing branch, continues from its tip, and merges
@@ -53,10 +56,12 @@ apply (BPF blobs, go.mod, metrics, errors.h), and leaves the remaining
 files unmerged in the working tree. Finish with `git add … && git commit`
 and re-run.
 
-`--no-smoke` is recommended because the smoke test (`make test`) is slow and
-its failures usually point at Go-side breakage caused by an earlier merge that
-needs a follow-up, not at the merge currently being probed. Run `make test`
-once at the end instead.
+The default smoke test is fast (seconds) and stays on: `go vet` type-checks
+every package including tests without linking, which catches upstream API
+changes that fork-only code uses but that merged without a textual conflict;
+and `support/generate.sh` checks `support/types.go` is what upstream's
+generator produces. `--full-smoke` adds `make test`, which needs the Rust
+`symblib-capi` lib (`make rust-components`); run it once at the end.
 
 ## What the script auto-resolves
 
@@ -97,16 +102,23 @@ between iterations still record.
 
 When the script stops, the workflow at each stop is the same:
 
-1. `git merge --no-commit --no-edit <next-sha>` — see what conflicts come up.
-2. Resolve each conflicting file (see decision matrix).
-3. `git checkout --theirs support/ebpf/tracer.ebpf.{amd64,arm64}` and
-   `make -C support/ebpf amd64 && make -C support/ebpf arm64`.
-4. If `metrics/metrics.json` changed: `go generate ./metrics/...`.
-5. If `support/types_def.go` changed: `(cd support && ./generate.sh)` and copy
-   `types_gen.go` over `types.go`. Never edit `support/types.go` directly.
-6. `git add -u` and verify with `CGO_ENABLED=1 go vet ./tracer ./support ...`
-   (the packages touched by the merge).
-7. Commit with `git -c user.email=... -c user.name='...' commit --no-edit`
+1. `git merge --no-ff --no-edit <next-sha>` — see what conflicts come up.
+2. Resolve each conflicting file (see decision matrix). Resolve **hunks**, not
+   files: `git checkout --theirs <file>` replaces the whole file and silently
+   drops every fork-only line in it, not just the conflicting ones. If you did
+   it by mistake, `git checkout -m <file>` restores the conflict markers.
+3. `git add` the resolved sources, then `tools/upstream-merge.sh --regen`. It
+   regenerates `metrics/ids.go` and `support/types.go`, rebuilds both BPF blobs
+   (taking either side of a conflicted blob first), re-emits `errors.h`,
+   stages all of them, and runs the smoke test. Never hand-edit `types.go`,
+   and don't hand-run `cgo -godefs` either: upstream's `generate.sh` passes
+   flags (`-DEBPF_TRACE_HEADER_ONLY` since #1914) that a bare invocation
+   misses, giving a different `Trace` layout.
+4. Run the unit tests of the packages the merge touched (`go test ./tracer/
+   ./interpreter/<x>/ ./tools/coredump/ …`). vet only type-checks; a fork test
+   that depends on fork-only sizes broke at #1849 and went unnoticed for six
+   merges because nothing ran it.
+5. Commit with `git -c user.email=... -c user.name='...' commit --no-edit`
    to preserve the auto-generated `Merge commit '<sha>' into upstream-merge`
    message. **No `Co-Authored-By: Claude` trailers** — this repo follows the
    OTel community policy of human-only attribution. Don't pass `-s` either:
@@ -188,14 +200,77 @@ not slot → Go value, so renumbering doesn't require a BPF blob rebuild.
 `types.go` is generated from `types_def.go` via cgo godefs. The script
 handles the swap-merge of `types_def.go` and regenerates `types.go` (inlined,
 because `support/generate.sh` runs `go fmt` on a file that still has conflict
-markers). Only touch this by hand if the auto-resolver produced something
-weird — in which case edit `types_def.go`, then:
+markers, but using the exact `cgo -godefs` command line grepped out of
+`generate.sh`). Only touch this by hand if the auto-resolver produced something
+weird — in which case edit `types_def.go` and run
+`tools/upstream-merge.sh --regen`.
+
+### Silent deletions: clean merges that drop fork behavior
+
+The most dangerous merges have no conflict at all. When upstream deletes or
+restructures code the fork extends, and the fork's lines in that region match
+the merge base, git applies the deletion cleanly and the fork feature is
+gone. #1907 (variable-length Trace data) did this three times in one merge:
+the `custom_labels` decode in `tracer.go`, `CustomLabelsArray` in `types.h`,
+and the `trace->custom_labels.len = 0` reset in `get_pristine_per_cpu_record`.
+#2004 (apmint removal) did it again with the fork's apmint loader in
+`processmanager/execinfomanager` (vet caught that one, because the package
+was deleted).
+
+For any upstream PR that rewrites a structure fork features hook into
+(the `Trace` struct, `loadBpfTrace`, `unwind_stop`, `collect_trace`,
+`TraceEventMeta`), diff the merge against its first parent for removed fork
+lines:
 
 ```bash
-(cd support && ./generate.sh)   # diffs generated vs current
-cp support/types_gen.go support/types.go   # if the diff is what you wanted
-rm -rf support/_obj support/types_gen.go
+git diff <merge>^1 <merge> -- tracer/ support/ebpf/ | grep '^-' | grep -iE 'custom|cuda|luajit|parca'
 ```
+
+and run the fork feature's tests (`customlabelstest`, `interpreter/gpu`,
+`interpreter/luajit`, coredump).
+
+### Trace collection API (#1915)
+
+`collect_trace(ctx, origin, pid, tid, leader, ts, value, cuda_id)` is gone.
+Upstream split it into `prepare_trace` → optional `push_context_values` →
+`unwind_trace(ctx, record, kernel_frames)`, and `collect_trace` is now a
+no-value convenience wrapper. The fork's CUDA probe uses the split API
+directly: `prepare_trace`, `push_kernel_frames`, push the `CUDA_KERNEL` frame,
+then `unwind_trace(ctx, record, false)`. That keeps `tracemgmt.h` free of
+`cuda_id`. On the Go side `TraceEventMeta.Value` became `ContextValues
+[]uint64` (aliases a pooled trace; don't retain), and `TypeMetadata` has
+`SampleTypes` plus a required `AppendValues`.
+
+### `support/ebpf/` header conventions (#1995)
+
+`u64` is now `unsigned long`, so `DEBUG_PRINT` formats are `%lx`/`%lu`/`%ld`,
+not `%llx`. Fork-only BPF code hits this as `-Wformat` errors after the
+merge. Headers use `#pragma once`; when a conflict is just a fork addition
+before the old `#endif // OPTI_*_H`, keep the addition and drop the `#endif`.
+
+### nodev8
+
+Fork-only pieces of `interpreter/nodev8/v8.go` are the JS debug-ID support
+(`fileToDebugID`, `pid`, `appendFrame`'s `FileID`/`Mapping`, `debugid.go`) and
+the Node custom-labels data (`isolateSym`, `cpedOffset`, `wrappedObjectOffset`,
+the `NodeVersion`/`CurrentIsolate` symbols, `loadNodeClData`, and the matching
+`V8ProcInfo` fields). Everything else should match upstream: take theirs and
+re-add those. Leaptiering (Node 24) landed upstream in #1917; the fork no
+longer carries its own.
+
+### External BPF headers
+
+`parca-dev/usdt` and `parca-dev/parcagpu` headers are included with
+`-isystem`, so upstream's stricter warnings (#1910's `-Wsign-conversion`)
+don't fail the build on code we don't own here. Fix the warnings in those
+repos and switch back to `-I` when they release.
+
+### LuaJIT upstreaming in progress
+
+Upstream is landing parca's LuaJIT unwinder in pieces (#1929 brought the
+JIT-region tracking). When a piece lands, adopt upstream's names and shapes
+for it (`LJJitMarker`, `regionKey`-keyed `jitRegions`) and keep only the parts
+upstream doesn't have yet, so each subsequent piece merges with less friction.
 
 ### Upstream "upstreams" of parca PRs
 
@@ -226,6 +301,16 @@ ones so far:
   `CPU` arg.
 - `Trace.Hash` removed (#1518): drop explicit `traceutil.HashTrace` calls;
   `maybeNotifyAPMAgent` takes `*libpf.Trace` directly.
+- `Value` → `ContextValues`, `SampleType`/`SampleUnit` → `SampleTypes`
+  (#1915): `interpreter/gpu` sets `ContextValues: []uint64{v}` on the
+  synthesized GPU samples.
+- `tail_call(ctx, next)` → `return tail_call(ctx, record, next)` (#1962):
+  fork unwinders (LuaJIT) must return its value.
+- `ApmSpanID`/`ApmTraceID` → `SpanID`/`TraceID`, `APMServiceName` removed
+  (#2004).
+- `OpenMappingFile` returns `fs.File`, ELF helpers take an `fs.FS` (#1900):
+  `interpreter/gpu/cubin.go` implements the file; downstream parca-agent
+  callers need the same change.
 
 When in doubt: grep parca-only files (`interpreter/gpu/`, `interpreter/cuda*`,
 `interpreter/customlabels/`, `interpreter/oomwatcher/`) for the old name.
@@ -260,6 +345,13 @@ A list of mistakes from prior cycles so future-you can recognize them:
 - **Running `git merge upstream/main` once and trying to resolve everything in
   one merge commit.** The script's batching produces a cleaner history and is
   way more debuggable when something breaks.
+- **`git checkout --theirs` on a file with fork-only lines** (to "take
+  upstream's version of the conflict"). It takes the whole file. Resolve the
+  hunks; `git checkout -m <file>` brings the markers back.
+- **Regenerating `types.go` with a bare `go tool cgo -godefs types_def.go`.**
+  Upstream's `generate.sh` adds flags; use `--regen`.
+- **Trusting vet alone between merges.** It doesn't run tests. Run the
+  touched packages' tests at each stop.
 - **Deleting and recreating `upstream-merge` between iterations.** Loses any
   remote tracking config on the branch and is just ceremony. The script now
   continues an existing branch by default; use `--fresh` only when you
