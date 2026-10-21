@@ -114,7 +114,8 @@ func __bpf_map_lookup_elem(id C.u64, mapdef unsafe.Pointer, keyptr unsafe.Pointe
 		unsafe.Pointer(&C.v8_procs),
 		unsafe.Pointer(&C.cl_procs),
 		unsafe.Pointer(&C.go_procs),
-		unsafe.Pointer(&C.luajit_procs):
+		unsafe.Pointer(&C.luajit_procs),
+		unsafe.Pointer(&C.beam_procs):
 		if innerMap, ok := ctx.maps[mapdef]; ok {
 			if val, ok := innerMap[*(*C.u32)(keyptr)]; ok {
 				return val
