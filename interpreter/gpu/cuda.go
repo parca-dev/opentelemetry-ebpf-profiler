@@ -77,9 +77,6 @@ const (
 	EventTypeNvtxName       uint32 = 8
 )
 
-// MaxNvtxMsgLen mirrors NVTX_MAX_MSG_LEN from parcagpu/ebpf/cupti_bpf.h.
-const MaxNvtxMsgLen = 240
-
 // MaxNvtxNameLen mirrors MAX_NVTX_NAME_LEN from support/ebpf/cuda.ebpf.c.
 const MaxNvtxNameLen = 128
 
@@ -99,13 +96,15 @@ type CuptiNvtxEventRecord struct {
 	MessagePtr    uint64
 }
 
-// CuptiNvtxEvent matches struct nvtx_event in cuda.ebpf.c. The leading
-// EventType discriminator is shared with the rest of cupti_events.
+// CuptiNvtxEvent matches the fixed part of struct nvtx_event in cuda.ebpf.c.
+// The leading EventType discriminator is shared with the rest of
+// cupti_events. Records are variable-length: the NUL-terminated message
+// (at most NVTX_MAX_MSG_LEN bytes from parcagpu/ebpf/cupti_bpf.h) follows
+// and the record ends with it.
 type CuptiNvtxEvent struct {
 	EventType uint32
 	Pid       uint32
 	Data      CuptiNvtxEventRecord
-	Message   [MaxNvtxMsgLen]byte
 }
 
 // CuptiNvtxNameEvent matches struct nvtx_name_event in cuda.ebpf.c.

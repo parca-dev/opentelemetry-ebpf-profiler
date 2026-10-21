@@ -142,7 +142,9 @@ struct error_event {
 
 // nvtx_event embeds the producer's cupti_nvtx_event record (read directly from
 // user memory) and the resolved message string.  pid is observed in BPF since
-// nvtx callbacks don't carry it in cupti_nvtx_event.
+// nvtx callbacks don't carry it in cupti_nvtx_event.  Records are
+// variable-length: only the message bytes actually read (through the NUL) are
+// sent, so short messages don't pay for NVTX_MAX_MSG_LEN.
 struct nvtx_event {
   u32 event_type; // = EVENT_TYPE_NVTX
   u32 pid;
@@ -180,7 +182,8 @@ struct cuda_scratch {
   u32 pc_device_id;
   u64 nvtx_ptrs_base;
   u32 nvtx_count;
-  u32 nvtx_next_offset; // start of the next nvtx chunk to process; 0 on entry
+  u32 nvtx_next_offset;       // start of the next nvtx chunk to process; 0 on entry
+  struct nvtx_event nvtx_evt; // built here, then copied to cupti_events
 };
 
 struct cuda_scratch_heap_t {
@@ -220,8 +223,8 @@ struct cuda_scratch_heap_t {
 #define BPF_PC_TOTAL_LIMIT    (BPF_PC_BATCH_LIMIT * BPF_PC_MAX_TAIL_CALLS)
 
 // Per-chunk limit for nvtx_event_batch.  Each iter reads a pointer, reads a
-// 56-byte cupti_nvtx_event, reserves a ringbuf event with a 240-byte inline
-// message, copies fields, and resolves the message via bpf_probe_read_user_str.
+// 56-byte cupti_nvtx_event into scratch, resolves the message via
+// bpf_probe_read_user_str, and copies the used part to the ringbuf.
 // 64-per-chunk x 4 chunks = 256 max (matches PARCAGPU_NVTX_BATCH_SIZE default).
 #define BPF_NVTX_BATCH_LIMIT    64
 #define BPF_NVTX_MAX_TAIL_CALLS 4
@@ -740,6 +743,13 @@ process_nvtx_chunk(struct pt_regs *ctx, u64 ptrs_base, u32 count, u32 start_offs
   u64 pid_tgid = bpf_get_current_pid_tgid();
   u32 pid      = pid_tgid >> 32;
 
+  u32 zero                     = 0;
+  struct cuda_scratch *scratch = bpf_map_lookup_elem(&cuda_scratch_heap, &zero);
+  if (!scratch) {
+    return 0;
+  }
+  struct nvtx_event *evt = &scratch->nvtx_evt;
+
   u32 end = count;
   if (end > start_offset + BPF_NVTX_BATCH_LIMIT) {
     end = start_offset + BPF_NVTX_BATCH_LIMIT;
@@ -764,35 +774,36 @@ process_nvtx_chunk(struct pt_regs *ctx, u64 ptrs_base, u32 count, u32 start_offs
 
       u64 rec_ptr = ptrs[j];
 
-      struct nvtx_event *evt = bpf_ringbuf_reserve(&cupti_events, sizeof(*evt), 0);
-      if (!evt) {
+      if (bpf_probe_read_user(&evt->data, sizeof(evt->data), (void *)rec_ptr) != 0) {
         continue;
       }
       evt->event_type = EVENT_TYPE_NVTX;
       evt->pid        = pid;
-      if (bpf_probe_read_user(&evt->data, sizeof(evt->data), (void *)rec_ptr) != 0) {
-        bpf_ringbuf_discard(evt, 0);
-        continue;
-      }
-      evt->message[0] = '\0';
+      long read       = 0;
       if (evt->data.message_ptr) {
-        bpf_probe_read_user_str(
+        read = bpf_probe_read_user_str(
           evt->message, sizeof(evt->message), (void *)evt->data.message_ptr);
       }
-      bpf_ringbuf_submit(evt, 0);
+      u64 len = 1;
+      if (read > 0) {
+        len = (u64)read;
+      } else {
+        evt->message[0] = '\0';
+      }
+      if (len > NVTX_MAX_MSG_LEN) {
+        len = NVTX_MAX_MSG_LEN;
+      }
+      bpf_ringbuf_output(
+        &cupti_events, evt, __builtin_offsetof(struct nvtx_event, message) + len, 0);
     }
   }
 
   if (end < count) {
-    u32 zero                     = 0;
-    struct cuda_scratch *scratch = bpf_map_lookup_elem(&cuda_scratch_heap, &zero);
-    if (scratch) {
-      scratch->nvtx_ptrs_base   = ptrs_base;
-      scratch->nvtx_count       = count;
-      scratch->nvtx_next_offset = end;
-      bpf_tail_call(ctx, &cuda_progs, 2);
-      DEBUG_PRINT("cuda_nvtx_batch: tail_call failed at offset=%u", end);
-    }
+    scratch->nvtx_ptrs_base   = ptrs_base;
+    scratch->nvtx_count       = count;
+    scratch->nvtx_next_offset = end;
+    bpf_tail_call(ctx, &cuda_progs, 2);
+    DEBUG_PRINT("cuda_nvtx_batch: tail_call failed at offset=%u", end);
   }
   return 0;
 }

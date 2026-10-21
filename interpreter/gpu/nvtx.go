@@ -14,6 +14,7 @@ import (
 
 // HandleNvtxEvent converts a single cupti_events EVENT_TYPE_NVTX record into a
 // language-neutral samples.NvtxEvent and forwards it via rep.ReportNvtxEvent.
+// msg is the rest of the record after ev: the NUL-terminated message.
 // rep may be nil (no NVTX reporter wired) — in that case the event is silently
 // dropped; the BPF side already paid the ringbuf cost, but the trace pipeline
 // is unaffected.
@@ -21,13 +22,13 @@ import (
 // Unlike PC samples we do *not* defer or correlate with kernel timing: NVTX
 // emission is immediate. Any correlation against in-flight CUDA work is the
 // downstream reporter's job (via the carried CorrelationID / DeviceID).
-func HandleNvtxEvent(ev *CuptiNvtxEvent, rep reporter.NvtxReporter) {
+func HandleNvtxEvent(ev *CuptiNvtxEvent, msg []byte, rep reporter.NvtxReporter) {
 	if rep == nil {
 		return
 	}
-	// Transient: pfunsafe.ToString aliases the inline byte buffer; the
+	// Transient: pfunsafe.ToString aliases the record's bytes; the
 	// NvtxReporter implementation must copy if it retains beyond this call.
-	msg := pfunsafe.ToString(nullTerm(ev.Message[:]))
+	message := pfunsafe.ToString(nullTerm(msg))
 
 	out := &samples.NvtxEvent{
 		// parcagpu stamps events with CLOCK_MONOTONIC, the same clock as
@@ -42,7 +43,7 @@ func HandleNvtxEvent(ev *CuptiNvtxEvent, rep reporter.NvtxReporter) {
 		Color:         ev.Data.Color,
 		Payload:       ev.Data.Payload,
 		RangeID:       ev.Data.RangeID,
-		Message:       msg,
+		Message:       message,
 	}
 	if err := rep.ReportNvtxEvent(out); err != nil {
 		log.Debugf("[cuda] nvtx report dropped: %v", err)

@@ -5,6 +5,7 @@ package gpu
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,10 +43,9 @@ func TestHandleNvtxEventWallClock(t *testing.T) {
 	ev.Data.DomainID = 1
 	ev.Data.Kind = uint16(samples.NvtxKindRangePush)
 	ev.Data.TimestampNs = uint64(times.GetKTime())
-	copy(ev.Message[:], "forward_step")
 
 	rep := &recordingNvtxReporter{}
-	HandleNvtxEvent(&ev, rep)
+	HandleNvtxEvent(&ev, []byte("forward_step\x00"), rep)
 
 	require.Len(t, rep.events, 1)
 	got := rep.events[0]
@@ -71,4 +71,28 @@ func TestHandleNvtxResourceNameDomain(t *testing.T) {
 	assert.Equal(t, samples.NvtxResourceNameEvent{
 		PID: 42, Kind: samples.NvtxResourceDomain, ID: 1, Name: "TensorRT-LLM",
 	}, rep.names[0])
+}
+
+// TestHandleNvtxEventMessage checks the message is taken from the
+// variable-length tail of the record, up to the NUL or the record's end.
+func TestHandleNvtxEventMessage(t *testing.T) {
+	long := strings.Repeat("x", 1023)
+	for _, tc := range []struct {
+		name string
+		msg  []byte
+		want string
+	}{
+		{"short", []byte("step\x00"), "step"},
+		{"long", []byte(long + "\x00"), long},
+		{"no NUL", []byte("step"), "step"},
+		{"empty", []byte{0}, ""},
+		{"missing", nil, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rep := &recordingNvtxReporter{}
+			HandleNvtxEvent(&CuptiNvtxEvent{}, tc.msg, rep)
+			require.Len(t, rep.events, 1)
+			assert.Equal(t, tc.want, rep.events[0].Message)
+		})
+	}
 }
