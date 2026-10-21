@@ -6,6 +6,7 @@ package tracer // import "go.opentelemetry.io/ebpf-profiler/tracer"
 import (
 	"bytes"
 	"testing"
+	"unsafe"
 
 	"github.com/stretchr/testify/require"
 
@@ -28,7 +29,10 @@ func TestLoadBpfTraceLabelSections(t *testing.T) {
 			threadPayload: []byte{0, 1, 'x'}, threadEnd: 19, wantDrop: 1},
 		{name: "empty thread section", threadEnd: 16},
 		{name: "overlapping thread section", threadEnd: 15, wantError: true},
-		{name: "thread section beyond record", threadEnd: 81, wantError: true},
+		// The record is the 16 bytes of frames followed by one GolangLabel, whose
+		// size differs between upstream and parca.
+		{name: "thread section beyond record",
+			threadEnd: 16 + uint16(unsafe.Sizeof(support.GolangLabel{})) + 1, wantError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tr := &Tracer{
