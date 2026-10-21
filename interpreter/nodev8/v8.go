@@ -2440,8 +2440,7 @@ func decodeJsDispatchTableOffset(machine elf.Machine, code []byte, addr uint64) 
 	var retval expression.Expression
 	switch machine {
 	case elf.EM_AARCH64:
-		it := arm.NewInterpreter()
-		it.ResetCode(code, expression.Imm(addr))
+		it := arm.NewInterpreterWithCodeAt(code, expression.Imm(addr))
 		_, err := it.LoopWithBreak(func(i arm64asm.Inst) bool {
 			return i.Op == arm64asm.RET
 		})
@@ -2450,8 +2449,7 @@ func decodeJsDispatchTableOffset(machine elf.Machine, code []byte, addr uint64) 
 		}
 		retval = it.Regs.Get(arm.X0)
 	case elf.EM_X86_64:
-		it := amd.NewInterpreter()
-		it.ResetCode(code, expression.Imm(addr))
+		it := amd.NewInterpreterWithCodeAt(code, expression.Imm(addr))
 		_, err := it.LoopWithBreak(func(i x86asm.Inst) bool {
 			return i.Op == x86asm.RET
 		})

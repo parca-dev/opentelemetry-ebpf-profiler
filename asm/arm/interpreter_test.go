@@ -4,6 +4,7 @@
 package arm
 
 import (
+	"io"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -86,16 +87,21 @@ func TestLuaOffsets(t *testing.T) {
 	require.Equal(t, 0x41C, result)
 }
 
-// TestResetCodeSetsPC checks that an adrp at the start of the code
-// resolves against the address passed to ResetCode.
-func TestResetCodeSetsPC(t *testing.T) {
-	// 0x7c8668: adrp x8, #0x32ee000
-	code := []byte{0x28, 0x59, 0x01, 0xd0}
-	it := NewInterpreter()
-	it.ResetCode(code, expression.Imm(0x7c8668))
-	_, err := it.Step()
-	require.NoError(t, err)
-	page, ok := expression.AsConstant(it.Regs.Get(X8))
-	require.True(t, ok)
-	require.Equal(t, uint64(0x32ee000), page)
+func TestPCRelative(t *testing.T) {
+	t.Run("page aligned", func(t *testing.T) {
+		i := NewInterpreterWithCodeAt(
+			[]byte{0x40, 0x0a, 0x00, 0x90}, //  0  40 0a 00 90  adrp   x0, #0x148000
+			expression.Imm(0))
+		_, err := i.Loop()
+		require.ErrorIs(t, err, io.EOF)
+		require.Equal(t, expression.Imm(0x148000), i.Regs.Get(X0))
+	})
+	t.Run("page unaligned", func(t *testing.T) {
+		i := NewInterpreterWithCodeAt(
+			[]byte{0x40, 0x0a, 0x00, 0x90}, // 64dc4  40 0a 00 90  adrp        x0, #0x1ac000
+			expression.Imm(0x64dc4))
+		_, err := i.Loop()
+		require.ErrorIs(t, err, io.EOF)
+		require.Equal(t, expression.Imm(0x1ac000), i.Regs.Get(X0))
+	})
 }
