@@ -21,8 +21,7 @@
 //                                (from types.h)
 //   - MIN(a, b), barrier_var(v)  (from bpfdefs.h)
 
-#ifndef OPTI_NATIVE_CUSTOM_LABELS_H
-#define OPTI_NATIVE_CUSTOM_LABELS_H
+#pragma once
 
 // BOUNDED_LEN clamps a label length to `max` and then re-asserts that bound in
 // a form the verifier cannot lose.
@@ -95,7 +94,7 @@ static EBPF_INLINE u64 get_v8_cped_address(V8ProcInfo *proc)
   DEBUG_PRINT("node cl: cped_offset=0x%x", proc->cped_offset);
 
   u64 isolate_ptr_ptr = addr_for_tls_symbol(proc->isolate_sym, true);
-  DEBUG_PRINT("node cl: isolate_addr = 0x%llx", isolate_ptr_ptr);
+  DEBUG_PRINT("node cl: isolate_addr = 0x%lx", isolate_ptr_ptr);
   if (!isolate_ptr_ptr) {
     return 0;
   }
@@ -185,7 +184,7 @@ get_native_custom_labels(PerCPURecord *record, NativeCustomLabelsProcInfo *proc)
   if (!addr)
     return false;
 
-  DEBUG_PRINT("cl: native custom labels data at 0x%llx", addr);
+  DEBUG_PRINT("cl: native custom labels data at 0x%lx", addr);
 
   NativeCustomLabelsSet *p_current_set;
   if ((err = bpf_probe_read_user(&p_current_set, sizeof(void *), (void *)(addr)))) {
@@ -350,7 +349,7 @@ static EBPF_INLINE bool maybe_add_node_custom_labels(PerCPURecord *record)
     return false;
   }
 
-  DEBUG_PRINT("node cl: CPED address is 0x%llx", cped_addr);
+  DEBUG_PRINT("node cl: CPED address is 0x%lx", cped_addr);
   u64 cped_table_ptr = cped_addr + 0x17; // -1 to untag, then the table is at offset 0x18
   u64 cped_table_addr;
   if ((err = bpf_probe_read_user(&cped_table_addr, sizeof(void *), (void *)(cped_table_ptr)))) {
@@ -368,7 +367,7 @@ static EBPF_INLINE bool maybe_add_node_custom_labels(PerCPURecord *record)
     return false;
   }
   if (!is_smi(n_buckets_smi)) {
-    DEBUG_PRINT("node cl: N buckets is not a smi: 0x%llx", n_buckets_smi);
+    DEBUG_PRINT("node cl: N buckets is not a smi: 0x%lx", n_buckets_smi);
     return false;
   }
   s32 n_buckets = (s32)(n_buckets_smi >> 32);
@@ -380,7 +379,7 @@ static EBPF_INLINE bool maybe_add_node_custom_labels(PerCPURecord *record)
   }
 
   DEBUG_PRINT(
-    "node cl: id hash off: 0x%llx, handle offset: 0x%llx",
+    "node cl: id hash off: 0x%lx, handle offset: 0x%lx",
     proc->als_identity_hash_tls_offset,
     proc->als_handle_tls_offset);
 
@@ -406,7 +405,7 @@ static EBPF_INLINE bool maybe_add_node_custom_labels(PerCPURecord *record)
     return false;
   }
 
-  DEBUG_PRINT("node cl: als identity: 0x%llx; hash: 0x%x", als_identity, als_id_hash);
+  DEBUG_PRINT("node cl: als identity: 0x%lx; hash: 0x%x", als_identity, als_id_hash);
 
   int bucket = als_id_hash & (n_buckets - 1);
 
@@ -422,7 +421,7 @@ static EBPF_INLINE bool maybe_add_node_custom_labels(PerCPURecord *record)
       return false;
     }
     if (!is_smi(entry_idx_smi)) {
-      DEBUG_PRINT("node cl: entry index is not a smi: 0x%llx", entry_idx_smi);
+      DEBUG_PRINT("node cl: entry index is not a smi: 0x%lx", entry_idx_smi);
       return false;
     }
     s32 entry_idx = (s32)(entry_idx_smi >> 32);
@@ -449,7 +448,7 @@ static EBPF_INLINE bool maybe_add_node_custom_labels(PerCPURecord *record)
     }
 
     DEBUG_PRINT(
-      "node cl: successfully read entry: key: 0x%llx, val: 0x%llx, next: 0x%llx",
+      "node cl: successfully read entry: key: 0x%lx, val: 0x%lx, next: 0x%lx",
       e.key,
       e.value,
       e.next_index);
@@ -472,7 +471,7 @@ static EBPF_INLINE bool maybe_add_node_custom_labels(PerCPURecord *record)
       return false;
     }
 
-    DEBUG_PRINT("node cl: ClWrap at 0x%llx", cl_wrap_ptr);
+    DEBUG_PRINT("node cl: ClWrap at 0x%lx", cl_wrap_ptr);
 
     u64 cl_ptr_ptr = cl_wrap_ptr + 24;
     u64 token_ptr  = cl_ptr_ptr + 8;
@@ -506,5 +505,3 @@ static EBPF_INLINE bool maybe_add_node_custom_labels(PerCPURecord *record)
     return false;
   }
 }
-
-#endif // OPTI_NATIVE_CUSTOM_LABELS_H

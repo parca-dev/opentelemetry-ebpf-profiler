@@ -1,8 +1,6 @@
 // provides type definitions shared by the eBPF and Go components
 
-#ifndef OPTI_TYPES_H
-#define OPTI_TYPES_H
-
+#pragma once
 #include "errors.h"
 #include "kernel.h"
 
@@ -1341,5 +1339,3 @@ typedef struct NativeCustomLabelsProcInfo {
   u64 als_identity_hash_tls_offset;
   u64 als_handle_tls_offset;
 } NativeCustomLabelsProcInfo;
-
-#endif // OPTI_TYPES_H

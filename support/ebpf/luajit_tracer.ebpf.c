@@ -248,14 +248,14 @@ static EBPF_INLINE ErrorCode lj_debug_framepc(
   }
   // startpc can be for a different function if we land on instructions where things aren't synced.
   // For instance the PC is up to date on the stack but jit_base wasn't updated yet.
-  DEBUG_PRINT("lj: ins: %llx, startpc: %llx", (u64)ins, (u64)startpc);
+  DEBUG_PRINT("lj: ins: %lx, startpc: %lx", (u64)ins, (u64)startpc);
   if (ins < startpc) {
     DEBUG_PRINT("lj: ins < startpc, setting *pc = NO_BCPOS");
     *pc = NO_BCPOS;
     return ERR_OK;
   }
   *pc = (u32)(ins - startpc - 1);
-  DEBUG_PRINT("ins, startpc good: setting *pc = %llx", (u64)*pc);
+  DEBUG_PRINT("ins, startpc good: setting *pc = %lx", (u64)*pc);
   return ERR_OK;
 }
 

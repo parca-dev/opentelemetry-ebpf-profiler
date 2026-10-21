@@ -403,7 +403,7 @@ process_activity_chunk(struct pt_regs *ctx, u64 ptrs_base, u32 num_activities, u
 SEC("usdt/parcagpu/activity_batch")
 int BPF_USDT(cuda_activity_batch, u64 ptrs_base, u32 num_activities)
 {
-  DEBUG_PRINT("cuda_activity_batch: num=%u ptrs_base=0x%llx", num_activities, ptrs_base);
+  DEBUG_PRINT("cuda_activity_batch: num=%u ptrs_base=0x%lx", num_activities, ptrs_base);
   if (num_activities > BPF_AB_TOTAL_LIMIT) {
     num_activities = BPF_AB_TOTAL_LIMIT;
   }
@@ -461,7 +461,7 @@ int BPF_USDT(cuda_cubin_loaded, u64 cubin_crc, u64 cubin_ptr, u64 cubin_size)
   u8 one = 1;
   bpf_map_update_elem(&cubin_seen, &key, &one, BPF_ANY);
 
-  DEBUG_PRINT("cuda_cubin_loaded: pid=%u crc=0x%llx size=%llu", pid, cubin_crc, cubin_size);
+  DEBUG_PRINT("cuda_cubin_loaded: pid=%u crc=0x%lx size=%lu", pid, cubin_crc, cubin_size);
   return 0;
 }
 

@@ -44,7 +44,7 @@ int BPF_USDT(memory_probe, u64 ptr0, u64 ptr1)
 {
   u32 probe_id = 2;
 
-  DEBUG_PRINT("memory_probe called: ptr0=0x%llx ptr1=0x%llx", ptr0, ptr1);
+  DEBUG_PRINT("memory_probe called: ptr0=0x%lx ptr1=0x%lx", ptr0, ptr1);
 
   s32 val0;
   s64 val1;
@@ -55,7 +55,7 @@ int BPF_USDT(memory_probe, u64 ptr0, u64 ptr1)
     return -1;
   }
 
-  DEBUG_PRINT("memory_probe: val0=%d val1=%lld", val0, val1);
+  DEBUG_PRINT("memory_probe: val0=%d val1=%ld", val0, val1);
 
   if (val0 == 42 && val1 == 1234567890) {
     DEBUG_PRINT("memory_probe: SUCCESS");
@@ -73,7 +73,7 @@ int BPF_USDT(const_probe, s64 arg0)
 {
   u32 probe_id = 3;
 
-  DEBUG_PRINT("const_probe called: arg0=%lld", arg0);
+  DEBUG_PRINT("const_probe called: arg0=%ld", arg0);
 
   if (arg0 == 100) {
     DEBUG_PRINT("const_probe: SUCCESS");
@@ -91,7 +91,7 @@ int BPF_USDT(mixed_probe, s32 arg0, u64 ptr1, s32 arg2)
 {
   u32 probe_id = 4;
 
-  DEBUG_PRINT("mixed_probe called: arg0=%d ptr1=0x%llx arg2=%d", arg0, ptr1, arg2);
+  DEBUG_PRINT("mixed_probe called: arg0=%d ptr1=0x%lx arg2=%d", arg0, ptr1, arg2);
 
   s64 val1;
   if (bpf_probe_read_user(&val1, sizeof(val1), (void *)ptr1)) {
@@ -99,7 +99,7 @@ int BPF_USDT(mixed_probe, s32 arg0, u64 ptr1, s32 arg2)
     return -1;
   }
 
-  DEBUG_PRINT("mixed_probe: val1=%lld", val1);
+  DEBUG_PRINT("mixed_probe: val1=%ld", val1);
 
   if (arg0 == 42 && val1 == 1234567890 && arg2 == 42) {
     DEBUG_PRINT("mixed_probe: SUCCESS");
@@ -135,7 +135,7 @@ int BPF_USDT(int64_args, s64 arg0, s64 arg1)
 {
   u32 probe_id = 6;
 
-  DEBUG_PRINT("int64_args called: arg0=%lld arg1=%lld", arg0, arg1);
+  DEBUG_PRINT("int64_args called: arg0=%ld arg1=%ld", arg0, arg1);
 
   if (arg0 == 100 && arg1 == 200) {
     DEBUG_PRINT("int64_args: SUCCESS");
@@ -153,7 +153,7 @@ int BPF_USDT(mixed_refs, u64 ptr0, u64 ptr1, s32 arg2)
 {
   u32 probe_id = 7;
 
-  DEBUG_PRINT("mixed_refs called: ptr0=0x%llx ptr1=0x%llx arg2=%d", ptr0, ptr1, arg2);
+  DEBUG_PRINT("mixed_refs called: ptr0=0x%lx ptr1=0x%lx arg2=%d", ptr0, ptr1, arg2);
 
   s32 val0;
   s64 val1;
@@ -164,7 +164,7 @@ int BPF_USDT(mixed_refs, u64 ptr0, u64 ptr1, s32 arg2)
     return -1;
   }
 
-  DEBUG_PRINT("mixed_refs: val0=%d val1=%lld", val0, val1);
+  DEBUG_PRINT("mixed_refs: val0=%d val1=%ld", val0, val1);
 
   if (val0 == 10 && val1 == 100 && arg2 == 30) {
     DEBUG_PRINT("mixed_refs: SUCCESS");
