@@ -13,7 +13,6 @@ import (
 	"math/rand/v2"
 	"os"
 	"path"
-	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -29,6 +28,7 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/internal/linux"
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
+	"go.opentelemetry.io/ebpf-profiler/internal/perfutil"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
 	"go.opentelemetry.io/ebpf-profiler/process"
@@ -162,7 +162,7 @@ type Tracer struct {
 	mmapEventOnce   func() error
 	// mmapEventMu serializes lazy monitor startup with Close.
 	mmapEventMu sync.Mutex
-	mmapEventWG sync.WaitGroup
+	mmapReader  *perfutil.PerfSidebandReader
 
 	// hooks holds references to loaded eBPF hooks.
 	hooks xsync.RWMutex[hooksState]
@@ -204,6 +204,8 @@ type Tracer struct {
 	// customLabels validates custom label keys/values pulled from eBPF and
 	// tracks how many were dropped due to invalid UTF-8.
 	customLabels customLabelValidator
+
+	threadLabels threadLabelResolver
 
 	// sysConfigVars holds kernel struct offsets determined at startup, passed
 	// to custom probes via Enable so they can reference the same layout.
@@ -427,9 +429,12 @@ func (t *Tracer) Close() {
 	if t.lifecycleCancel != nil {
 		t.lifecycleCancel()
 	}
-	// Ensure startup has registered every reader before waiting for them.
+	// Ensure startup has registered the reader before tearing it down. If it
+	// started, its goroutines observe the canceled lifecycle context above.
 	t.mmapEventMu.Lock()
-	t.mmapEventWG.Wait()
+	if t.mmapReader != nil {
+		t.mmapReader.Close()
+	}
 	t.mmapEventMu.Unlock()
 
 	events := t.perfEntrypoints.WLock()
@@ -721,10 +726,15 @@ func loadAllMaps(coll *cebpf.CollectionSpec, cfg *Config,
 
 	adaption["stack_delta_page_to_info"] = 1 << uint32(stackDeltaPageToInfoSize+cfg.MapScaleFactor)
 
-	// Allow for 1s of 'burst' trace data (sizing by Trace length worst-case)
-	// TODO: Base this on present CPUs instead, as runtime.NumCPU is fixed for the lifetime
-	// of the process?
-	ringbufSize := uint64(cfg.SamplesPerSecond * runtime.NumCPU() * support.Sizeof_Trace)
+	// Allow for 1s of 'burst' trace data (sizing by Trace length worst-case).
+	// As CPU hot-plugging during runtime is currently not supported use the number of online CPUs
+	// rather than runtime.NumCPU(), which only reflects the CPUs this process may be scheduled on
+	// at startup (affinity/cpuset-limited).
+	onlineCPUs, err := onlineCPUsOnce()
+	if err != nil {
+		return fmt.Errorf("failed to determine online CPUs: %v", err)
+	}
+	ringbufSize := uint64(cfg.SamplesPerSecond * len(onlineCPUs) * support.Sizeof_TraceWithData)
 	adaption["trace_events"] = uint32(min(util.NextPowerOfTwo(ringbufSize), 1<<31))
 
 	// Scale cupti_events over its 1 MiB base; graph-heavy GPU workloads overflow the default and drop events. Capped at 2 GiB.
@@ -866,7 +876,7 @@ func loadPerfUnwinders(coll *cebpf.CollectionSpec, ebpfProgs map[string]*cebpf.P
 
 // loadProbeUnwinders reuses large parts of loadPerfUnwinders. By default all eBPF programs
 // are written as perf event eBPF programs. loadProbeUnwinders dynamically rewrites the
-// specification of these programs to xProbe eBPF programs and adjusts tail call maps.
+// specification of these programs to xProbe eBPF programs and adjusts tail call maps if needed.
 func loadProbeUnwinders(coll *cebpf.CollectionSpec, ebpfProgs map[string]*cebpf.Program,
 	tailcallMap *cebpf.Map, progs []ProgLoaderHelper,
 	bpfVerifierLogLevel uint32, perfTailCallMapFD int,
@@ -891,25 +901,28 @@ func loadProbeUnwinders(coll *cebpf.CollectionSpec, ebpfProgs map[string]*cebpf.
 			return fmt.Errorf("program %s does not exist", unwindProgName)
 		}
 
-		// Replace the prog array for the tail calls.
-		insns := util.ProgArrayReferences(perfTailCallMapFD, progSpec.Instructions)
-		for _, ins := range insns {
-			if err := progSpec.Instructions[ins].AssociateMap(tailcallMap); err != nil {
-				return fmt.Errorf("failed to rewrite map ptr: %v", err)
+		// Skip rewriting tail call maps for external perf_event based probes.
+		if unwindProgName != "perf_event__external" {
+			// Replace the prog array for the tail calls.
+			insns := util.ProgArrayReferences(perfTailCallMapFD, progSpec.Instructions)
+			for _, ins := range insns {
+				if err := progSpec.Instructions[ins].AssociateMap(tailcallMap); err != nil {
+					return fmt.Errorf("failed to rewrite map ptr: %v", err)
+				}
 			}
-		}
 
-		// Repoint per_cpu_records to the probe unwinder's own record map.
-		recInsns := util.ProgArrayReferences(perCPURecordsFD, progSpec.Instructions)
-		for _, ins := range recInsns {
-			if err := progSpec.Instructions[ins].AssociateMap(perCPURecordsKprobeMap); err != nil {
-				return fmt.Errorf("failed to rewrite per_cpu_records ptr: %v", err)
+			// Repoint per_cpu_records to the probe unwinder's own record map.
+			recInsns := util.ProgArrayReferences(perCPURecordsFD, progSpec.Instructions)
+			for _, ins := range recInsns {
+				if err := progSpec.Instructions[ins].AssociateMap(perCPURecordsKprobeMap); err != nil {
+					return fmt.Errorf("failed to rewrite per_cpu_records ptr: %v", err)
+				}
 			}
 		}
 
 		if err := loadProgram(ebpfProgs, tailcallMap, unwindProg.ProgID, progSpec,
 			programOptions, unwindProg.NoTailCallTarget); err != nil {
-			return err
+			return fmt.Errorf("failed to load %s: %v", unwindProgName, err)
 		}
 	}
 
@@ -935,15 +948,15 @@ func loadProgram(ebpfProgs map[string]*cebpf.Program, tailcallMap *cebpf.Map,
 		// so we print each line individually.
 		if ve, ok := err.(*cebpf.VerifierError); ok {
 			for _, line := range ve.Log {
-				log.Errorf("%s", line)
+				log.Infof("%s", line)
 			}
 		} else {
 			scanner := bufio.NewScanner(strings.NewReader(err.Error()))
 			for scanner.Scan() {
-				log.Errorf("%s", scanner.Text())
+				log.Infof("%s", scanner.Text())
 			}
 		}
-		return fmt.Errorf("failed to load %s", progSpec.Name)
+		return fmt.Errorf("failed to load %s: %w", progSpec.Name, err)
 	}
 	ebpfProgs[progSpec.Name] = unwinder
 
@@ -1064,73 +1077,129 @@ var (
 	errOriginUnexpected     = errors.New("unexpected origin")
 )
 
+type variableDataDecoder struct {
+	raw []uint8
+	dst []uint64
+	pos uint16
+}
+
+func (vd *variableDataDecoder) decodeBytes(end uint16, field string) ([]uint8, error) {
+	if end == 0 {
+		return nil, nil
+	}
+	if vd.pos > end || int(end) > len(vd.raw) {
+		return nil, fmt.Errorf("%s end %d: not in range [%d, %d]: %w",
+			field, end, vd.pos, len(vd.raw), errRecordUnexpectedSize)
+	}
+	data := vd.raw[vd.pos:end:end]
+	vd.pos = (end + 7) &^ 7
+	return data, nil
+}
+
+func (vd *variableDataDecoder) copyUint64(end uint16, field string) ([]uint64, error) {
+	val, err := vd.decodeBytes(end, field)
+	if val == nil {
+		return nil, err
+	}
+	n := len(val) / 8
+	if len(val)%8 != 0 || n > len(vd.dst) {
+		return nil, fmt.Errorf("%s copy fail (size %d, max %d): %w",
+			field, len(val), 8*len(vd.dst), errRecordUnexpectedSize)
+	}
+
+	src := unsafe.Slice((*uint64)(unsafe.Pointer(unsafe.SliceData(val))), n)
+	dst := vd.dst[:n:n]
+	copy(dst, src)
+	vd.dst = vd.dst[n:]
+	return dst, nil
+}
+
 // loadBpfTrace parses a raw BPF trace into a `host.Trace` instance.
 func (t *Tracer) loadBpfTrace(raw []byte) (*libpf.EbpfTrace, error) {
-	frameListOffs := int(unsafe.Offsetof(support.Trace{}.Frame_data))
-
-	if len(raw) < frameListOffs {
-		return nil, fmt.Errorf("%d < %d: %w", len(raw), frameListOffs, errRecordTooSmall)
+	traceHeaderSize := int(support.Sizeof_TraceHeader)
+	if len(raw) < traceHeaderSize {
+		return nil, fmt.Errorf("%d < %d: %w", len(raw), traceHeaderSize, errRecordTooSmall)
 	}
 
-	ptr := traceFromRaw(raw)
-	frameDataLen := int(ptr.Frame_data_len) * 8
+	ptr := (*support.Trace)(unsafe.Pointer(unsafe.SliceData(raw)))
 
 	// NOTE: can't do exact check here: kernel adds a few padding bytes to messages.
-	if len(raw) < frameListOffs+frameDataLen {
-		return nil, fmt.Errorf("%d < %d: %w", len(raw), frameListOffs+frameDataLen,
+	if len(raw) < traceHeaderSize+int(ptr.Variable_data_end) {
+		return nil, fmt.Errorf("%d < %d: %w", len(raw), traceHeaderSize+int(ptr.Variable_data_end),
 			errRecordUnexpectedSize)
 	}
+	variableData := raw[traceHeaderSize : traceHeaderSize+int(ptr.Variable_data_end)]
 
 	trace := t.tracePool.Get().(*libpf.EbpfTrace)
 	*trace = libpf.EbpfTrace{
-		Comm:             libpf.NewComm(ptr.Comm),
-		APMTraceID:       *(*libpf.APMTraceID)(unsafe.Pointer(&ptr.Apm_trace_id)),
-		APMTransactionID: *(*libpf.APMTransactionID)(unsafe.Pointer(&ptr.Apm_transaction_id)),
-		PID:              libpf.PID(ptr.Pid),
-		TID:              libpf.PID(ptr.Tid),
-		Origin:           ptr.Origin,
-		Value:            int64(ptr.Value),
-		KTime:            int64(ptr.Ktime),
-		CpuID:            ptr.Cpu_id,
+		Comm:      libpf.NewComm(ptr.Comm),
+		TraceID:   *(*libpf.TraceID)(unsafe.Pointer(&ptr.Trace_id)),
+		SpanID:    *(*libpf.SpanID)(unsafe.Pointer(&ptr.Span_id)),
+		PID:       libpf.PID(ptr.Pid),
+		TID:       libpf.PID(ptr.Tid),
+		Origin:    ptr.Origin,
+		KTime:     int64(ptr.Ktime),
+		CpuID:     ptr.Cpu_id,
+		NumFrames: ptr.Num_frames,
 	}
 
 	if t.origins.lookup(trace.Origin) == nil {
 		return nil, fmt.Errorf("origin %d: %w", trace.Origin, errOriginUnexpected)
 	}
 
+	vd := variableDataDecoder{raw: variableData, dst: trace.FrameDataBuf[:]}
+
+	// Context values precede the kernel/user frames; the region is empty for
+	// origins without a value.
+	var err error
+	trace.ContextValues, err = vd.copyUint64(ptr.Context_value_end, "context value")
+	if err != nil {
+		return nil, err
+	}
+
+	trace.KernelFrames, err = vd.copyUint64(ptr.Kernel_frame_end, "kernel_frame")
+	if err != nil {
+		return nil, err
+	}
+
+	trace.FrameData, err = vd.copyUint64(ptr.Frame_data_end, "frame")
+	if err != nil {
+		return nil, err
+	}
+
+	if payload, err := vd.decodeBytes(ptr.Thread_label_end, "thread label"); err != nil {
+		return nil, err
+	} else if len(payload) > 0 {
+		decoder := t.processManager.ThreadLabelDecoderForPID(trace.PID)
+		trace.CustomLabels = t.threadLabels.resolve(payload, decoder)
+	}
+	if labelData, err := vd.decodeBytes(ptr.Golang_label_end, "golang label"); err != nil {
+		return nil, err
+	} else if len(labelData) > 0 {
+		trace.CustomLabels = t.customLabels.decode(labelData, trace.CustomLabels)
+	}
+
+	// Native and Node.js custom labels are carried in the fixed trace header.
 	if ptr.Custom_labels.Len > 0 {
-		trace.CustomLabels = make(map[libpf.String]libpf.String, int(ptr.Custom_labels.Len))
+		if trace.CustomLabels == nil {
+			trace.CustomLabels = make(map[libpf.String]libpf.String, int(ptr.Custom_labels.Len))
+		}
 		for i := 0; i < int(ptr.Custom_labels.Len); i++ {
-			lbl := ptr.Custom_labels.Labels[i]
+			lbl := &ptr.Custom_labels.Labels[i]
 			keyBytes, ok := t.customLabels.validateKey(lbl.Key[:])
 			if !ok {
-				log.Debugf("Dropping Go custom label with empty or invalid UTF-8 name")
+				log.Debugf("Dropping custom label with empty or invalid UTF-8 name")
 				continue
 			}
-			key := libpf.Intern(pfunsafe.ToString(keyBytes))
 			valBytes, ok := t.customLabels.validateValue(lbl.Val[:])
 			if !ok {
-				log.Debugf("Dropping Go custom label %s with invalid UTF-8 value", key)
+				log.Debugf("Dropping custom label %s with invalid UTF-8 value", pfunsafe.ToString(keyBytes))
 				continue
 			}
-			trace.CustomLabels[key] = libpf.Intern(pfunsafe.ToString(valBytes))
+			trace.CustomLabels[libpf.Intern(pfunsafe.ToString(keyBytes))] =
+				libpf.Intern(pfunsafe.ToString(valBytes))
 		}
 	}
-
-	numKernelFrames := int(ptr.Num_kernel_frames)
-	if numKernelFrames > int(ptr.Frame_data_len) {
-		return nil, fmt.Errorf("%d > %d: %w", numKernelFrames, ptr.Frame_data_len,
-			errRecordUnexpectedSize)
-	}
-
-	trace.NumFrames = ptr.Num_frames
-	trace.NumKernelFrames = ptr.Num_kernel_frames
-	frameDataWords := int(ptr.Frame_data_len)
-	trace.FrameData = trace.FrameDataBuf[:frameDataWords]
-	// Kernel frames are raw addresses at the front of FrameData. The process
-	// manager splits and symbolizes them so all frame processing shares one cache.
-	copy(trace.FrameData, ptr.Frame_data[:frameDataWords])
-
 	return trace, nil
 }
 
@@ -1189,6 +1258,7 @@ func (t *Tracer) StartMapMonitors(ctx context.Context, traceOutChan chan<- *libp
 			metrics.AddSlice(traceEventMetricCollector())
 			metrics.AddSlice(t.eBPFMetricsCollector(translateIDs, previousMetricValue))
 			metrics.AddSlice(t.customLabels.getAndResetMetrics())
+			metrics.AddSlice(t.threadLabels.getAndResetMetrics())
 		})
 	}
 
@@ -1385,6 +1455,12 @@ type originRegistry struct {
 // Register hands out a fresh origin ID and stores metadata for it, keyed by
 // that ID.
 func (r *originRegistry) Register(metadata *samples.TypeMetadata) (uint16, error) {
+	if len(metadata.SampleTypes) == 0 {
+		return 0, fmt.Errorf("origin registry entry needs at least one sample type")
+	}
+	if metadata.AppendValues == nil {
+		return 0, fmt.Errorf("origin registry entry needs AppendValues")
+	}
 	if last := r.lastID.Load(); last >= math.MaxUint16 {
 		return 0, fmt.Errorf("maximum number of origin registry entries exceeded")
 	}

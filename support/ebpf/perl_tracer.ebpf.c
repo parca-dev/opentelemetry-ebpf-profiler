@@ -69,7 +69,7 @@
 // we require in order to build the stack trace
 struct perl_procs_t {
   __uint(type, BPF_MAP_TYPE_HASH);
-  __type(key, pid_t);
+  __type(key, u32);
   __type(value, PerlProcInfo);
   __uint(max_entries, 1024);
 } perl_procs SEC(".maps");
@@ -77,7 +77,7 @@ struct perl_procs_t {
 // Record a Perl frame
 static EBPF_INLINE ErrorCode push_perl(UnwindState *state, Trace *trace, u64 file, u64 line)
 {
-  DEBUG_PRINT("Pushing perl frame cop=0x%lx, cv=0x%lx", (unsigned long)file, (unsigned long)line);
+  DEBUG_PRINT("Pushing perl frame cop=0x%lx, cv=0x%lx", file, line);
 
   u64 *data = push_frame(state, trace, FRAME_MARKER_PERL, FRAME_FLAG_PID_SPECIFIC, 0, 2);
   if (!data) {
@@ -131,7 +131,7 @@ static EBPF_INLINE void *resolve_cv_egv(const PerlProcInfo *perlinfo, const void
     goto err;
   }
 
-  DEBUG_PRINT("Found GV at 0x%lx", (unsigned long)gv);
+  DEBUG_PRINT("Found GV at 0x%lx", (u64)gv);
 
   // Make sure we read GV with a GP
   u32 gv_flags;
@@ -159,7 +159,7 @@ static EBPF_INLINE void *resolve_cv_egv(const PerlProcInfo *perlinfo, const void
   }
 
   if (egv) {
-    DEBUG_PRINT("Found EGV at 0x%lx", (unsigned long)egv);
+    DEBUG_PRINT("Found EGV at 0x%lx", (u64)egv);
     return egv;
   }
   return gv;
@@ -249,7 +249,7 @@ process_perl_frame(PerCPURecord *record, const PerlProcInfo *perlinfo, const voi
           cx + perlinfo->context_blk_oldcop)) {
       goto err;
     }
-    DEBUG_PRINT("COP from context stack 0x%lx", (unsigned long)record->perlUnwindState.cop);
+    DEBUG_PRINT("COP from context stack 0x%lx", (u64)record->perlUnwindState.cop);
   }
   return unwinder;
 
@@ -275,13 +275,13 @@ static EBPF_INLINE void prepare_perl_stack(PerCPURecord *record, const PerlProcI
   if (
     bpf_probe_read_user(&cxstack, sizeof(cxstack), si + perlinfo->si_cxstack) ||
     bpf_probe_read_user(&cxix, sizeof(cxix), si + perlinfo->si_cxix)) {
-    DEBUG_PRINT("Failed to read stackinfo at 0x%lx", (unsigned long)si);
+    DEBUG_PRINT("Failed to read stackinfo at 0x%lx", (u64)si);
     unwinder_mark_done(record, PROG_UNWIND_PERL);
     increment_metric(metricID_UnwindPerlReadStackInfo);
     return;
   }
 
-  DEBUG_PRINT("New stackinfo, cxbase 0x%lx, cxix %d", (unsigned long)cxstack, cxix);
+  DEBUG_PRINT("New stackinfo, cxbase 0x%lx, cxix %d", (u64)cxstack, cxix);
   record->perlUnwindState.cxbase = cxstack;
   record->perlUnwindState.cxcur  = cxstack + cxix * perlinfo->context_sizeof;
 }
@@ -298,7 +298,7 @@ static EBPF_INLINE int walk_perl_stack(PerCPURecord *record, const PerlProcInfo 
 
   int unwinder       = PROG_UNWIND_PERL;
   const void *cxbase = record->perlUnwindState.cxbase;
-  for (u32 i = 0; i < PERL_FRAMES_PER_PROGRAM; ++i) {
+  for (u64 i = 0; i < PERL_FRAMES_PER_PROGRAM; ++i) {
     // Test first the stack 'cxcur' validity. Some stacks can have 'cxix=-1'
     // when they are being constructed or ran.
     if (record->perlUnwindState.cxcur < cxbase) {
@@ -328,7 +328,7 @@ static EBPF_INLINE int walk_perl_stack(PerCPURecord *record, const PerlProcInfo 
     // or global level code block (e.g. code in file not inside function).
     u64 cop = (u64)record->perlUnwindState.cop;
     if (cop) {
-      DEBUG_PRINT("End of perl stack - pushing main 0x%lx", (unsigned long)cop);
+      DEBUG_PRINT("End of perl stack - pushing main 0x%lx", cop);
       if (push_perl(&record->state, trace, 0, cop) != ERR_OK) {
         return PROG_UNWIND_STOP;
       }
@@ -356,9 +356,9 @@ static EBPF_INLINE int walk_perl_stack(PerCPURecord *record, const PerlProcInfo 
   // Stack completed. Prepare the next one.
   DEBUG_PRINT(
     "Perl unwind done, next stackinfo 0x%lx, 0x%lx 0x%lx",
-    (unsigned long)si,
-    (unsigned long)record->perlUnwindState.cxbase,
-    (unsigned long)record->perlUnwindState.cxcur);
+    (u64)si,
+    (u64)record->perlUnwindState.cxbase,
+    (u64)record->perlUnwindState.cxcur);
   return unwinder;
 }
 
@@ -383,8 +383,6 @@ static EBPF_INLINE int unwind_perl(struct pt_regs *ctx)
     goto exit;
   }
 
-  DEBUG_PRINT("Building Perl stack for 0x%x", perlinfo->version);
-
   if (!record->perlUnwindState.stackinfo) {
     // First Perl main loop encountered. Extract first the Interpreter state.
     increment_metric(metricID_UnwindPerlAttempts);
@@ -397,9 +395,9 @@ static EBPF_INLINE int unwind_perl(struct pt_regs *ctx)
         goto err_tsd;
       }
 
-      int tsd_key;
+      u32 tsd_key;
       if (bpf_probe_read_user(&tsd_key, sizeof(tsd_key), (void *)perlinfo->stateAddr)) {
-        DEBUG_PRINT("Failed to read tsdKey from 0x%lx", (unsigned long)perlinfo->stateAddr);
+        DEBUG_PRINT("Failed to read tsdKey from 0x%lx", perlinfo->stateAddr);
         goto err_tsd;
       }
 
@@ -409,11 +407,11 @@ static EBPF_INLINE int unwind_perl(struct pt_regs *ctx)
         goto exit;
       }
 
-      DEBUG_PRINT("TSD Base 0x%lx, TSD Key %d", (unsigned long)tsd_base, tsd_key);
+      DEBUG_PRINT("TSD Base 0x%lx, TSD Key %d", (u64)tsd_base, tsd_key);
     } else {
       interpreter = (void *)perlinfo->stateAddr;
     }
-    DEBUG_PRINT("PerlInterpreter 0x%lx", (unsigned long)interpreter);
+    DEBUG_PRINT("PerlInterpreter 0x%lx", (u64)interpreter);
 
     if (
       bpf_probe_read_user(
@@ -428,7 +426,7 @@ static EBPF_INLINE int unwind_perl(struct pt_regs *ctx)
       increment_metric(metricID_UnwindPerlReadStackInfo);
       goto exit;
     }
-    DEBUG_PRINT("COP from interpreter state 0x%lx", (unsigned long)record->perlUnwindState.cop);
+    DEBUG_PRINT("COP from interpreter state 0x%lx", (u64)record->perlUnwindState.cop);
 
     prepare_perl_stack(record, perlinfo);
   }
@@ -437,7 +435,6 @@ static EBPF_INLINE int unwind_perl(struct pt_regs *ctx)
   unwinder = walk_perl_stack(record, perlinfo);
 
 exit:
-  tail_call(ctx, unwinder);
-  return -1;
+  return tail_call(ctx, record, unwinder);
 }
 MULTI_USE_FUNC(unwind_perl)

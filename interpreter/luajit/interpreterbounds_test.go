@@ -117,7 +117,7 @@ func TestExtractInterpreterBounds(t *testing.T) {
 			defer ef.Close()
 			require.Equal(t, tc.machine, ef.Machine)
 
-			intervals, err := elfunwindinfo.Extract(target)
+			intervals, err := elfunwindinfo.Extract(os.DirFS("/"), pfelf.FSPath(target))
 			require.NoError(t, err)
 
 			got, err := extractInterpreterBounds(ef.Machine, *intervals, tc.cframeSize)

@@ -6,7 +6,7 @@
 #include "usdt_args.h"
 
 // origin_id_cuda is set during load time. It stays 0 when CUDA profiling is
-// disabled, which makes collect_trace drop these traces.
+// disabled, which makes prepare_trace drop these traces.
 BPF_RODATA_VAR(u16, origin_id_cuda, 0)
 
 // cuda_correlation reads the correlation ID from the USDT probe and records a trace.
@@ -26,7 +26,22 @@ int BPF_USDT(cuda_correlation, u32 correlation_id, s32 cbid)
   u64 ts      = bpf_ktime_get_ns();
   // Cast cbid to s32 first to get sign extension, then to u64
   u64 cuda_id = correlation_id + ((u64)cbid << 32);
-  return collect_trace(ctx, origin_id_cuda, pid, tid, 0, ts, 0, cuda_id);
+
+  PerCPURecord *record = prepare_trace(origin_id_cuda, pid, tid, 0, ts);
+  if (!record) {
+    return 0;
+  }
+  Trace *trace = &record->trace;
+  push_kernel_frames(ctx, trace);
+  // Create a CUDA kernel frame ahead of the user stack; Symbolize will later
+  // resolve the kernel name from the ID.
+  u64 *data =
+    push_frame(&record->state, trace, FRAME_MARKER_CUDA_KERNEL, FRAME_FLAG_PID_SPECIFIC, 0, 1);
+  if (!data) {
+    return 0;
+  }
+  data[0] = cuda_id;
+  return unwind_trace(ctx, record, false);
 }
 
 // Event type discriminator at offset 0 of every event submitted to cupti_events.
@@ -263,7 +278,7 @@ int BPF_USDT(
   evt->stream_id      = stream_id;
   evt->graph_id       = graph_id;
 
-  int chars = bpf_probe_read_user_str((char *)&evt->kernel_name, sizeof(evt->kernel_name), name);
+  long chars = bpf_probe_read_user_str((char *)&evt->kernel_name, sizeof(evt->kernel_name), name);
   if (chars <= 0) {
     evt->kernel_name[0] = 'e';
     evt->kernel_name[1] = 'r';
@@ -351,7 +366,7 @@ process_activity_chunk(struct pt_regs *ctx, u64 ptrs_base, u32 num_activities, u
       evt->graph_id       = rec->graph_id;
 
       const char *name = (const char *)rec->name_ptr;
-      int chars =
+      long chars =
         bpf_probe_read_user_str((char *)&evt->kernel_name, sizeof(evt->kernel_name), name);
       if (chars <= 0) {
         evt->kernel_name[0] = 'e';
@@ -388,7 +403,7 @@ process_activity_chunk(struct pt_regs *ctx, u64 ptrs_base, u32 num_activities, u
 SEC("usdt/parcagpu/activity_batch")
 int BPF_USDT(cuda_activity_batch, u64 ptrs_base, u32 num_activities)
 {
-  DEBUG_PRINT("cuda_activity_batch: num=%u ptrs_base=0x%llx", num_activities, ptrs_base);
+  DEBUG_PRINT("cuda_activity_batch: num=%u ptrs_base=0x%lx", num_activities, ptrs_base);
   if (num_activities > BPF_AB_TOTAL_LIMIT) {
     num_activities = BPF_AB_TOTAL_LIMIT;
   }
@@ -446,7 +461,7 @@ int BPF_USDT(cuda_cubin_loaded, u64 cubin_crc, u64 cubin_ptr, u64 cubin_size)
   u8 one = 1;
   bpf_map_update_elem(&cubin_seen, &key, &one, BPF_ANY);
 
-  DEBUG_PRINT("cuda_cubin_loaded: pid=%u crc=0x%llx size=%llu", pid, cubin_crc, cubin_size);
+  DEBUG_PRINT("cuda_cubin_loaded: pid=%u crc=0x%lx size=%lu", pid, cubin_crc, cubin_size);
   return 0;
 }
 
@@ -719,7 +734,7 @@ int BPF_USDT(cuda_error, s32 code, u64 message_ptr, u64 component_ptr)
 SEC("usdt/cuda_probe")
 int cuda_probe(struct pt_regs *ctx)
 {
-  u64 full_cookie = bpf_get_attach_cookie(ctx);
+  u64 full_cookie = (u64)bpf_get_attach_cookie(ctx);
   u32 cookie      = (u32)(full_cookie & 0xFFFFFFFF);
 
   switch (cookie) {

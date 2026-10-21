@@ -5,6 +5,7 @@ package tracer // import "go.opentelemetry.io/ebpf-profiler/tracer"
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	cebpf "github.com/cilium/ebpf"
@@ -236,20 +237,53 @@ type CollectTrampolineRef struct {
 	// which the external entry program writes its payload (slot 0) before tail-calling.
 	CtxMap *cebpf.Map
 
-	// TailCallDestinationID is the kernel program ID of the loaded trampoline.
-	// Use it to populate a BPF_MAP_TYPE_PROG_ARRAY entry so the external entry program
-	// can bpf_tail_call into it.
-	TailCallDestinationID uint32
+	// Retaining the trampoline program prevents the program fd from
+	// being closed by the garbage collector.
+	trampoline *cebpf.Program
 }
+
+// Close releases the trampoline program and its context map.
+func (r *CollectTrampolineRef) Close() error {
+	return errors.Join(r.trampoline.Close(), r.CtxMap.Close())
+}
+
+// InsertInto writes the trampoline program into progArray at key. The eBPF program
+// of the external probe must tail-call into progArray at key to trigger stack
+// trace collection.
+func (r *CollectTrampolineRef) InsertInto(progArray *cebpf.Map, key uint32) error {
+	return progArray.Put(key, r.trampoline)
+}
+
+// ProbeKind specifies the eBPF program type used to trigger the stack collection.
+type ProbeKind uint8
+
+const (
+	probeUnspec ProbeKind = iota
+	ProbeKProbe
+	ProbePerfEvent
+)
 
 // RegisterCollectTrampoline prepares and loads the eBPF programs and maps
 // needed for external probes trigger stack trace collection.
-func (c *ProbeContext) RegisterCollectTrampoline(meta *samples.TypeMetadata) (*CollectTrampolineRef, error) {
+//
+// The caller owns the returned CollectTrampolineRef and must call its Close
+// method once the external probe no longer uses the trampoline, e.g. after it
+// has been detached.
+func (c *ProbeContext) RegisterCollectTrampoline(meta *samples.TypeMetadata, kind ProbeKind) (*CollectTrampolineRef, error) {
 	const (
-		trampolineProgName = "kprobe__external"
-		ctxMapName         = "ext_probe_value"
-		originVarName      = "origin_id_probe"
+		ctxMapName    = "ext_probe_value"
+		originVarName = "origin_id_probe"
 	)
+
+	var trampolineProgName string
+	switch kind {
+	case ProbeKProbe:
+		trampolineProgName = "kprobe__external"
+	case ProbePerfEvent:
+		trampolineProgName = "perf_event__external"
+	default:
+		return nil, fmt.Errorf("invalid probe kind: %d", kind)
+	}
 
 	originID, err := c.reg.Register(meta)
 	if err != nil {
@@ -330,20 +364,9 @@ func (c *ProbeContext) RegisterCollectTrampoline(meta *samples.TypeMetadata) (*C
 		return nil, fmt.Errorf("program %q not found after loading", trampolineProgName)
 	}
 
-	info, err := prog.Info()
-	if err != nil {
-		ctxMap.Close()
-		return nil, fmt.Errorf("querying trampoline program info: %w", err)
-	}
-	progID, ok := info.ID()
-	if !ok {
-		ctxMap.Close()
-		return nil, fmt.Errorf("trampoline program ID not available")
-	}
-
 	return &CollectTrampolineRef{
-		CtxMap:                ctxMap,
-		TailCallDestinationID: uint32(progID),
+		CtxMap:     ctxMap,
+		trampoline: prog,
 	}, nil
 }
 

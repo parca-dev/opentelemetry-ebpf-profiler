@@ -16,7 +16,6 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/host"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
-	"go.opentelemetry.io/ebpf-profiler/interpreter/apmint"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/customlabels"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
@@ -92,7 +91,6 @@ func NewExecutableInfoManager(
 ) (*ExecutableInfoManager, error) {
 	loaders := interpretersConfig.Loaders()
 
-	loaders = append(loaders, apmint.GetLoader(apmint.Config{}))
 	// customlabels is parca's native (non-Go) custom-labels pseudo-interpreter,
 	// which upstream does not have. It gets its own toggle rather than riding on
 	// Go.Labels: go.Disabled wins over the Go sub-toggles, so gating it there

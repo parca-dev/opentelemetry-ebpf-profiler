@@ -48,13 +48,11 @@ const (
 	// pseudoInterpreterStart marks the start of the pseudo interpreter ID space.
 	pseudoInterpreterStart InterpreterType = 0x100
 
-	// APMInt identifies the pseudo-interpreter for the APM integration.
-	APMInt InterpreterType = 0x100
-
 	// CustomLabels identifies the pseudo-interpreter for native custom labels support.
 	//
 	// NB: the former GoLabels pseudo-interpreter (0x101) was folded into Go by
-	// upstream #1564; Go runtime offsets now live in the go_procs map.
+	// upstream #1564; Go runtime offsets now live in the go_procs map. 0x100 was
+	// upstream's APMInt, removed in #2004.
 	CustomLabels InterpreterType = 0x102
 
 	// ThreadContext identifies the pseudo-interpreter for thread context support.
@@ -84,7 +82,6 @@ var interpreterTypeToString = map[InterpreterType]string{
 	V8:            "v8js",
 	Dotnet:        "dotnet",
 	BEAM:          "beam",
-	APMInt:        "apm-integration",
 	ThreadContext: "thread-context",
 	LuaJIT:        "luajit",
 	Go:            "go",

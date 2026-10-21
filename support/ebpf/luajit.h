@@ -1,6 +1,3 @@
-// Assigned in HA to anonymous executable virtual memory ranges in the nginx process.
-#define LUAJIT_JIT_FILE_ID 42
-
 // Special value for FFI functions
 #define LUAJIT_FFI_FUNC 0xff1
 
@@ -9,6 +6,10 @@
 
 // A fake "frame" that just reports the G pointer.
 #define LUAJIT_G_REPORT 0xff2
+
+// The host agent sets the upper 32 bits of the text_section_id
+// to this value to indicate that it contains JITted code.
+#define LUAJIT_JIT_MARKER 42
 
 // This is CFRAME_SIZE in src/lj_frame.h
 // We could dynamically get this from lj_vm_ffi_callback disassembly and look for:

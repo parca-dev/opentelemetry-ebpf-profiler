@@ -14,9 +14,9 @@
 
 struct beam_procs_t {
   __uint(type, BPF_MAP_TYPE_HASH);
-  __type(key, pid_t);
+  __type(key, u32);
   __type(value, BEAMProcInfo);
-  __uint(max_entries, 256);
+  __uint(max_entries, 1024);
 } beam_procs SEC(".maps");
 
 // We assume this Range struct is stable so we can read it all at once directly.
@@ -70,7 +70,7 @@ unwind_one_beam_frame(PerCPURecord *record, BEAMProcInfo *info, BEAMRangesSearch
 
   BEAMRangeEntry current_range = ranges->mid;
 
-  for (int i = 0; i < BEAM_CODE_HEADER_SEARCH_ITERATIONS; i++) {
+  for (u64 i = 0; i < BEAM_CODE_HEADER_SEARCH_ITERATIONS; i++) {
     if (pc < current_range.start) {
       high = current;
     } else if (pc >= current_range.end) {
@@ -115,7 +115,7 @@ unwind_one_beam_frame(PerCPURecord *record, BEAMProcInfo *info, BEAMRangesSearch
   u64 data[BEAM_STACK_FRAME_SCAN_ITERATIONS];
   bpf_probe_read_user(data, sizeof(data), (void *)(state->stack_reg + 8));
 
-  for (int i = 0; i < BEAM_STACK_FRAME_SCAN_ITERATIONS; i++) {
+  for (u64 i = 0; i < BEAM_STACK_FRAME_SCAN_ITERATIONS; i++) {
     state->stack_reg += 8;
     pc = data[i];
 
@@ -162,7 +162,7 @@ static EBPF_INLINE int unwind_beam(struct pt_regs *ctx)
     goto exit;
   }
 
-  DEBUG_PRINT("==== unwind_beam %d, pc: 0x%llx ====", trace->num_frames, state->pc);
+  DEBUG_PRINT("==== unwind_beam %d, pc: 0x%lx ====", trace->num_frames, state->pc);
 
   unwinder_analyze_frame_pointer(&record->state);
 
@@ -181,7 +181,7 @@ static EBPF_INLINE int unwind_beam(struct pt_regs *ctx)
   u64 active_ranges = info->r + (the_active_code_index * info->ranges_sizeof);
 
   DEBUG_PRINT(
-    "beam: r: %llx, the_active_code_index: %d, active_ranges: %llx",
+    "beam: r: %lx, the_active_code_index: %d, active_ranges: %lx",
     info->r,
     the_active_code_index,
     active_ranges);
@@ -194,7 +194,7 @@ static EBPF_INLINE int unwind_beam(struct pt_regs *ctx)
     goto exit;
   }
 
-  DEBUG_PRINT("beam: modules: %llx, n: %llu", ranges.info.modules, ranges.info.n);
+  DEBUG_PRINT("beam: modules: %lx, n: %lu", ranges.info.modules, ranges.info.n);
 
   u64 entry_ptr = ranges.info.modules;
   if (bpf_probe_read_user(&ranges.first, sizeof(BEAMRangeEntry), (void *)(entry_ptr))) {
@@ -217,9 +217,9 @@ static EBPF_INLINE int unwind_beam(struct pt_regs *ctx)
     goto exit;
   }
 
-  DEBUG_PRINT("beam: valid addresses 0x%llx - 0x%llx", ranges.first.start, ranges.last.end);
+  DEBUG_PRINT("beam: valid addresses 0x%lx - 0x%lx", ranges.first.start, ranges.last.end);
 
-  for (int i = 0; i < BEAM_FRAMES_PER_PROGRAM; i++) {
+  for (u64 i = 0; i < BEAM_FRAMES_PER_PROGRAM; i++) {
     if (record->state.pc == info->beam_normal_exit) {
       unwinder = PROG_UNWIND_STOP;
       break;
@@ -238,9 +238,7 @@ static EBPF_INLINE int unwind_beam(struct pt_regs *ctx)
 
 exit:
   state->unwind_error = error;
-  tail_call(ctx, unwinder);
-  DEBUG_PRINT("beam: tail call for next frame unwinder (%d) failed", unwinder);
-  return -1;
+  return tail_call(ctx, record, unwinder);
 }
 
 MULTI_USE_FUNC(unwind_beam)

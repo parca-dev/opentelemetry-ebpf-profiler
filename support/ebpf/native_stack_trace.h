@@ -1,6 +1,4 @@
-#ifndef OPTI_NATIVE_STACK_TRACE_H
-#define OPTI_NATIVE_STACK_TRACE_H
-
+#pragma once
 #include "bpfdefs.h"
 #include "extmaps.h"
 #include "go_runtime.h"
@@ -60,8 +58,8 @@ static EBPF_INLINE void *get_stack_delta_map(int mapID)
 // Get the stack offset of the given instruction.
 static EBPF_INLINE ErrorCode get_stack_delta(UnwindState *state, int *addrDiff, u32 *unwindInfo)
 {
-  unsigned long exe_id = state->text_section_id;
-  unsigned long offset = state->text_section_offset - (int)state->return_address;
+  u64 exe_id = state->text_section_id;
+  u64 offset = state->text_section_offset - (u64)state->return_address;
 
   // Look up the stack delta page information for this address.
   StackDeltaPageKey key = {};
@@ -98,15 +96,11 @@ static EBPF_INLINE ErrorCode get_stack_delta(UnwindState *state, int *addrDiff, 
     u32 lo = info->firstDelta;
     u32 hi = lo + info->numDeltas;
 
-    DEBUG_PRINT(
-      "Intervals should be from %lu to %lu (mapID %d)",
-      (unsigned long)lo,
-      (unsigned long)hi,
-      (int)info->mapID);
+    DEBUG_PRINT("Intervals should be from %u to %u (mapID %u)", lo, hi, info->mapID);
 
     // Do the binary search, up to 16 iterations. Deltas are paged to 64kB pages.
     // They can contain at most 64kB deltas even if everything is single byte opcodes.
-    int i;
+    u64 i;
     for (i = 0; i < 16; i++) {
       if (!bsearch_step(inner_map, &lo, &hi, page_offset)) {
         break;
@@ -163,7 +157,7 @@ static EBPF_INLINE ErrorCode get_stack_delta(UnwindState *state, int *addrDiff, 
 // format "BASE_REG + param".
 static EBPF_INLINE u64 unwind_calc_register(UnwindState *state, u8 baseReg, s32 param)
 {
-  return state->regs[baseReg % (sizeof(state->regs) / sizeof(state->regs[0]))] + param;
+  return state->regs[baseReg % (sizeof(state->regs) / sizeof(state->regs[0]))] + (u64)(s64)param;
 }
 
 #if defined(__x86_64__)
@@ -174,7 +168,8 @@ static EBPF_INLINE u64 unwind_calc_register(UnwindState *state, u8 baseReg, s32 
 static EBPF_INLINE u64
 unwind_calc_register_with_deref(UnwindState *state, u8 baseReg, s32 param, bool deref)
 {
-  s32 preDeref = param, postDeref = 0;
+  s32 preDeref  = param;
+  u64 postDeref = 0;
 
   if (deref) {
     // For expressions that dereference the base expression, the parameter is constructed
@@ -191,9 +186,9 @@ unwind_calc_register_with_deref(UnwindState *state, u8 baseReg, s32 param, bool 
   }
 
   // Dereference, and add the postDereference adder.
-  unsigned long val;
+  u64 val;
   if (bpf_probe_read_user(&val, sizeof(val), (void *)addr)) {
-    DEBUG_PRINT("unwind failed to dereference address 0x%lx", (unsigned long)addr);
+    DEBUG_PRINT("unwind failed to dereference address 0x%lx", addr);
     return 0;
   }
   // Return: "*(BASE + preDeref) + postDeref"
@@ -265,8 +260,8 @@ unwind_one_frame(PerCPURecord *record, bool *stop, bool *delegate_command)
       // PLT table with one expression to reduce .eh_frame size.
       // This is the hard coded implementation of this expression. For further details,
       // see https://hal.inria.fr/hal-02297690/document, page 4. (DOI: 10.1145/3360572)
-      cfa = state->sp + 8 + ((((state->pc & 15) >= 11) ? 1 : 0) << 3);
-      // DEBUG_PRINT("PLT, cfa=0x%lx", (unsigned long)cfa);
+      cfa = state->sp + 8UL + ((((state->pc & 15) >= 11) ? 1UL : 0UL) << 3);
+      // DEBUG_PRINT("PLT, cfa=0x%lx", cfa);
       break;
     case UNWIND_COMMAND_SIGNAL: {
       // Use the PerCPURecord scratch union instead of a stack-local buffer to avoid
@@ -456,7 +451,7 @@ unwind_one_frame(PerCPURecord *record, bool *stop, bool *delegate_command)
 
   // Resolve the frame CFA (previous PC is fixed to CFA) address
   state->cfa = unwind_calc_register(state, info->baseReg, param);
-  DEBUG_PRINT("prev cfa: %llx", state->cfa);
+  DEBUG_PRINT("prev cfa: %lx", state->cfa);
 
   // Resolve Return Address, it is either the value of link register or
   // stack address where RA is stored
@@ -481,10 +476,10 @@ unwind_one_frame(PerCPURecord *record, bool *stop, bool *delegate_command)
       return ERR_NATIVE_LR_UNWINDING_MID_TRACE;
     }
   } else {
-    DEBUG_PRINT("RA: *(%016llX)", (u64)ra);
+    DEBUG_PRINT("RA: %016lx", ra);
 
     // read the value of RA from stack
-    int err;
+    long err;
     u64 fpra[2];
     fpra[0] = state->fp;
     if (info->flags & UNWIND_FLAG_FRAME) {
@@ -500,7 +495,7 @@ unwind_one_frame(PerCPURecord *record, bool *stop, bool *delegate_command)
   }
   state->pc = normalize_pac_ptr(ra);
   state->sp = state->cfa;
-  DEBUG_PRINT("fp, ra, sp: %llx, %llx, %llx", state->fp, ra, state->sp);
+  DEBUG_PRINT("fp, ra, sp: %lx, %lx, %lx", state->fp, ra, state->sp);
   unwinder_mark_nonleaf_frame(state);
 frame_ok:
   increment_metric(metricID_UnwindNativeFrames);
@@ -508,6 +503,4 @@ frame_ok:
 }
 #else
   #error unsupported architecture
-#endif
-
 #endif

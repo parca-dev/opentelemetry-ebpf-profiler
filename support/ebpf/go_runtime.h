@@ -1,8 +1,6 @@
 // This file contains helpers for reading Go runtime structures from eBPF programs.
 
-#ifndef OPTI_GO_RUNTIME_H
-#define OPTI_GO_RUNTIME_H
-
+#pragma once
 #include "bpfdefs.h"
 #include "tracemgmt.h"
 #include "tsd.h"
@@ -45,13 +43,12 @@ static inline EBPF_INLINE u64 go_get_g_ptr(struct GoRuntimeOffsets *offs, Unwind
     DEBUG_PRINT("go: failed to get tsd base; using register fallback if available");
     return g_register;
   }
-  DEBUG_PRINT(
-    "go: read tsd_base at 0x%lx, g offset: %d", (unsigned long)tls_base, offs->tls_offset);
+  DEBUG_PRINT("go: read tsd_base at 0x%lx, g offset: %d", (u64)tls_base, offs->tls_offset);
 
   if (bpf_probe_read_user(&g_addr, sizeof(void *), (void *)((s64)tls_base + offs->tls_offset))) {
     DEBUG_PRINT(
       "go: failed to read g_addr, tls_base(%lx); using register fallback if available",
-      (unsigned long)tls_base);
+      (u64)tls_base);
   }
 
   return g_addr ? g_addr : g_register;
@@ -66,13 +63,13 @@ static inline EBPF_INLINE void *go_get_m_ptr(struct GoRuntimeOffsets *offs, Unwi
     return NULL;
   }
 
-  DEBUG_PRINT("go: reading m_ptr_addr at 0x%lx + 0x%x", (unsigned long)g_addr, offs->m_offset);
+  DEBUG_PRINT("go: reading m_ptr_addr at 0x%lx + 0x%x", g_addr, offs->m_offset);
   void *m_ptr_addr;
   if (bpf_probe_read_user(&m_ptr_addr, sizeof(void *), (void *)(g_addr + offs->m_offset))) {
     DEBUG_PRINT("go: failed m_ptr_addr");
     return NULL;
   }
-  DEBUG_PRINT("go: m_ptr_addr 0x%lx", (unsigned long)m_ptr_addr);
+  DEBUG_PRINT("go: m_ptr_addr 0x%lx", (u64)m_ptr_addr);
   return m_ptr_addr;
 }
 
@@ -113,7 +110,7 @@ static inline EBPF_INLINE ErrorCode go_runtime_load_ctx(
   }
   u64 prefix_size = curg + sizeof(u64);
 
-  if (bpf_probe_read_user(scratch, prefix_size, (void *)m_ptr)) {
+  if (bpf_probe_read_user(scratch, (u32)prefix_size, (void *)m_ptr)) {
     DEBUG_PRINT("go runtime: failed to read m prefix");
     return ERR_GO_RUNTIME_LOAD_FAILURE;
   }
@@ -175,11 +172,11 @@ static inline EBPF_INLINE ErrorCode go_unwind_morestack(PerCPURecord *record, Un
   // check and the g.sched fields. bp is the last of them, so the read is sized
   // from it. max_off is the highest offset a u64 can be read from, so a bound of
   // "off > max_off" already accounts for the 8 bytes read there.
-  const u64 max_off = sizeof(record->goUnwindScratch.buf) - sizeof(u64);
-  u64 m_off         = offs->m_offset;
-  u64 sp_off        = offs->sched_sp_off;
-  u64 pc_off        = offs->sched_pc_off;
-  u64 bp_off        = offs->sched_bp_off;
+  const u32 max_off = sizeof(record->goUnwindScratch.buf) - sizeof(u64);
+  u32 m_off         = offs->m_offset;
+  u32 sp_off        = offs->sched_sp_off;
+  u32 pc_off        = offs->sched_pc_off;
+  u32 bp_off        = offs->sched_bp_off;
   if (m_off > max_off || sp_off > max_off || pc_off > max_off || bp_off > max_off) {
     DEBUG_PRINT("morestack: unusable g offsets");
     return ERR_GO_RUNTIME_LOAD_FAILURE;
@@ -205,11 +202,7 @@ static inline EBPF_INLINE ErrorCode go_unwind_morestack(PerCPURecord *record, Un
   // of the call into it, so the frame is a non-leaf one.
   unwinder_mark_nonleaf_frame(state);
 
-  DEBUG_PRINT(
-    "morestack: sp 0x%lx, pc 0x%lx, fp 0x%lx",
-    (unsigned long)state->sp,
-    (unsigned long)state->pc,
-    (unsigned long)state->fp);
+  DEBUG_UNWIND_STATE(state);
 
   // The recovered frame is stopped in the stack check that runs ahead of its
   // prologue, so it has neither pushed its return address nor set up its own
@@ -258,8 +251,7 @@ static inline EBPF_INLINE ErrorCode go_unwind_morestack(PerCPURecord *record, Un
 #endif
   // state->fp is gobuf.bp, which already is this frame's frame pointer.
   unwinder_mark_nonleaf_frame(state);
-  DEBUG_PRINT(
-    "morestack: caller sp 0x%lx, pc 0x%lx", (unsigned long)state->sp, (unsigned long)state->pc);
+  DEBUG_PRINT("morestack: caller sp 0x%lx, pc 0x%lx", state->sp, state->pc);
   return ERR_OK;
 }
 
@@ -348,9 +340,9 @@ static inline EBPF_INLINE ErrorCode go_unwind_asmcgocall(PerCPURecord *record, U
   // Post-gosave because g == m.g0 happens after gosave_systemstack_switch switched tls to m.g0.
   // The read is anchored at curg, so one read of the g prefix covers both the curg.m check
   // and g.sched.bp.
-  const u64 max_off = sizeof(record->goUnwindScratch.buf) - sizeof(u64);
-  u64 m_off         = offs->m_offset;
-  u64 bp_off        = offs->sched_bp_off;
+  const u32 max_off = sizeof(record->goUnwindScratch.buf) - sizeof(u64);
+  u32 m_off         = offs->m_offset;
+  u32 bp_off        = offs->sched_bp_off;
   if (m_off > max_off || bp_off > max_off) {
     DEBUG_PRINT("asmcgocall: unusable g offsets");
     goto unwind_failure;
@@ -391,5 +383,3 @@ unwind_failure_err:
   return err;
 }
 #endif // __aarch64__
-
-#endif // OPTI_GO_RUNTIME_H

@@ -150,7 +150,7 @@ static EBPF_INLINE int unwind_native(struct pt_regs *ctx)
   Trace *trace = &record->trace;
   int unwinder;
   ErrorCode error;
-  for (int i = 0; i < NATIVE_FRAMES_PER_PROGRAM; i++) {
+  for (u64 i = 0; i < NATIVE_FRAMES_PER_PROGRAM; i++) {
     unwinder = PROG_UNWIND_STOP;
 
     // Unwind native code
@@ -159,7 +159,7 @@ static EBPF_INLINE int unwind_native(struct pt_regs *ctx)
 
     // Push frame first. The PC is valid because a text section mapping was found.
     DEBUG_PRINT(
-      "Pushing %llx %llx to position %u on stack",
+      "Pushing %lx %lx to position %u on stack",
       record->state.text_section_id,
       record->state.text_section_offset,
       trace->num_frames);
@@ -193,9 +193,7 @@ static EBPF_INLINE int unwind_native(struct pt_regs *ctx)
   // Tail call needed for recursion, switching to interpreter unwinder, or reporting
   // trace due to end-of-trace or error. The unwinder program index is set accordingly.
   record->state.unwind_error = error;
-  tail_call(ctx, unwinder);
-  DEBUG_PRINT("bpf_tail call failed for %d in unwind_native", unwinder);
-  return -1;
+  return tail_call(ctx, record, unwinder);
 }
 
 SEC("perf_event/native_tracer_entry")
@@ -215,6 +213,6 @@ int native_tracer_entry(struct bpf_perf_event_data *ctx)
   u64 ts = bpf_ktime_get_ns();
 
   return collect_trace(
-    (struct pt_regs *)&ctx->regs, origin_id_sampling, pid, tid, group_leader, ts, 0, 0);
+    (struct pt_regs *)&ctx->regs, origin_id_sampling, pid, tid, group_leader, ts);
 }
 MULTI_USE_FUNC(unwind_native)

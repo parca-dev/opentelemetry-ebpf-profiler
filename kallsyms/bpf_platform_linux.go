@@ -19,6 +19,7 @@ import (
 	"golang.org/x/sys/unix"
 
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
+	"go.opentelemetry.io/ebpf-profiler/internal/perfutil"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 )
 
@@ -26,13 +27,24 @@ import (
 // symbols in /proc/kallsyms and PERF_RECORD_KSYMBOL events.
 const bpfProgPrefix = "bpf_prog_"
 
+// ksymbolEventRingPages sizes the per-CPU perf ring buffer used for ksymbol events.
+// Eight data pages accommodate bursts of program unloads while keeping per-CPU
+// memory usage below the default of 128 pages. With 4 KiB pages, the buffer holds
+// roughly 400 events, depending on symbol names.
+//
+// A loss report triggers a full rescan, but the kernel only emits one when a
+// subsequent record fits in the buffer. If no more events arrive after an
+// overflow, the loss goes unreported and stale symbols can remain.
+// A periodic full rescan could be added to recover from these unreported losses.
+const ksymbolEventRingPages = 8
+
 // bpfSymbolizerPlatform is responsible for getting updates from `PERF_RECORD_KSYMBOL`.
 // The symbolizer is not ready to use until startMonitor is called to load the symbols.
 type bpfSymbolizerPlatform struct {
-	records chan *perf.KSymbolRecord
-	events  []*perf.Event
-	cancel  context.CancelFunc
-	wg      sync.WaitGroup
+	records  chan *perf.KSymbolRecord
+	reader   *perfutil.PerfSidebandReader
+	cancel   context.CancelFunc
+	reloadWG sync.WaitGroup
 }
 
 // loadBPFPrograms enumerates all loaded BPF programs via the bpf syscall and
@@ -114,79 +126,55 @@ func (s *bpfSymbolizer) startMonitor(ctx context.Context, onlineCPUs []int) erro
 		return err
 	}
 
-	go s.reloadWorker(ctx)
+	s.platform.reloadWG.Go(func() {
+		s.reloadWorker(ctx)
+	})
 
 	return nil
 }
 
 // subscribe subscribes to updates for bpf symbols via `PERF_RECORD_KSYMBOL`.
 func (s *bpfSymbolizer) subscribe(ctx context.Context, onlineCPUs []int) error {
-	attr := new(perf.Attr)
-	perf.Dummy.Configure(attr)
-	attr.Options.KSymbol = true
-	attr.SetWakeupWatermark(1)
-
 	s.platform.records = make(chan *perf.KSymbolRecord)
 
-	for _, cpu := range onlineCPUs {
-		event, err := perf.Open(attr, perf.AllThreads, cpu, nil)
-		if err != nil {
-			return err
-		}
-
-		s.platform.events = append(s.platform.events, event)
-
-		err = event.MapRing()
-		if err != nil {
-			return err
-		}
-
-		err = event.Enable()
-		if err != nil {
-			return err
-		}
-
-		s.platform.wg.Go(func() {
-			for {
-				record, err := event.ReadRecord(ctx)
-				if err != nil {
-					if ctx.Err() != nil {
-						return
-					}
-
-					log.Errorf("Failed to read perf event: %v", err)
-					continue
-				}
-
-				switch ksymbol := record.(type) {
-				case *perf.LostRecord:
-					// nil as a sentinel value to indicate lost events. Whenever this happens
-					// we trigger a full re-scan of existing bpf programs to prevent data loss.
-					select {
-					case s.platform.records <- nil:
-					case <-ctx.Done():
-					}
-				case *perf.KSymbolRecord:
-					if ksymbol.Type != unix.PERF_RECORD_KSYMBOL_TYPE_BPF {
-						continue
-					}
-
-					select {
-					case s.platform.records <- ksymbol:
-					case <-ctx.Done():
-					}
-				default:
-					log.Debugf("Unexpected perf record type: %T", record)
-				}
-
-				if ctx.Err() != nil {
-					return
-				}
-			}
-		})
+	reader, err := perfutil.Start(ctx, onlineCPUs, perfutil.Config{
+		Name:      "ksymbol",
+		RingPages: ksymbolEventRingPages,
+		Configure: func(attr *perf.Attr) {
+			attr.Options.KSymbol = true
+		},
+		OnRecord: s.handleKSymbolRecord,
+	})
+	if err != nil {
+		return err
 	}
+	s.platform.reader = reader
 
 	return nil
+}
+
+// handleKSymbolRecord forwards a single perf record to the reload worker.
+func (s *bpfSymbolizer) handleKSymbolRecord(ctx context.Context, record perf.Record) {
+	switch ksymbol := record.(type) {
+	case *perf.LostRecord:
+		// nil as a sentinel value to indicate lost events. Whenever this happens
+		// we trigger a full re-scan of existing bpf programs to prevent data loss.
+		select {
+		case s.platform.records <- nil:
+		case <-ctx.Done():
+		}
+	case *perf.KSymbolRecord:
+		if ksymbol.Type != unix.PERF_RECORD_KSYMBOL_TYPE_BPF {
+			return
+		}
+
+		select {
+		case s.platform.records <- ksymbol:
+		case <-ctx.Done():
+		}
+	default:
+		log.Debugf("Unexpected perf record type: %T", record)
+	}
 }
 
 // reloadWorker is the goroutine handling the reloads of the bpf symbols.
@@ -239,24 +227,13 @@ func (s *bpfSymbolizer) handleBPFUpdate(record *perf.KSymbolRecord) error {
 
 // close frees resources associated with bpfSymbolizer.
 func (s *bpfSymbolizer) close() {
-	// Cancel the context first so reader goroutines and reloadWorker
-	// observe ctx.Done() and exit before we close the perf events.
+	// Cancel the context first so reloadWorker observes ctx.Done() and exits.
+	// The reader stops and tears down its own events in Close().
 	if s.platform.cancel != nil {
 		s.platform.cancel()
 	}
-	// We have to wait for all goroutines to exit before closing events,
-	// otherwise we're introducing a race that leads to a panic as go-perf
-	// may (internally) send on a closed channel.
-	s.platform.wg.Wait()
-
-	for _, event := range s.platform.events {
-		if err := event.Disable(); err != nil {
-			log.Errorf("Failed to disable perf event: %v", err)
-		}
-		if err := event.Close(); err != nil {
-			log.Errorf("Failed to close perf event: %v", err)
-		}
+	if s.platform.reader != nil {
+		s.platform.reader.Close()
 	}
-
-	s.platform.events = nil
+	s.platform.reloadWG.Wait()
 }

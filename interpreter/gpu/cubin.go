@@ -7,14 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
 	"go.opentelemetry.io/ebpf-profiler/libpf"
-	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/process"
 	"go.opentelemetry.io/ebpf-profiler/remotememory"
 	"go.opentelemetry.io/ebpf-profiler/reporter"
@@ -235,16 +236,29 @@ type cubinProcess struct {
 	data []byte
 }
 
-// cubinReadAtCloser hands out the cubin with e_version normalized, exactly as
+// cubinFile hands out the cubin with e_version normalized, exactly as
 // ParseCubinELF sees it. Everything downstream of OpenMappingFile parses these
 // bytes with debug/elf too -- parca-agent's symbol uploader runs them through
 // elfwriter to extract debuginfo -- and would otherwise hit the same
 // "mismatched ELF version" rejection that ParseCubinELF works around.
-type cubinReadAtCloser struct {
-	cubinVersionReader
+type cubinFile struct {
+	*io.SectionReader
 }
 
-func (cubinReadAtCloser) Close() error { return nil }
+func (cubinFile) Close() error { return nil }
+
+func (f cubinFile) Stat() (fs.FileInfo, error) { return cubinFileInfo{f}, nil }
+
+type cubinFileInfo struct {
+	f cubinFile
+}
+
+func (cubinFileInfo) Name() string       { return "cubin" }
+func (i cubinFileInfo) Size() int64      { return i.f.Size() }
+func (cubinFileInfo) Mode() fs.FileMode  { return 0o444 }
+func (cubinFileInfo) ModTime() time.Time { return time.Time{} }
+func (cubinFileInfo) IsDir() bool        { return false }
+func (cubinFileInfo) Sys() any           { return nil }
 
 // NewCubinProcess returns a minimal process.Process adapter wrapping in-memory
 // cubin bytes. Used to report cubins to the ExecutableReporter.
@@ -252,8 +266,9 @@ func NewCubinProcess(pid uint32, data []byte) process.Process {
 	return &cubinProcess{pid: pid, data: data}
 }
 
-func (p *cubinProcess) OpenMappingFile(_ *process.RawMapping) (process.ReadAtCloser, error) {
-	return cubinReadAtCloser{cubinVersionReader{bytes.NewReader(p.data)}}, nil
+func (p *cubinProcess) OpenMappingFile(_ *process.RawMapping) (fs.File, error) {
+	r := cubinVersionReader{bytes.NewReader(p.data)}
+	return cubinFile{io.NewSectionReader(r, 0, int64(len(p.data)))}, nil
 }
 
 func (p *cubinProcess) PID() libpf.PID                      { return libpf.PID(p.pid) }
@@ -274,6 +289,6 @@ func (p *cubinProcess) CalculateMappingFileID(_ *process.RawMapping) (libpf.File
 	return libpf.FileID{}, nil
 }
 func (p *cubinProcess) Close() error { return nil }
-func (p *cubinProcess) OpenELF(_ string) (*pfelf.File, error) {
-	return nil, errors.New("not supported")
+func (p *cubinProcess) Open(name string) (fs.File, error) {
+	return nil, &fs.PathError{Op: "open", Path: name, Err: errors.ErrUnsupported}
 }

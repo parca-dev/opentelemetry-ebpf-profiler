@@ -26,12 +26,12 @@ func (is *InstanceStubs) UsesAnonymousMappings() bool {
 	return false
 }
 
-func (is *InstanceStubs) SynchronizeMappings(EbpfHandler, reporter.ExecutableReporter,
-	process.Process, []process.RawMapping) error {
+func (is *InstanceStubs) Detach(EbpfHandler, libpf.PID) error {
 	return nil
 }
 
-func (is *InstanceStubs) Detach(EbpfHandler, libpf.PID) error {
+func (is *InstanceStubs) SynchronizeMappings(EbpfHandler, reporter.ExecutableReporter,
+	process.Process, []process.RawMapping) error {
 	return nil
 }
 

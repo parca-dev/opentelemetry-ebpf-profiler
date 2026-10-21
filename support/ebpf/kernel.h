@@ -5,8 +5,7 @@
 // a few updates. We only need a handful of those types anyway, so we just define
 // them ourselves and ditch the problem entirely.
 
-#ifndef OPTI_KERNEL_H
-#define OPTI_KERNEL_H
+#pragma once
 
 // Define kernel integer types.
 //
@@ -26,8 +25,8 @@ typedef signed short s16;
 typedef unsigned short u16;
 typedef signed int s32;
 typedef unsigned int u32;
-typedef signed long long s64;
-typedef unsigned long long u64;
+typedef signed long s64;
+typedef unsigned long u64;
 
 // Size types need to be declared with __SIZE_TYPE__ built-in to not clash with
 // CGo's built-in prolog.
@@ -62,8 +61,6 @@ typedef _Bool bool;
   #define NULL ((void *)0)
 #endif
 
-typedef int pid_t;
-
 typedef u32 __be32;
 typedef u64 __be64;
 
@@ -76,7 +73,7 @@ struct vm_area_struct;
 #define VM_EXEC 0x00000004UL
 
 // Defined in arch/{x86,arm64}/include/asm/ptrace.h
-#if defined(__x86_64)
+#if defined(__x86_64__)
 struct pt_regs {
   unsigned long r15;
   unsigned long r14;
@@ -435,5 +432,3 @@ enum {
 
 // defined in include/uapi/linux/perf_event.h
 #define PERF_MAX_STACK_DEPTH 127
-
-#endif // OPTI_KERNEL_H

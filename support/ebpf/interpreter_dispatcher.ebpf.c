@@ -145,22 +145,15 @@ struct traces_ctx_v1_t {
   __uint(max_entries, 1 << 14);
 } traces_ctx_v1 SEC(".maps");
 
-struct apm_int_procs_t {
-  __uint(type, BPF_MAP_TYPE_HASH);
-  __type(key, pid_t);
-  __type(value, ApmIntProcInfo);
-  __uint(max_entries, 128);
-} apm_int_procs SEC(".maps");
-
 struct custom_labels_procs_t {
   __uint(type, BPF_MAP_TYPE_HASH);
-  __type(key, pid_t);
+  __type(key, u32);
   __type(value, NativeCustomLabelsProcInfo);
   __uint(max_entries, 128);
 } cl_procs SEC(".maps");
 struct thread_context_procs_t {
   __uint(type, BPF_MAP_TYPE_HASH);
-  __type(key, pid_t);
+  __type(key, u32);
   __type(value, ThreadContextProcInfo);
   __uint(max_entries, 1024);
 } thread_context_procs SEC(".maps");
@@ -173,29 +166,27 @@ BPF_RODATA_VAR(bool, filter_error_frames, false)
 // independently whenever Go support is enabled.
 BPF_RODATA_VAR(bool, go_labels_disabled, true)
 
-static EBPF_INLINE void maybe_add_go_custom_labels(struct pt_regs *ctx, PerCPURecord *record)
+static EBPF_INLINE bool should_tailcall_go_labels(PerCPURecord *record)
 {
   if (go_labels_disabled) {
-    return;
+    return false;
   }
 
   if (record->goOffsets.m_offset == 0) {
     DEBUG_PRINT("cl: no offsets, %d not recognized as a go binary", record->trace.pid);
-    return;
+    return false;
   }
   GoRuntimeOffsets *offsets = &record->goOffsets;
 
   void *m_ptr_addr = go_get_m_ptr(offsets, &record->state);
   if (!m_ptr_addr) {
-    return;
+    return false;
   }
-  record->customLabelsState.go_m_ptr = m_ptr_addr;
+  record->golangLabelsState.go_m_ptr = m_ptr_addr;
 
   DEBUG_PRINT("cl: trace is within a process with Go custom labels enabled");
   increment_metric(metricID_UnwindGoLabelsAttempts);
-  // The Go label extraction code is too big to fit in the UNWIND_STOP program, so
-  // it is tail_call'd.
-  tail_call(ctx, PROG_GO_LABELS);
+  return true;
 }
 
 // Implements the specification to share span/trace IDs according to:
@@ -209,62 +200,8 @@ static EBPF_INLINE void maybe_add_otel_span_trace_id(Trace *trace)
     return;
   }
 
-  // The structure of apm_[transaction|trace]_id happens to be the same
-  // as proposed in
-  // https://github.com/open-telemetry/opentelemetry-ebpf-instrumentation/blob/main/devdocs/trace-profile-correlation.md
-
-  trace->apm_trace_id.as_int.hi    = info->trace_id.as_int.hi;
-  trace->apm_trace_id.as_int.lo    = info->trace_id.as_int.lo;
-  trace->apm_transaction_id.as_int = info->span_id.as_int;
-}
-
-static EBPF_INLINE void maybe_add_apm_info(Trace *trace)
-{
-  u32 pid              = trace->pid; // verifier needs this to be on stack on 4.15 kernel
-  ApmIntProcInfo *proc = bpf_map_lookup_elem(&apm_int_procs, &pid);
-  if (!proc) {
-    return;
-  }
-
-  DEBUG_PRINT("Trace is within a process with APM integration enabled");
-
-  u64 tsd_base;
-  if (tsd_get_base((void **)&tsd_base) != 0) {
-    increment_metric(metricID_UnwindApmIntErrReadTsdBase);
-    DEBUG_PRINT("Failed to get TSD base for APM integration");
-    return;
-  }
-
-  DEBUG_PRINT("APM corr ptr should be at 0x%llx", tsd_base + proc->tls_offset);
-
-  void *apm_corr_buf_ptr;
-  if (bpf_probe_read_user(
-        &apm_corr_buf_ptr, sizeof(apm_corr_buf_ptr), (void *)(tsd_base + proc->tls_offset))) {
-    increment_metric(metricID_UnwindApmIntErrReadCorrBufPtr);
-    DEBUG_PRINT("Failed to read APM correlation buffer pointer");
-    return;
-  }
-
-  ApmCorrelationBuf corr_buf;
-  if (bpf_probe_read_user(&corr_buf, sizeof(corr_buf), apm_corr_buf_ptr)) {
-    increment_metric(metricID_UnwindApmIntErrReadCorrBuf);
-    DEBUG_PRINT("Failed to read APM correlation buffer");
-    return;
-  }
-
-  if (corr_buf.trace_present && corr_buf.valid) {
-    trace->apm_trace_id.as_int.hi    = corr_buf.trace_id.as_int.hi;
-    trace->apm_trace_id.as_int.lo    = corr_buf.trace_id.as_int.lo;
-    trace->apm_transaction_id.as_int = corr_buf.transaction_id.as_int;
-  }
-
-  increment_metric(metricID_UnwindApmIntReadSuccesses);
-
-  // WARN: we print this as little endian
-  DEBUG_PRINT(
-    "APM transaction ID: %016llX, flags: 0x%02X",
-    trace->apm_transaction_id.as_int,
-    corr_buf.trace_flags);
+  trace->trace_id = info->trace_id;
+  trace->span_id  = info->span_id;
 }
 
 // Stub: only looks the process up, so thread_context_procs stays loaded
@@ -293,17 +230,11 @@ static EBPF_INLINE int unwind_stop(struct pt_regs *ctx)
   maybe_add_native_custom_labels(record);
   if (!maybe_add_node_custom_labels(record))
     increment_metric(metricID_UnwindNodeCustomLabelsFailures);
-  maybe_add_apm_info(trace);
-  if (
-    trace->apm_trace_id.as_int.hi == 0 && trace->apm_trace_id.as_int.lo == 0 &&
-    trace->apm_transaction_id.as_int == 0) {
-    // Populate OTel span/trace ID only if span/trace ID is not yet set.
-    maybe_add_otel_span_trace_id(trace);
-  }
+  maybe_add_otel_span_trace_id(trace);
 
   // If the stack is otherwise empty, push an error for that: we should
   // never encounter empty stacks for successful unwinding.
-  if (trace->frame_data_len == 0) {
+  if (trace->num_frames == 0 && trace->kernel_frame_end == 0) {
     DEBUG_PRINT("unwind_stop called but the stack is empty");
     increment_metric(metricID_ErrEmptyStack);
     if (!state->unwind_error) {
@@ -329,7 +260,7 @@ static EBPF_INLINE int unwind_stop(struct pt_regs *ctx)
       increment_metric(metricID_NumUnknownPC);
     }
     // fallthrough
-  default: increment_metric(state->error_metric);
+  default: increment_metric((u32)state->error_metric);
   }
 
   // TEMPORARY HACK
@@ -342,18 +273,23 @@ static EBPF_INLINE int unwind_stop(struct pt_regs *ctx)
   // through different data structures, we'd have to keep a list of known empty traces to
   // also prevent the corresponding trace counts to be sent out. OTOH, if we do it here,
   // this is trivial.
-  if (trace->frame_data_len == 1 && state->unwind_error) {
-    if (filter_error_frames) {
+  if (filter_error_frames) {
+    if (trace->num_frames == 1 && trace->kernel_frame_end == 0 && state->unwind_error) {
       return 0;
     }
   }
   // TEMPORARY HACK END
 
-  // Does not return once it dispatches, so anything below runs only when the
-  // Go path did not fill custom labels.
-  maybe_add_go_custom_labels(ctx, record);
+  trace->frame_data_end = end_variable_data(trace, sizeof(u64));
 
   maybe_add_thread_context_info(trace);
+
+  // Dispatches without returning, so it must come last.
+  if (should_tailcall_go_labels(record)) {
+    // The Go label extraction code inlined in its current form causes issues with old
+    // kernel verifier. So tail_call the separate program. It duplicates trace sending.
+    return tail_call(ctx, record, PROG_GO_LABELS);
+  }
 
   send_trace(ctx, trace);
 

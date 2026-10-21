@@ -19,7 +19,7 @@
 
 struct luajit_procs_t {
   __uint(type, BPF_MAP_TYPE_HASH);
-  __type(key, pid_t);
+  __type(key, u32);
   __type(value, LuaJITProcInfo);
   __uint(max_entries, 1024);
 } luajit_procs SEC(".maps");
@@ -248,14 +248,14 @@ static EBPF_INLINE ErrorCode lj_debug_framepc(
   }
   // startpc can be for a different function if we land on instructions where things aren't synced.
   // For instance the PC is up to date on the stack but jit_base wasn't updated yet.
-  DEBUG_PRINT("lj: ins: %llx, startpc: %llx", (u64)ins, (u64)startpc);
+  DEBUG_PRINT("lj: ins: %lx, startpc: %lx", (u64)ins, (u64)startpc);
   if (ins < startpc) {
     DEBUG_PRINT("lj: ins < startpc, setting *pc = NO_BCPOS");
     *pc = NO_BCPOS;
     return ERR_OK;
   }
-  *pc = ins - startpc - 1;
-  DEBUG_PRINT("ins, startpc good: setting *pc = %llx", (u64)*pc);
+  *pc = (u32)(ins - startpc - 1);
+  DEBUG_PRINT("ins, startpc good: setting *pc = %lx", (u64)*pc);
   return ERR_OK;
 }
 
@@ -449,7 +449,7 @@ static EBPF_INLINE ErrorCode walk_luajit_stack(
     // root of the stack, which should never happen...
     TValue *frame = (TValue *)(record->luajitUnwindState.frame);
 
-    int diff = frame - L->stack;
+    int diff = (int)(frame - L->stack);
     DEBUG_PRINT("lj: distance to bot: %d", diff);
 
     if (diff <= 2) {
@@ -509,7 +509,7 @@ static EBPF_INLINE ErrorCode walk_luajit_stack(
         done_with_lua = !prev;
 
         unwind_native_frame(
-          info, &record->state, ((u32)(record->state.text_section_id >> 32)) == LUAJIT_JIT_FILE_ID);
+          info, &record->state, ((u32)(record->state.text_section_id >> 32)) == LUAJIT_JIT_MARKER);
         if ((err = resolve_unwind_mapping(record, next_unwinder)) != ERR_OK) {
           *next_unwinder = PROG_UNWIND_STOP;
           return err;
@@ -576,7 +576,7 @@ find_context(struct pt_regs *ctx, PerCPURecord *record, const LuaJITProcInfo *in
   // our unwinder with a token file ID. Then we fire a pid event which will call SynchronizeMappings
   // in the HA which will overlay the big anonymous/executable memory range with the actual mappings
   // for each trace with a stack adjustment stored in the low bits.
-  if (high == LUAJIT_JIT_FILE_ID) {
+  if (high == LUAJIT_JIT_MARKER) {
     record->luajitUnwindState.is_jit = true;
 
     // Once the HA fills in text_section_bias with G we'll stop sending these report_pids.
@@ -662,7 +662,7 @@ find_context(struct pt_regs *ctx, PerCPURecord *record, const LuaJITProcInfo *in
   }
 
   // The JIT doesn't update base as it goes but it does update G.jit_base.
-  if (high == LUAJIT_JIT_FILE_ID) {
+  if (high == LUAJIT_JIT_MARKER) {
     record->luajitUnwindState.frame = scr->G.jit_base - 1;
   }
   // otherwise, if the first unwinder was Luajit, then we're in
@@ -699,7 +699,6 @@ static EBPF_INLINE int unwind_luajit(struct pt_regs *ctx)
   LuaJITProcInfo *info = bpf_map_lookup_elem(&luajit_procs, &pid);
   if (!info) {
     DEBUG_PRINT("lj: no LuaJIT introspection data");
-    error = ERR_LUAJIT_NO_PROC_INFO;
     increment_metric(metricID_UnwindLuaJITErrNoProcInfo);
     goto exit;
   }
@@ -717,7 +716,6 @@ static EBPF_INLINE int unwind_luajit(struct pt_regs *ctx)
 
 exit:
   state->unwind_error = error;
-  tail_call(ctx, unwinder);
-  return -1;
+  return tail_call(ctx, record, unwinder);
 }
 MULTI_USE_FUNC(unwind_luajit)

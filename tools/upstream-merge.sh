@@ -5,12 +5,16 @@
 # Finds the merge base, identifies all upstream commits past it, and
 # merges the largest prefix that doesn't require human intervention.
 # After merging, a smoke test is run to verify the result; if it fails
-# the script binary-searches for the last commit that passes.
+# the script binary-searches for the last commit that passes. The default
+# smoke test only type-checks (go vet), which catches the common case of
+# upstream changing an API that fork-only code uses without any textual
+# conflict.
 #
 # Auto-resolvable conflicts:
 #   * support/ebpf/tracer.ebpf.{amd64,arm64} — rebuilt from merged sources
 #   * support/ebpf/errors.h — regenerated from errors.json and clang-formatted
-#   * go.mod / go.sum — accept upstream, then `go mod tidy`
+#   * go.mod / go.sum (root and nested modules) — accept upstream, re-add
+#     fork-only requires/replaces, then `go mod tidy`
 #
 # Everything else is considered a "real" conflict and the script stops
 # before it, leaving you with the largest clean merge possible.
@@ -21,19 +25,29 @@
 # Options:
 #   --no-fetch          Skip 'git fetch' (useful when you already fetched)
 #   --no-smoke          Skip the post-merge smoke test
+#   --full-smoke        Also link test binaries and run `make test` (slow;
+#                       needs the Rust symblib-capi lib built)
 #   --leave-conflicted  After the clean prefix is merged, attempt the next
 #                       blocking commit and leave any unresolved conflicts
 #                       in the working tree for manual resolution. Auto-
 #                       resolvable bits (BPF blobs, go.mod, metrics) are
 #                       still applied. Exits 0 — you finish with
 #                       `git add … && git commit`.
-#   --fresh             Delete an existing upstream-merge branch and start
+#   --fresh             Delete an existing working branch and start
 #                       over from ORIGIN_REF.
+#   --branch NAME       Working branch name (default: upstream-merge). Use a
+#                       per-cycle name (e.g. upstream-merge-2017) when an
+#                       older upstream-merge branch is still checked out in
+#                       another worktree.
+#   --regen             Don't merge. For a hand-resolved merge in progress:
+#                       regenerate metrics/ids.go and support/types.go, rebuild
+#                       the BPF blobs, re-emit errors.h, stage all of them, and
+#                       run the smoke test. Commit afterwards yourself.
 #   -h, --help          Show this help
 #
 # Defaults: upstream/main and origin/main.
 #
-# Iteration: if the upstream-merge branch already exists, the script picks
+# Iteration: if the working branch already exists, the script picks
 # up from its tip so each run advances the same branch. Pass --fresh to
 # discard prior progress and restart from ORIGIN_REF.
 
@@ -42,7 +56,18 @@ set -euo pipefail
 # ── smoke-test commands ────────────────────────────────────────────────
 # All must pass for a merge to be accepted.  Add more entries as needed.
 
+# Type-check every package, tests included, then run the unit tests. The
+# disabled vet analyzers flag pre-existing style issues upstream and the fork
+# both carry.
 SMOKE_CMDS=(
+    "CGO_ENABLED=1 go vet -composites=false -unreachable=false -unsafeptr=false ./..."
+    # types.go must match what upstream's generator produces from types_def.go.
+    "(cd support && ./generate.sh); rc=\$?; rm -rf support/_obj support/types_gen.go; exit \$rc"
+    # Unit tests (~1 min). Everything links without the Rust symblib-capi lib
+    # except its own Go wrapper, so skip that one. Needs `make test-deps` once.
+    "CGO_ENABLED=1 go test \$(go list ./... | grep -v /rust-crates/symblib-capi/)"
+)
+FULL_SMOKE_CMDS=(
     "go test -run ^$ ./..."
     "make test"
 )
@@ -55,15 +80,20 @@ DO_FETCH=true
 DO_SMOKE=true
 LEAVE_CONFLICTED=false
 FORCE_FRESH=false
+BRANCH="upstream-merge"
+REGEN_ONLY=false
 
 args=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --no-fetch)         DO_FETCH=false; shift ;;
         --no-smoke)         DO_SMOKE=false; shift ;;
+        --full-smoke)       SMOKE_CMDS+=("${FULL_SMOKE_CMDS[@]}"); shift ;;
         --leave-conflicted) LEAVE_CONFLICTED=true; shift ;;
         --fresh)            FORCE_FRESH=true; shift ;;
-        -h|--help)          sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --branch)           BRANCH="$2"; shift 2 ;;
+        --regen)            REGEN_ONLY=true; shift ;;
+        -h|--help)          sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *)                  args+=("$1"); shift ;;
     esac
 done
@@ -80,7 +110,12 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 GIT_DIR="$(git rev-parse --git-dir)"
 
 BPF_BLOB_RE='^support/ebpf/tracer\.ebpf\.(amd64|arm64)$'
-GOMOD_RE='^go\.(mod|sum)$'
+# Any Go module's go.mod/go.sum: the root module plus nested ones such as
+# tools/luajitoffsets. internal/tools is matched separately below (taken
+# verbatim); LICENSES/ and testdata/ hold vendored or fixture modules that are
+# never tidied, so a conflict there is a real one.
+GOMOD_RE='^(.+/)?go\.(mod|sum)$'
+GOMOD_SKIP_RE='^(internal/tools/|LICENSES/)|/testdata/'
 TOOLS_GOMOD_RE='^internal/tools/go\.(mod|sum)$'
 
 # Metrics-related files. parca-specific metrics live alongside upstream's; when
@@ -114,7 +149,7 @@ unmerged_files() {
 is_auto_resolvable_path() {
     local f="$1"
     [[ "$f" =~ $BPF_BLOB_RE \
-    || "$f" =~ $GOMOD_RE \
+    || ( "$f" =~ $GOMOD_RE && ! "$f" =~ $GOMOD_SKIP_RE ) \
     || "$f" =~ $TOOLS_GOMOD_RE \
     || "$f" =~ $METRICS_JSON_RE \
     || "$f" =~ $METRICS_GEN_RE \
@@ -242,13 +277,20 @@ regen_metrics() {
     ) || return 1
     (
         cd "$REPO_ROOT/support" || exit 1
+        # Use the exact cgo invocation from upstream's support/generate.sh so
+        # flags it adds (e.g. -DEBPF_TRACE_HEADER_ONLY, #1914) are picked up.
+        local godefs
+        godefs=$(grep -o 'go tool cgo -godefs.*types_def\.go' generate.sh) || {
+            echo "cannot find the cgo -godefs command in support/generate.sh" >&2
+            exit 1
+        }
         # Start fresh: emit license header, then append cgo -godefs output.
         cat > types.go <<'HEADER'
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
 HEADER
-        go tool cgo -godefs types_def.go >> types.go || exit 1
+        eval "$godefs" >> types.go || exit 1
         # Set the correct package path (matches support/generate.sh).
         sed -i 's|^package support$|package support // import "go.opentelemetry.io/ebpf-profiler/support"|' types.go
         # Format the regenerated file (now that types.go is well-formed).
@@ -274,21 +316,63 @@ regen_errors_h() {
     git add support/ebpf/errors.h || return 1
 }
 
+# Resolve a Go module's go.mod/go.sum conflict: take upstream's files, put back
+# the requires and replaces only the fork has, then `go mod tidy`.
+#
+# Taking theirs alone would drop fork-only deps (oomprof, usdt, testcontainers,
+# ...) from go.mod, and tidy would re-add them at whatever version is newest,
+# silently bumping anything the fork pinned. Shared deps keep upstream's
+# version: renovate keeps those current upstream and the fork rarely runs ahead.
+resolve_gomod() {
+    local dir="$1" modfile="$1/go.mod" ours theirs p
+    if [[ -n "$(git ls-files -u -- "$modfile")" ]]; then
+        ours=$(git show ":2:$modfile" | go mod edit -json /dev/stdin)     || return 1
+        git checkout --theirs -- "$modfile"                               || return 1
+        theirs=$(go mod edit -json "$modfile")                            || return 1
+        # Insert into the first require block rather than `go mod edit -require`,
+        # which appends to the last (indirect) block; tidy fixes `// indirect`
+        # markers and ordering but never moves a line between blocks.
+        local extra
+        extra=$(jq -rn --argjson o "$ours" --argjson t "$theirs" '
+            ($t.Require // [] | map(.Path)) as $tp
+            | $o.Require // [] | .[] | select(.Path | IN($tp[]) | not)
+            | "\t\(.Path) \(.Version)"')                              || return 1
+        if [[ -n "$extra" ]]; then
+            EXTRA="$extra" awk '!done && /^require \($/ { print; print ENVIRON["EXTRA"]; done = 1; next } { print }' \
+                "$modfile" > "$modfile.tmp" && mv "$modfile.tmp" "$modfile" || return 1
+        fi
+        while IFS= read -r p; do
+            [[ -n "$p" ]] && { go mod edit -replace="$p" "$modfile"       || return 1; }
+        done < <(jq -rn --argjson o "$ours" --argjson t "$theirs" '
+            ($t.Replace // [] | map(.Old.Path)) as $tp
+            | $o.Replace // [] | .[] | select(.Old.Path | IN($tp[]) | not)
+            | "\(.Old.Path)\(if .Old.Version then "@" + .Old.Version else "" end)=\(.New.Path)\(if .New.Version then "@" + .New.Version else "" end)"')
+    fi
+    if [[ -n "$(git ls-files -u -- "$dir/go.sum")" ]]; then
+        git checkout --theirs -- "$dir/go.sum"                            || return 1
+    fi
+    ( cd "$REPO_ROOT/$dir" && go mod tidy )                               || return 1
+    git add "$modfile" "$dir/go.sum"                                      || return 1
+}
+
 # Resolve auto-resolvable conflicts in the working tree and commit.
 # Uses explicit || return 1 so this is safe to call from condition
 # contexts (e.g. inside an `if`) where set -e is suppressed.
 auto_resolve() {
-    local has_bpf=false has_gomod=false has_tools_gomod=false has_metrics=false has_errors=false f
-    local -a conflicts
+    local has_bpf=false has_tools_gomod=false has_metrics=false has_errors=false f
+    local -a conflicts gomod_dirs=()
     mapfile -t conflicts < <(unmerged_files)
 
     for f in "${conflicts[@]}"; do
         case "$f" in
             support/ebpf/tracer.ebpf.*)                  has_bpf=true ;;
             support/ebpf/errors.h)                       has_errors=true ;;
-            go.mod|go.sum)                               has_gomod=true ;;
             internal/tools/go.mod|internal/tools/go.sum) has_tools_gomod=true ;;
         esac
+        if [[ "$f" =~ $GOMOD_RE && ! "$f" =~ $GOMOD_SKIP_RE ]]; then
+            local d; d=$(dirname "$f")
+            [[ " ${gomod_dirs[*]} " == *" $d "* ]] || gomod_dirs+=("$d")
+        fi
         if [[ "$f" =~ $METRICS_JSON_RE \
            || "$f" =~ $METRICS_GEN_RE \
            || "$f" =~ $METRICS_SWAP_RE ]]; then
@@ -296,14 +380,11 @@ auto_resolve() {
         fi
     done
 
-    # ── go.mod / go.sum ────────────────────────────────────────────────
-    if $has_gomod; then
-        log "  go.mod/go.sum → accept upstream + go mod tidy"
-        git checkout --theirs -- go.mod                              || return 1
-        git checkout --theirs -- go.sum 2>/dev/null || true
-        ( cd "$REPO_ROOT" && go mod tidy )                           || return 1
-        git add go.mod go.sum                                        || return 1
-    fi
+    # ── go.mod / go.sum (root and nested modules) ──────────────────────
+    for f in "${gomod_dirs[@]}"; do
+        log "  $f/go.mod/go.sum → accept upstream, keep fork-only requires, go mod tidy"
+        resolve_gomod "$f"                                           || return 1
+    done
 
     # ── internal/tools/go.mod / .sum ───────────────────────────────────
     # After upstream PR #1330 the tools module is a thin shell holding only
@@ -370,7 +451,7 @@ auto_resolve() {
             cat "$merge_msg"
             echo ""
             echo "Auto-resolved:"
-            if $has_gomod;       then echo "  - go.mod/go.sum: accepted upstream, ran go mod tidy"; fi
+            for f in "${gomod_dirs[@]}"; do echo "  - $f/go.mod/go.sum: accepted upstream, kept fork-only requires, ran go mod tidy"; done
             if $has_tools_gomod; then echo "  - internal/tools/go.mod/sum: accepted upstream verbatim"; fi
             if $has_metrics;     then echo "  - metrics: upstream IDs preserved, parca renumbered after, generated files regenerated"; fi
             if $has_bpf;         then echo "  - BPF blobs: rebuilt from merged C sources"; fi
@@ -385,9 +466,12 @@ auto_resolve() {
 # Run every command in SMOKE_CMDS.  Returns 0 only if all pass.
 run_smoke() {
     local cmd rc=0
+    local out="$GIT_DIR/upstream-merge-smoke.log"
     for cmd in "${SMOKE_CMDS[@]}"; do
         log "  smoke: $cmd"
-        if ! ( cd "$REPO_ROOT" && eval "$cmd" ); then
+        if ! ( cd "$REPO_ROOT" && eval "$cmd" ) >"$out" 2>&1; then
+            warn "  smoke failed; last lines (full log: $out):"
+            tail -n 15 "$out" | sed 's/^/      /' >&2
             rc=1
             break
         fi
@@ -435,6 +519,34 @@ merge_from_base() {
     return 1
 }
 
+# ── --regen: refresh generated files for a manual resolution ──────────
+
+if $REGEN_ONLY; then
+    cd "$REPO_ROOT"
+    log "Regenerating metrics/ids.go and support/types.go"
+    regen_metrics || die "regenerating metrics/types failed"
+    for f in support/ebpf/tracer.ebpf.amd64 support/ebpf/tracer.ebpf.arm64; do
+        # A conflicted blob has no usable content; any version will be rebuilt.
+        if git ls-files -u -- "$f" | grep -q .; then
+            git checkout --theirs -- "$f"
+        fi
+    done
+    log "Rebuilding BPF blobs"
+    make -C support/ebpf amd64 >/dev/null || die "BPF amd64 build failed"
+    make -C support/ebpf arm64 >/dev/null || die "BPF arm64 build failed"
+    git add support/ebpf/tracer.ebpf.amd64 support/ebpf/tracer.ebpf.arm64
+    log "Regenerating errors.h"
+    regen_errors_h || die "regenerating errors.h failed"
+    if $DO_SMOKE; then
+        log "Running smoke tests…"
+        run_smoke || die "Smoke tests failed"
+        log "Smoke tests passed"
+    fi
+    left=$(git diff --name-only --diff-filter=U)
+    [[ -z "$left" ]] || warn "Still unmerged: $(echo $left)"
+    exit 0
+fi
+
 # ── preflight ──────────────────────────────────────────────────────────
 
 [[ -z "$(git status --porcelain --untracked-files=no)" ]] || die "Working tree is dirty; commit or stash first"
@@ -460,7 +572,6 @@ ORIGINAL_REF=$(git symbolic-ref --quiet HEAD 2>/dev/null || git rev-parse HEAD)
 # Working branch. If it already exists, each invocation continues from its
 # tip — that's what makes the iterative "run, hand-resolve one commit, run
 # again" loop work without ceremony. --fresh forces a clean restart.
-BRANCH="upstream-merge"
 CONTINUING=false
 if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
     if $FORCE_FRESH; then

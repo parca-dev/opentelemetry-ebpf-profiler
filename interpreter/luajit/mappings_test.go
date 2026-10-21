@@ -72,10 +72,10 @@ func TestSynchronizeMappings(t *testing.T) {
 			require.NoError(t, err)
 		}
 		initial := tc.calls[0]
-		require.Empty(t, lj.jitRegions[initial])
+		require.Empty(t, lj.jitRegions[keyForMapping(&initial)])
 		require.Empty(t, lj.prefixes[regionKey{initial.Vaddr, initial.Vaddr + initial.Length}])
 		final := tc.calls[len(tc.calls)-1]
-		require.NotEmpty(t, lj.jitRegions[final])
+		require.NotEmpty(t, lj.jitRegions[keyForMapping(&final)])
 		require.NotEmpty(t, lj.prefixes[regionKey{final.Vaddr, final.Vaddr + final.Length}])
 		err := lj.Detach(ebpf, 0)
 		require.NoError(t, err)

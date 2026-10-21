@@ -237,13 +237,15 @@ func (pm *ProcessManager) handleNewInterpreter(pr process.Process, m *process.Ra
 // for every attacher whose Match returns true for the given mapping.
 // Attach may be called multiple times for the same attacher if the process
 // has more than one matching mapping. The caller must hold pm.mu for writing.
-func (pm *ProcessManager) attachProbesForMapping(pr process.Process, m *process.RawMapping) {
+func (pm *ProcessManager) attachProbesForMapping(pr process.Process, m *process.RawMapping,
+	fileID libpf.FileID, elfRef *pfelf.Reference,
+) {
 	pid := pr.PID()
 	for _, a := range pm.probeAttachers {
 		if !a.Match(pr, m) {
 			continue
 		}
-		if err := a.Attach(pr, m); err != nil {
+		if err := a.Attach(pr, m, fileID, elfRef); err != nil {
 			log.Errorf("Failed to attach probe for PID %d, mapping %s: %v", pid, m.Path, err)
 			continue
 		}
@@ -403,11 +405,17 @@ var errInvalidVirtualAddress = errors.New("invalid ELF virtual address")
 func (pm *ProcessManager) newFrameMapping(pr process.Process, m *process.RawMapping,
 	anonymousMappingsWanted bool,
 ) (libpf.FrameMapping, bool, error) {
-	// Open the mapping's own file via OpenELFMapping (VDSO from memory plus
-	// /proc/<pid>/map_files for deleted-file safety); auxiliary opens such as
-	// .gnu_debuglink targets go through pr.OpenELF.
+	// Open the mapping's own file via OpenMappingFile, which can open deleted
+	// or replaced files (e.g. via /proc/<pid>/map_files) and VDSO from process
+	// memory. Auxiliary opens such as .gnu_debuglink targets go through the
+	// pr fs.FS.
 	elfRef := pfelf.NewReferenceWithOpenFunc(m.Path, pr, func() (*pfelf.File, error) {
-		return process.OpenELFMapping(pr, m)
+		f, err := pr.OpenMappingFile(m)
+		if err != nil {
+			return nil, fmt.Errorf("OpenMappingFile path=%q vaddr=%#x: %w",
+				m.Path, m.Vaddr, err)
+		}
+		return pfelf.NewFileFromFS(f)
 	})
 	defer elfRef.Close()
 
@@ -456,7 +464,7 @@ func (pm *ProcessManager) newFrameMapping(pr process.Process, m *process.RawMapp
 			anonymousMappingsWanted = updatedAnonymousMappingsWanted
 		}
 	}
-	pm.attachProbesForMapping(pr, m)
+	pm.attachProbesForMapping(pr, m, info.mappingFile.Value().FileID, elfRef)
 	pm.mu.Unlock()
 
 	return libpf.NewFrameMapping(libpf.FrameMappingData{
@@ -902,6 +910,18 @@ func (pm *ProcessManager) metaForPID(pid libpf.PID) (process.Meta, attribute.Set
 		return procInfo.meta, procInfo.processContext.ResourceAttrs
 	}
 	return process.Meta{}, attribute.Set{}
+}
+
+// ThreadLabelDecoderForPID returns a decoder for pid's per-thread labels, or nil
+// when pid is untracked or publishes no schema. Safe to use after the lock
+// drops, see processcontext.Info.
+func (pm *ProcessManager) ThreadLabelDecoderForPID(pid libpf.PID) libpf.ThreadLabelDecoder {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	if procInfo, ok := pm.pidToProcessInfo[pid]; ok {
+		return procInfo.processContext.ThreadLabelDecoder()
+	}
+	return nil
 }
 
 // findMappingForTrace locates the mapping for a given host trace.

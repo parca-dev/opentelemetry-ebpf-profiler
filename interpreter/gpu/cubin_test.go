@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"debug/elf"
 	"encoding/binary"
+	"io"
 	"testing"
 
 	sasstable "github.com/gnurizen/sass-table"
@@ -177,7 +178,9 @@ func TestCubinProcessOpenMappingFileParses(t *testing.T) {
 	defer rac.Close()
 
 	// debug/elf is what every downstream consumer reaches for.
-	ef, err := elf.NewFile(rac)
+	ra, ok := rac.(io.ReaderAt)
+	require.True(t, ok, "OpenMappingFile result must implement io.ReaderAt")
+	ef, err := elf.NewFile(ra)
 	require.NoError(t, err)
 	defer ef.Close()
 

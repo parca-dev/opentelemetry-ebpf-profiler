@@ -164,7 +164,7 @@ func TestAddTraceAndTimes(t *testing.T) {
 	require.Len(t, outputs, 1, "timing matched, should produce one output")
 
 	out := outputs[0]
-	assert.Equal(t, int64(1000), out.Meta.Value, "Value should be End-Start")
+	assert.Equal(t, []uint64{1000}, out.Meta.ContextValues, "value should be End-Start")
 	assert.Equal(t, "0", out.Trace.CustomLabels[libpf.Intern("cuda_device")].String())
 	assert.Equal(t, "7", out.Trace.CustomLabels[libpf.Intern("cuda_stream")].String())
 
@@ -233,12 +233,12 @@ func TestAddTimesMultiPIDBatch(t *testing.T) {
 
 	require.Contains(t, byPID, pidA)
 	outA := byPID[pidA]
-	assert.Equal(t, int64(500), outA.Meta.Value)
+	assert.Equal(t, uint64(500), outA.Meta.ContextValues[0])
 	assert.Equal(t, "kernelA", outA.Trace.Frames[0].Value().FunctionName.String())
 
 	require.Contains(t, byPID, pidB)
 	outB := byPID[pidB]
-	assert.Equal(t, int64(800), outB.Meta.Value)
+	assert.Equal(t, uint64(800), outB.Meta.ContextValues[0])
 	assert.Equal(t, "kernelB", outB.Trace.Frames[0].Value().FunctionName.String())
 }
 
@@ -272,7 +272,7 @@ func TestAddTimeThenTrace(t *testing.T) {
 	require.Len(t, finished, 1)
 
 	out := finished[0]
-	assert.Equal(t, int64(3000), out.Meta.Value)
+	assert.Equal(t, uint64(3000), out.Meta.ContextValues[0])
 	assert.Equal(t, "1", out.Trace.CustomLabels[libpf.Intern("cuda_device")].String())
 
 	cudaFrame := out.Trace.Frames[0].Value()
@@ -314,7 +314,7 @@ func TestCachedTemplateWithDifferentCorrelationIDs(t *testing.T) {
 		require.Len(t, outputs, 1, "corrID %d should produce one output", tc.corrID)
 
 		out := outputs[0]
-		assert.Equal(t, tc.offTime, out.Meta.Value)
+		assert.Equal(t, uint64(tc.offTime), out.Meta.ContextValues[0])
 
 		cudaFrame := out.Trace.Frames[0].Value()
 		assert.Equal(t, libpf.AddressOrLineno(0), cudaFrame.AddressOrLineno,
