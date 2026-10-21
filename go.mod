@@ -24,7 +24,7 @@ require (
 	github.com/mdlayher/kobject v0.0.0-20200520190114-19ca17470d7d
 	github.com/minio/sha256-simd v1.0.1
 	github.com/moby/moby/api v1.56.1
-	github.com/open-telemetry/sig-profiling/profcheck v0.0.0-20261002050819-d5b282b33a7f
+	github.com/open-telemetry/sig-profiling/profcheck v0.0.0-20261005030907-0dd094852c0b
 	github.com/parca-dev/oomprof v0.1.7
 	github.com/parca-dev/usdt v0.0.2
 	github.com/peterbourgon/ff/v3 v3.4.0
@@ -42,14 +42,14 @@ require (
 	go.opentelemetry.io/collector/receiver v1.68.0
 	go.opentelemetry.io/collector/receiver/receivertest v0.162.0
 	go.opentelemetry.io/collector/receiver/xreceiver v0.162.0
-	go.opentelemetry.io/otel v1.46.0
-	go.opentelemetry.io/otel/metric v1.46.0
+	go.opentelemetry.io/otel v1.47.0
+	go.opentelemetry.io/otel/metric v1.47.0
 	go.opentelemetry.io/proto/otlp v1.11.1
 	go.opentelemetry.io/proto/otlp/processcontext/v1development v0.4.1
 	go.opentelemetry.io/proto/otlp/profiles/v1development v0.4.1
 	go.uber.org/zap/exp v0.3.0
 	golang.org/x/arch v0.31.0
-	golang.org/x/exp v0.0.0-20260908205506-85c1c2202aba
+	golang.org/x/exp v0.0.0-20261005173118-76772065c9b0
 	golang.org/x/mod v0.41.0
 	golang.org/x/sync v0.23.0
 	golang.org/x/sys v0.48.0
@@ -133,9 +133,10 @@ require (
 	go.opentelemetry.io/collector/internal/componentalias v0.162.0 // indirect
 	go.opentelemetry.io/collector/pipeline v1.68.0 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.69.0 // indirect
+	go.opentelemetry.io/otel/log v1.47.0 // indirect
 	go.opentelemetry.io/otel/sdk v1.46.0 // indirect
 	go.opentelemetry.io/otel/sdk/metric v1.46.0 // indirect
-	go.opentelemetry.io/otel/trace v1.46.0 // indirect
+	go.opentelemetry.io/otel/trace v1.47.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.28.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
