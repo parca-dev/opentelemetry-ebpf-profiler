@@ -56,10 +56,9 @@ type ebpfMapsImpl struct {
 	RubyProcs          *cebpf.Map `name:"ruby_procs"`
 	V8Procs            *cebpf.Map `name:"v8_procs"`
 	BeamProcs          *cebpf.Map `name:"beam_procs"`
-	ApmIntProcs        *cebpf.Map `name:"apm_int_procs"`
+	LuaJitProcs        *cebpf.Map `name:"luajit_procs"`
 	GoProcs            *cebpf.Map `name:"go_procs"`
 	ClProcs            *cebpf.Map `name:"cl_procs"`
-	LuaJitProcs        *cebpf.Map `name:"luajit_procs"`
 	ThreadContextProcs *cebpf.Map `name:"thread_context_procs"`
 
 	// Stackdelta and process related eBPF maps
@@ -455,8 +454,6 @@ func (impl *ebpfMapsImpl) getInterpreterTypeMap(typ libpf.InterpreterType) (*ceb
 		return impl.V8Procs, nil
 	case libpf.BEAM:
 		return impl.BeamProcs, nil
-	case libpf.APMInt:
-		return impl.ApmIntProcs, nil
 	case libpf.Go:
 		return impl.GoProcs, nil
 	case libpf.CustomLabels:

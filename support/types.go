@@ -64,7 +64,7 @@ const (
 const UnwindInfoMaxEntries = 0x4000
 
 const (
-	MetricIDBeginCumulative = 0x86
+	MetricIDBeginCumulative = 0x82
 )
 
 const (
@@ -90,8 +90,8 @@ const (
 	HSTSIDSegMapMask      = 0xffffffffffffff
 )
 
-type ApmSpanID [8]byte
-type ApmTraceID [16]byte
+type SpanID [8]byte
+type TraceID [16]byte
 type CustomLabel struct {
 	Key [26]uint8
 	Val [54]uint8
@@ -168,22 +168,22 @@ type TLSVarInfo struct {
 	Pad_cgo_0  [1]byte
 }
 type Trace struct {
-	Pid                uint32
-	Tid                uint32
-	Ktime              uint64
-	Comm               [16]uint8
-	Apm_transaction_id [8]byte
-	Apm_trace_id       [16]byte
-	Custom_labels      CustomLabelsArray
-	Cpu_id             uint32
-	Context_value_end  uint16
-	Kernel_frame_end   uint16
-	Frame_data_end     uint16
-	Thread_label_end   uint16
-	Golang_label_end   uint16
-	Variable_data_end  uint16
-	Num_frames         uint16
-	Origin             uint16
+	Pid               uint32
+	Tid               uint32
+	Ktime             uint64
+	Comm              [16]uint8
+	Span_id           [8]byte
+	Trace_id          [16]byte
+	Custom_labels     CustomLabelsArray
+	Cpu_id            uint32
+	Context_value_end uint16
+	Kernel_frame_end  uint16
+	Frame_data_end    uint16
+	Thread_label_end  uint16
+	Golang_label_end  uint16
+	Variable_data_end uint16
+	Num_frames        uint16
+	Origin            uint16
 }
 type UnwindInfo struct {
 	Flags       uint8
@@ -194,9 +194,6 @@ type UnwindInfo struct {
 	AuxParam    int32
 }
 
-type ApmIntProcInfo struct {
-	Tls TLSVarInfo
-}
 type BEAMProcInfo struct {
 	Bias                   uint64
 	R                      uint64
@@ -367,7 +364,6 @@ const (
 	Sizeof_TraceWithData = 0x370 + 0x6320
 	Sizeof_GolangLabel   = 0x50
 
-	sizeof_ApmIntProcInfo        = 0xc
 	sizeof_PHPProcInfo           = 0x18
 	sizeof_RubyProcInfo          = 0x40
 	sizeof_ThreadContextProcInfo = 0xc
@@ -530,51 +526,47 @@ var MetricsTranslation = []metrics.MetricID{
 	0x53: metrics.IDUnwindNativeErrChaseIrqStackLink,
 	0x54: metrics.IDUnwindV8ErrNoProcInfo,
 	0x55: metrics.IDUnwindNativeErrBadUnwindInfoIndex,
-	0x56: metrics.IDUnwindApmIntErrReadTsdBase,
-	0x57: metrics.IDUnwindApmIntErrReadCorrBufPtr,
-	0x58: metrics.IDUnwindApmIntErrReadCorrBuf,
-	0x59: metrics.IDUnwindApmIntReadSuccesses,
-	0x5a: metrics.IDUnwindDotnetAttempts,
-	0x5b: metrics.IDUnwindDotnetFrames,
-	0x5d: metrics.IDUnwindDotnetErrBadFP,
-	0x5e: metrics.IDUnwindDotnetErrCodeHeader,
-	0x5f: metrics.IDUnwindDotnetErrCodeTooLarge,
-	0x70: metrics.IDUnwindRubyErrInvalidIseq,
-	0x71: metrics.IDUnwindRubyErrReadMethodDef,
-	0x72: metrics.IDUnwindRubyErrReadMethodType,
-	0x73: metrics.IDUnwindRubyErrReadSvar,
-	0x74: metrics.IDUnwindRubyErrReadRbasicFlags,
-	0x75: metrics.IDUnwindRubyErrCmeMaxEp,
-	0x76: metrics.IDUnwindErrBadDTVRead,
-	0x6b: metrics.IDUnwindNodeCustomLabelsAttempts,
-	0x6c: metrics.IDUnwindNodeCustomLabelsSuccesses,
-	0x6d: metrics.IDUnwindNodeCustomLabelsFailures,
-	0x67: metrics.IDUnwindLuaJITAttempts,
-	0x68: metrics.IDUnwindLuaJITErrNoProcInfo,
-	0x60: metrics.IDUnwindNativeCustomLabelsErrReadTsdBase,
-	0x61: metrics.IDUnwindNativeCustomLabelsErrReadData,
-	0x62: metrics.IDUnwindNativeCustomLabelsErrReadKey,
-	0x63: metrics.IDUnwindNativeCustomLabelsErrReadValue,
-	0x64: metrics.IDUnwindNativeCustomLabelsReadSuccesses,
-	0x65: metrics.IDUnwindNativeCustomLabelsAddErrors,
-	0x66: metrics.IDUnwindNativeCustomLabelsAddSuccesses,
-	0x69: metrics.IDUnwindLuaJITErrNoContext,
-	0x6a: metrics.IDUnwindLuaJITErrLMismatch,
-	0x6e: metrics.IDUnwindGoLabelsAttempts,
-	0x6f: metrics.IDUnwindGoLabelsFailures,
-	0x77: metrics.IDBPFRingbufOutputErr,
-	0x78: metrics.IDUnwindNativeErrNoVMA,
-	0x79: metrics.IDUnwindNativeErrUnsupportedAnonymousMapping,
-	0x7a: metrics.IDUnwindNativeErrNonExecutableVMA,
-	0x7c: metrics.IDSamplesSkippedProcessTooNew,
-	0x7d: metrics.IDNumSyncsFromPrctl,
-	0x7e: metrics.IDNumPriorityEventDeferred,
-	0x7f: metrics.IDUnwindGoAsmcgocallAttempts,
-	0x80: metrics.IDUnwindGoAsmcgocallSuccess,
-	0x81: metrics.IDUnwindGoAsmcgocallUnwindFailure,
-	0x82: metrics.IDUnwindThreadContextErrReadTlsPtr,
-	0x83: metrics.IDUnwindThreadContextErrReadThreadCtxBuf,
-	0x84: metrics.IDUnwindThreadContextReadSuccesses,
-	0x85: metrics.IDUnwindThreadContextAttrsTruncated,
-	0x7b: metrics.IDCUPTIEventsRingbufFull,
+	0x56: metrics.IDUnwindDotnetAttempts,
+	0x57: metrics.IDUnwindDotnetFrames,
+	0x59: metrics.IDUnwindDotnetErrBadFP,
+	0x5a: metrics.IDUnwindDotnetErrCodeHeader,
+	0x5b: metrics.IDUnwindDotnetErrCodeTooLarge,
+	0x6c: metrics.IDUnwindRubyErrInvalidIseq,
+	0x6d: metrics.IDUnwindRubyErrReadMethodDef,
+	0x6e: metrics.IDUnwindRubyErrReadMethodType,
+	0x6f: metrics.IDUnwindRubyErrReadSvar,
+	0x70: metrics.IDUnwindRubyErrReadRbasicFlags,
+	0x71: metrics.IDUnwindRubyErrCmeMaxEp,
+	0x72: metrics.IDUnwindErrBadDTVRead,
+	0x67: metrics.IDUnwindNodeCustomLabelsAttempts,
+	0x68: metrics.IDUnwindNodeCustomLabelsSuccesses,
+	0x69: metrics.IDUnwindNodeCustomLabelsFailures,
+	0x63: metrics.IDUnwindLuaJITAttempts,
+	0x64: metrics.IDUnwindLuaJITErrNoProcInfo,
+	0x5c: metrics.IDUnwindNativeCustomLabelsErrReadTsdBase,
+	0x5d: metrics.IDUnwindNativeCustomLabelsErrReadData,
+	0x5e: metrics.IDUnwindNativeCustomLabelsErrReadKey,
+	0x5f: metrics.IDUnwindNativeCustomLabelsErrReadValue,
+	0x60: metrics.IDUnwindNativeCustomLabelsReadSuccesses,
+	0x61: metrics.IDUnwindNativeCustomLabelsAddErrors,
+	0x62: metrics.IDUnwindNativeCustomLabelsAddSuccesses,
+	0x65: metrics.IDUnwindLuaJITErrNoContext,
+	0x66: metrics.IDUnwindLuaJITErrLMismatch,
+	0x6a: metrics.IDUnwindGoLabelsAttempts,
+	0x6b: metrics.IDUnwindGoLabelsFailures,
+	0x73: metrics.IDBPFRingbufOutputErr,
+	0x74: metrics.IDUnwindNativeErrNoVMA,
+	0x75: metrics.IDUnwindNativeErrUnsupportedAnonymousMapping,
+	0x76: metrics.IDUnwindNativeErrNonExecutableVMA,
+	0x78: metrics.IDSamplesSkippedProcessTooNew,
+	0x79: metrics.IDNumSyncsFromPrctl,
+	0x7a: metrics.IDNumPriorityEventDeferred,
+	0x7b: metrics.IDUnwindGoAsmcgocallAttempts,
+	0x7c: metrics.IDUnwindGoAsmcgocallSuccess,
+	0x7d: metrics.IDUnwindGoAsmcgocallUnwindFailure,
+	0x7e: metrics.IDUnwindThreadContextErrReadTlsPtr,
+	0x7f: metrics.IDUnwindThreadContextErrReadThreadCtxBuf,
+	0x80: metrics.IDUnwindThreadContextReadSuccesses,
+	0x81: metrics.IDUnwindThreadContextAttrsTruncated,
+	0x77: metrics.IDCUPTIEventsRingbufFull,
 }

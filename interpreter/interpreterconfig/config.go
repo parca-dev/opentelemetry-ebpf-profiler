@@ -6,7 +6,6 @@ package interpreterconfig // import "go.opentelemetry.io/ebpf-profiler/interpret
 
 import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
-	"go.opentelemetry.io/ebpf-profiler/interpreter/apmint"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/beam"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/dotnet"
 	golang "go.opentelemetry.io/ebpf-profiler/interpreter/go"
@@ -130,9 +129,9 @@ func (cfg *Config) IsMapEnabled(mapName string) bool {
 		return !cfg.BEAM.IsDisabled()
 	case luajit.BPFMapName:
 		return !cfg.LuaJIT.IsDisabled()
-	case golang.BPFMapName, apmint.BPFMapName, nodev8.BPFMapName:
-		// go_procs is read from collect_trace (preloaded into the PerCPURecord)
-		// and apm_int_procs from unwind_stop, so both must always be loaded
+	case golang.BPFMapName, threadcontext.BPFMapName, nodev8.BPFMapName:
+		// go_procs is read from collect_trace (preloaded into the PerCPURecord),
+		// and thread_context_procs from unwind_stop, so both must always be loaded
 		// regardless of interpreter configuration.
 		// v8_procs is a parca fork addition to this list — the reference lives
 		// in a parca-side eBPF change to unwind_stop and would otherwise break

@@ -128,7 +128,6 @@ func buildGpuPCMeta(cpuTrace *SymbolizedCudaTrace, pid uint32,
 		meta.ContainerID = cpuTrace.Meta.ContainerID
 		meta.TID = cpuTrace.Meta.TID
 		meta.CPU = cpuTrace.Meta.CPU
-		meta.APMServiceName = cpuTrace.Meta.APMServiceName
 		meta.EnvVars = cpuTrace.Meta.EnvVars
 	}
 	return meta
