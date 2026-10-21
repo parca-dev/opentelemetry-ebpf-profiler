@@ -414,20 +414,15 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace, profileType *sa
 
 	pid := bpfTrace.PID
 	trace := &libpf.Trace{
-		Frames:       make(libpf.Frames, 0, int(bpfTrace.NumKernelFrames)+int(bpfTrace.NumFrames)),
+		Frames:       make(libpf.Frames, 0, len(bpfTrace.KernelFrames)+int(bpfTrace.NumFrames)),
 		CustomLabels: bpfTrace.CustomLabels,
 	}
 
 	cacheMiss := uint64(0)
 	cacheHit := uint64(0)
 
-	numKernelFrames := int(bpfTrace.NumKernelFrames)
-	if numKernelFrames > len(bpfTrace.FrameData) {
-		log.Errorf("Kernel frame count %d exceeds frame data length %d", numKernelFrames, len(bpfTrace.FrameData))
-		numKernelFrames = len(bpfTrace.FrameData)
-	}
-	if numKernelFrames > 0 {
-		hits, misses := pm.appendKernelFrames(bpfTrace.FrameData[:numKernelFrames], &trace.Frames)
+	if len(bpfTrace.KernelFrames) > 0 {
+		hits, misses := pm.appendKernelFrames(bpfTrace.KernelFrames, &trace.Frames)
 		cacheHit += hits
 		cacheMiss += misses
 	}
@@ -435,7 +430,7 @@ func (pm *ProcessManager) HandleTrace(bpfTrace *libpf.EbpfTrace, profileType *sa
 	// below counts only the user frames decoded by this loop.
 	kernelFramesLen := len(trace.Frames)
 
-	userFrameData := bpfTrace.FrameData[numKernelFrames:]
+	userFrameData := bpfTrace.FrameData
 	for frames := libpf.EbpfFrame(userFrameData); len(frames) > 0; {
 		fl := int(frames.Length())
 		if fl == 0 || fl > len(frames) {
