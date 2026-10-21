@@ -36,13 +36,20 @@ import (
 // Records all the "global" pointers we've seen.
 type vmMap map[libpf.Address]struct{}
 
-// Records all the JIT regions we've seen, value is SynchronizeMappings
-// generation.
-type regionMap map[process.RawMapping]int
-
 type regionKey struct {
 	start, end uint64
 }
+
+func keyForMapping(m *process.RawMapping) regionKey {
+	return regionKey{
+		start: m.Vaddr,
+		end:   m.Vaddr + m.Length,
+	}
+}
+
+// Records all the JIT regions we've seen, value is SynchronizeMappings
+// generation.
+type regionMap map[regionKey]uint32
 
 type luajitData struct {
 	// The distance from the "g" pointer in the GG_State struct to the start of the dispatch table.
@@ -74,7 +81,7 @@ type luajitInstance struct {
 
 	// Hash of the traces for each vm
 	traceHashes map[libpf.Address]uint64
-	cycle       int
+	cycle       uint32
 
 	g2Traces uint16
 }
@@ -256,8 +263,7 @@ func (l *luajitInstance) addJITRegion(ebpf interpreter.EbpfHandler, pid libpf.PI
 	}
 	logf("lj: add JIT region pid(%v) %#x:%#x", pid, start, end)
 	for _, prefix := range prefixes {
-		// TODO: fix these: WARN[0267] Failed to lookup file ID 0x2a00000000
-		fileID := support.LJFileId << 32
+		fileID := support.LJJitMarker << 32
 		if err := ebpf.UpdatePidInterpreterMapping(pid, prefix, support.ProgUnwindLuaJIT,
 			host.FileID(fileID), 0); err != nil {
 			return err
@@ -278,7 +284,7 @@ func (l *luajitInstance) addTrace(ebpf interpreter.EbpfHandler, pid libpf.PID, t
 	}
 	logf("lj: add trace mapping for pid(%v) %x:%x", pid, start, end)
 	for _, prefix := range prefixes {
-		fileID := support.LJFileId<<32 | spadjust
+		fileID := support.LJJitMarker<<32 | spadjust
 		if err := ebpf.UpdatePidInterpreterMapping(pid, prefix, support.ProgUnwindLuaJIT,
 			host.FileID(fileID), g); err != nil {
 			return nil, err
@@ -301,29 +307,34 @@ func (l *luajitInstance) synchronizeMappings(ebpf interpreter.EbpfHandler, pid l
 		if !m.IsAnonymous() || !m.IsExecutable() {
 			continue
 		}
-		l.jitRegions[*m] = cycle
+		l.jitRegions[keyForMapping(m)] = cycle
 	}
 
+	// NB: We can't use the approach of the v8 unwinder, which
+	// removes all the regions that don't appear in the latest
+	// generation, because regions can grow (and, in fact, they
+	// can grow _downward_). Rethink this approach and use a
+	// smarter algorithm if churn in pid interpreter mappings is a
+	// bottleneck.
+	//
 	// Remove old ones
-	for m, c := range l.jitRegions {
-		k := regionKey{start: m.Vaddr, end: m.Vaddr + m.Length}
+	for k, c := range l.jitRegions {
 		if c != cycle {
 			for _, prefix := range l.prefixes[k] {
 				if err := ebpf.DeletePidInterpreterMapping(pid, prefix); err != nil {
 					return errors.Join(err, fmt.Errorf("failed to delete prefix %v", prefix))
 				}
 			}
-			delete(l.jitRegions, m)
+			delete(l.jitRegions, k)
 			delete(l.prefixes, k)
 		}
 	}
 
 	// Add new ones
-	for m := range l.jitRegions {
-		k := regionKey{start: m.Vaddr, end: m.Vaddr + m.Length}
+	for k := range l.jitRegions {
 		if _, ok := l.prefixes[k]; !ok {
-			if err := l.addJITRegion(ebpf, pid, m.Vaddr, m.Vaddr+m.Length); err != nil {
-				return errors.Join(err, fmt.Errorf("failed to add JIT region %v", m))
+			if err := l.addJITRegion(ebpf, pid, k.start, k.end); err != nil {
+				return errors.Join(err, fmt.Errorf("failed to add JIT region %v", k))
 			}
 		}
 	}
@@ -360,10 +371,10 @@ func (l *luajitInstance) processVMs(ebpf interpreter.EbpfHandler, pid libpf.PID)
 			// Validate the trace
 			foundRegion := false
 			for reg := range l.jitRegions {
-				if t.mcode >= reg.Vaddr && t.mcode < reg.Vaddr+reg.Length {
+				if t.mcode >= reg.start && t.mcode < reg.end {
 					foundRegion = true
 					end := t.mcode + uint64(t.szmcode)
-					if end > reg.Vaddr+reg.Length {
+					if end > reg.end {
 						log.Errorf("trace %v end goes beyond JIT region, bad szmcode", t)
 						continue traceLoop
 					}

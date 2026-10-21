@@ -509,7 +509,7 @@ static EBPF_INLINE ErrorCode walk_luajit_stack(
         done_with_lua = !prev;
 
         unwind_native_frame(
-          info, &record->state, ((u32)(record->state.text_section_id >> 32)) == LUAJIT_JIT_FILE_ID);
+          info, &record->state, ((u32)(record->state.text_section_id >> 32)) == LUAJIT_JIT_MARKER);
         if ((err = resolve_unwind_mapping(record, next_unwinder)) != ERR_OK) {
           *next_unwinder = PROG_UNWIND_STOP;
           return err;
@@ -576,7 +576,7 @@ find_context(struct pt_regs *ctx, PerCPURecord *record, const LuaJITProcInfo *in
   // our unwinder with a token file ID. Then we fire a pid event which will call SynchronizeMappings
   // in the HA which will overlay the big anonymous/executable memory range with the actual mappings
   // for each trace with a stack adjustment stored in the low bits.
-  if (high == LUAJIT_JIT_FILE_ID) {
+  if (high == LUAJIT_JIT_MARKER) {
     record->luajitUnwindState.is_jit = true;
 
     // Once the HA fills in text_section_bias with G we'll stop sending these report_pids.
@@ -662,7 +662,7 @@ find_context(struct pt_regs *ctx, PerCPURecord *record, const LuaJITProcInfo *in
   }
 
   // The JIT doesn't update base as it goes but it does update G.jit_base.
-  if (high == LUAJIT_JIT_FILE_ID) {
+  if (high == LUAJIT_JIT_MARKER) {
     record->luajitUnwindState.frame = scr->G.jit_base - 1;
   }
   // otherwise, if the first unwinder was Luajit, then we're in
