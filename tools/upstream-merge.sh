@@ -27,13 +27,17 @@
 #                       resolvable bits (BPF blobs, go.mod, metrics) are
 #                       still applied. Exits 0 — you finish with
 #                       `git add … && git commit`.
-#   --fresh             Delete an existing upstream-merge branch and start
+#   --fresh             Delete an existing working branch and start
 #                       over from ORIGIN_REF.
+#   --branch NAME       Working branch name (default: upstream-merge). Use a
+#                       per-cycle name (e.g. upstream-merge-2017) when an
+#                       older upstream-merge branch is still checked out in
+#                       another worktree.
 #   -h, --help          Show this help
 #
 # Defaults: upstream/main and origin/main.
 #
-# Iteration: if the upstream-merge branch already exists, the script picks
+# Iteration: if the working branch already exists, the script picks
 # up from its tip so each run advances the same branch. Pass --fresh to
 # discard prior progress and restart from ORIGIN_REF.
 
@@ -55,6 +59,7 @@ DO_FETCH=true
 DO_SMOKE=true
 LEAVE_CONFLICTED=false
 FORCE_FRESH=false
+BRANCH="upstream-merge"
 
 args=()
 while [[ $# -gt 0 ]]; do
@@ -63,7 +68,8 @@ while [[ $# -gt 0 ]]; do
         --no-smoke)         DO_SMOKE=false; shift ;;
         --leave-conflicted) LEAVE_CONFLICTED=true; shift ;;
         --fresh)            FORCE_FRESH=true; shift ;;
-        -h|--help)          sed -n '2,38p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        --branch)           BRANCH="$2"; shift 2 ;;
+        -h|--help)          sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *)                  args+=("$1"); shift ;;
     esac
 done
@@ -460,7 +466,6 @@ ORIGINAL_REF=$(git symbolic-ref --quiet HEAD 2>/dev/null || git rev-parse HEAD)
 # Working branch. If it already exists, each invocation continues from its
 # tip — that's what makes the iterative "run, hand-resolve one commit, run
 # again" loop work without ceremony. --fresh forces a clean restart.
-BRANCH="upstream-merge"
 CONTINUING=false
 if git show-ref --verify --quiet "refs/heads/$BRANCH"; then
     if $FORCE_FRESH; then
