@@ -160,11 +160,6 @@ type TSDInfo struct {
 	BlockEntries uint8
 	DataOffset   uint8
 }
-type DTVInfo struct {
-	Offset     int16
-	Multiplier uint8
-	Pad_cgo_0  [1]byte
-}
 type TLSVarInfo struct {
 	Tls_offset int32
 	Dtv_pos    uint32
@@ -183,6 +178,7 @@ type Trace struct {
 	Cpu_id             uint32
 	Kernel_frame_end   uint16
 	Frame_data_end     uint16
+	Thread_label_end   uint16
 	Golang_label_end   uint16
 	Variable_data_end  uint16
 	Num_frames         uint16
@@ -200,7 +196,7 @@ type UnwindInfo struct {
 }
 
 type ApmIntProcInfo struct {
-	Offset uint64
+	Tls TLSVarInfo
 }
 type BEAMProcInfo struct {
 	Bias                   uint64
@@ -300,10 +296,7 @@ type PyProcInfo struct {
 	Frame_is_cframe                uint8
 }
 type RubyProcInfo struct {
-	Current_ec_tpbase_tls_offset int64
-	Dtv_info                     DTVInfo
-	Current_ec_tls_offset        uint64
-	Tls_module_id                uint32
+	Tls_ec                       TLSVarInfo
 	Current_ctx_ptr              uint64
 	Jit_start                    uint64
 	Jit_end                      uint64
@@ -375,9 +368,9 @@ const (
 	Sizeof_TraceWithData = 0x6698 + 0x6320
 	Sizeof_GolangLabel   = 0x50
 
-	sizeof_ApmIntProcInfo        = 0x8
+	sizeof_ApmIntProcInfo        = 0xc
 	sizeof_PHPProcInfo           = 0x18
-	sizeof_RubyProcInfo          = 0x50
+	sizeof_RubyProcInfo          = 0x40
 	sizeof_ThreadContextProcInfo = 0xc
 	sizeof_GoRuntimeOffsets      = 0x30
 )
