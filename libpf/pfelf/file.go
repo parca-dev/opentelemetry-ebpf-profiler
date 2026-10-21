@@ -66,7 +66,7 @@ var (
 	// ErrNotELF is returned when the file is not an ELF file.
 	ErrNotELF = errors.New("not an ELF file")
 	ErrNoTLS  = errors.New("no TLS program header")
-	// ErrSectionNotPreset is returned when a section is not present
+	// ErrSectionNotPresent is returned when a section is not present
 	ErrSectionNotPresent = errors.New("section not present")
 
 	// ErrNoDebugLink is returned when debug link does not exist.

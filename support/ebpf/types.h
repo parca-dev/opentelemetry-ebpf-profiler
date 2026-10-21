@@ -604,20 +604,24 @@ typedef struct RubyProcInfo {
 } RubyProcInfo;
 
 // V8ProcInfo is a container for the data needed to build a stack trace for a V8 process.
+// Fields are ordered by size so that there is no padding between them.
 typedef struct V8ProcInfo {
+  // Address of IsolateGroup::default_isolate_group_. It is read at unwind time
+  // as V8 only sets it in V8::Initialize(), which may be after attach.
+  u64 default_isolate_group_addr;
+  // parca: Node.js custom labels (see native_custom_labels.h).
+  u64 isolate_sym;
+  u32 cped_offset;
+  u32 wrapped_object_offset;
+  u32 js_dispatch_table_offset;
   // Introspection data
   u16 type_JSFunction_first, type_JSFunction_last, type_Code, type_SharedFunctionInfo;
   u8 off_HeapObject_map, off_Map_instancetype, off_JSFunction_code, off_JSFunction_shared;
   u8 code_instructions_is_pointer;
   u8 off_Code_instruction_start, off_Code_instruction_size, off_Code_flags;
   u8 fp_marker, fp_function, fp_bytecode_offset;
-  u8 codekind_shift, codekind_mask, codekind_baseline, codekind_interpreted;
-  u64 isolate_sym;
-  u32 cped_offset;
-  u32 wrapped_object_offset;
-  u64 default_isolate_group;
+  u8 codekind_shift, codekind_mask, codekind_baseline;
   u8 leaptiering;
-  u32 js_dispatch_table_offset;
 } V8ProcInfo;
 
 // BEAMProcInfo is a container for the data needed to build a stack trace for a BEAM process.

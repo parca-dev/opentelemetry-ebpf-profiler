@@ -154,7 +154,6 @@ package nodev8 // import "go.opentelemetry.io/ebpf-profiler/interpreter/nodev8"
 
 import (
 	"bytes"
-	"debug/elf"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -169,12 +168,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
 	"github.com/elastic/go-freelru"
-	"golang.org/x/arch/arm64/arm64asm"
-	"golang.org/x/arch/x86/x86asm"
 
-	"go.opentelemetry.io/ebpf-profiler/asm/amd"
-	"go.opentelemetry.io/ebpf-profiler/asm/arm"
-	"go.opentelemetry.io/ebpf-profiler/asm/expression"
 	"go.opentelemetry.io/ebpf-profiler/interpreter"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
@@ -352,29 +346,23 @@ type v8Data struct {
 		// https://chromium.googlesource.com/v8/v8.git/+/refs/tags/9.2.230.1/tools/gen-postmortem-metadata.py#709
 		// https://chromium.googlesource.com/v8/v8.git/+/refs/tags/9.2.230.1/src/objects/instance-type.h#75
 		Type struct {
-			BaselineData              uint16 `name:"BaselineData__BASELINE_DATA_TYPE" zero:""`
-			ByteArray                 uint16 `name:"ByteArray__BYTE_ARRAY_TYPE"`
-			BytecodeArray             uint16 `name:"BytecodeArray__BYTECODE_ARRAY_TYPE"`
-			Code                      uint16 `name:"Code__CODE_TYPE"`
-			CodeWrapper               uint16 `name:"CodeWrapper__CODE_WRAPPER_TYPE" zero:""`
-			FixedArray                uint16 `name:"FixedArray__FIXED_ARRAY_TYPE"`
-			WeakFixedArray            uint16 `name:"WeakFixedArray__WEAK_FIXED_ARRAY_TYPE"`
-			TrustedByteArray          uint16 `name:"TrustedByteArray__TRUSTED_BYTE_ARRAY_TYPE" zero:""`
-			TrustedFixedArray         uint16 `name:"TrustedFixedArray__TRUSTED_FIXED_ARRAY_TYPE" zero:""`
-			TrustedWeakFixedArray     uint16 `name:"TrustedFixedArray__TRUSTED_WEAK_FIXED_ARRAY_TYPE" zero:""`
-			ProtectedFixedArray       uint16 `name:"ProtectedFixedArray__PROTECTED_FIXED_ARRAY_TYPE" zero:""`
-			JSFunction                uint16 `name:"JSFunction__JS_FUNCTION_TYPE"`
-			Map                       uint16 `name:"Map__MAP_TYPE"`
-			Script                    uint16 `name:"Script__SCRIPT_TYPE"`
-			ScopeInfo                 uint16 `name:"ScopeInfo__SCOPE_INFO_TYPE"`
-			SharedFunctionInfo        uint16 `name:"SharedFunctionInfo__SHARED_FUNCTION_INFO_TYPE"`
-			SharedFunctionInfoWrapper uint16 `name:"SharedFunctionInfoWrapper__SHARED_FUNCTION_INFO_WRAPPER_TYPE" zero:""`
+			BaselineData          uint16 `name:"BaselineData__BASELINE_DATA_TYPE" zero:""`
+			ByteArray             uint16 `name:"ByteArray__BYTE_ARRAY_TYPE"`
+			BytecodeArray         uint16 `name:"BytecodeArray__BYTECODE_ARRAY_TYPE"`
+			Code                  uint16 `name:"Code__CODE_TYPE"`
+			CodeWrapper           uint16 `name:"CodeWrapper__CODE_WRAPPER_TYPE" zero:""`
+			FixedArray            uint16 `name:"FixedArray__FIXED_ARRAY_TYPE"`
+			WeakFixedArray        uint16 `name:"WeakFixedArray__WEAK_FIXED_ARRAY_TYPE"`
+			TrustedByteArray      uint16 `name:"TrustedByteArray__TRUSTED_BYTE_ARRAY_TYPE" zero:""`
+			TrustedFixedArray     uint16 `name:"TrustedFixedArray__TRUSTED_FIXED_ARRAY_TYPE" zero:""`
+			TrustedWeakFixedArray uint16 `name:"TrustedFixedArray__TRUSTED_WEAK_FIXED_ARRAY_TYPE" zero:""`
+			ProtectedFixedArray   uint16 `name:"ProtectedFixedArray__PROTECTED_FIXED_ARRAY_TYPE" zero:""`
+			JSFunction            uint16 `name:"JSFunction__JS_FUNCTION_TYPE"`
+			Map                   uint16 `name:"Map__MAP_TYPE"`
+			Script                uint16 `name:"Script__SCRIPT_TYPE"`
+			ScopeInfo             uint16 `name:"ScopeInfo__SCOPE_INFO_TYPE"`
+			SharedFunctionInfo    uint16 `name:"SharedFunctionInfo__SHARED_FUNCTION_INFO_TYPE"`
 		} `name:"type"`
-
-		// https://chromium.googlesource.com/v8/v8.git/+/refs/tags/12.9.202.28/src/objects/shared-function-info.h#835
-		SharedFunctionInfoWrapper struct {
-			SharedFunctionInfo uint16 `name:"shared_info__Tagged_SharedFunctionInfo_" zero:""`
-		}
 
 		// https://chromium.googlesource.com/v8/v8.git/+/refs/tags/9.2.230.1/src/objects/heap-object.tq#7
 		HeapObject struct {
@@ -539,7 +527,8 @@ type v8Data struct {
 	jsDispatchTableOffset uint32
 
 	// defaultIsolateGroupAddr is the address of the
-	// IsolateGroup::default_isolate_group_ pointer variable.
+	// IsolateGroup::default_isolate_group_ pointer variable. eBPF reads the
+	// pointer when unwinding as V8 sets it only in V8::Initialize().
 	defaultIsolateGroupAddr libpf.Address
 }
 
@@ -588,7 +577,11 @@ type v8Code struct {
 	codePositionTable   []byte
 	inliningSFIs        []byte
 	inliningPositions   []byte
-	cookie              uint32
+	// sfiPtr and codeKind identify the Code object this data was read from.
+	// They are checked on cache hits as V8 reuses the addresses of freed Code
+	// objects.
+	sfiPtr   libpf.Address
+	codeKind uint8
 }
 
 // v8SFI caches the data we need from V8 class SharedFunctionInfo
@@ -623,9 +616,8 @@ func (i *v8Instance) Detach(ebpf interpreter.EbpfHandler, pid libpf.PID) error {
 func (i *v8Instance) SynchronizeMappings(ebpf interpreter.EbpfHandler,
 	_ reporter.ExecutableReporter, pr process.Process, mappings []process.RawMapping,
 ) error {
-	i.pid = pr.PID()
+	pid := pr.PID()
 	i.mappingGeneration++
-
 	for idx := range mappings {
 		m := &mappings[idx]
 		if !m.IsExecutable() || !m.IsAnonymous() {
@@ -653,7 +645,7 @@ func (i *v8Instance) SynchronizeMappings(ebpf interpreter.EbpfHandler,
 		for _, prefix := range prefixes {
 			_, exists := i.prefixes[prefix]
 			if !exists {
-				err := ebpf.UpdatePidInterpreterMapping(i.pid, prefix, support.ProgUnwindV8, 0, 0)
+				err := ebpf.UpdatePidInterpreterMapping(pid, prefix, support.ProgUnwindV8, 0, 0)
 				if err != nil {
 					return err
 				}
@@ -668,7 +660,7 @@ func (i *v8Instance) SynchronizeMappings(ebpf interpreter.EbpfHandler,
 			continue
 		}
 		log.Debugf("Delete V8 prefix %#v", prefix)
-		_ = ebpf.DeletePidInterpreterMapping(i.pid, prefix)
+		_ = ebpf.DeletePidInterpreterMapping(pid, prefix)
 		delete(i.prefixes, prefix)
 	}
 	for m, generationPtr := range i.mappings {
@@ -1244,8 +1236,9 @@ func (i *v8Instance) getSFI(taggedPtr libpf.Address) (*v8SFI, error) {
 	return sfi, nil
 }
 
-// readCode reads and caches needed V8 Code object data.
-func (i *v8Instance) readCode(taggedPtr libpf.Address, cookie uint32, sfi *v8SFI) (*v8Code, error) {
+// readCode reads needed V8 Code object data. sfi is the SharedFunctionInfo of
+// the JSFunction the Code belongs to.
+func (i *v8Instance) readCode(taggedPtr, sfiPtr libpf.Address, sfi *v8SFI) (*v8Code, error) {
 	vms := &i.d.vmStructs
 	types := &i.d.expectedTypes
 
@@ -1281,22 +1274,17 @@ func (i *v8Instance) readCode(taggedPtr libpf.Address, cookie uint32, sfi *v8SFI
 
 	// Baseline Code does not have deoptimization data
 	if codeKind == vms.CodeKind.Baseline {
-		if sfi == nil {
-			return nil, errors.New("baseline function without SFI")
-		}
+		log.Debugf("Baseline Code %#x read: posSize: %v",
+			codeAddr, len(codePositionTable))
 
-		log.Debugf("Baseline Code %#x read: posSize: %v, cookie: %x",
-			codeAddr, len(codePositionTable), cookie)
-
-		v8code := &v8Code{
+		return &v8Code{
 			codeDeltaToPosition: make(map[uint32]sourcePosition),
 			sfi:                 sfi,
 			isBaseline:          true,
 			codePositionTable:   codePositionTable,
-			cookie:              cookie,
-		}
-		i.addrToCode.Add(taggedPtr, v8code)
-		return v8code, nil
+			sfiPtr:              sfiPtr,
+			codeKind:            codeKind,
+		}, nil
 	}
 
 	// Read the deoptimization data
@@ -1316,33 +1304,6 @@ func (i *v8Instance) readCode(taggedPtr libpf.Address, cookie uint32, sfi *v8SFI
 	if len(deoptimizationData) < pointerSize*int(numItemsNeeded) {
 		return nil, fmt.Errorf("DeoptimizationData array length too small: %d",
 			len(deoptimizationData))
-	}
-
-	if sfi == nil {
-		// Read the Code's SFI
-		var sfiPtr libpf.Address
-		if vms.DeoptimizationDataIndex.SharedFunctionInfoWrapper != 0 {
-			sfiWrapperPtr := npsr.Ptr(deoptimizationData,
-				uint(vms.DeoptimizationDataIndex.SharedFunctionInfoWrapper*pointerSize))
-			sfiWrapperPtr, err = i.getTypedObject(sfiWrapperPtr, vms.Type.SharedFunctionInfoWrapper)
-			if err != nil {
-				return nil, fmt.Errorf("sfi wrapper pointer read: %w", err)
-			}
-
-			sfiWrapperSize := vms.SharedFunctionInfoWrapper.SharedFunctionInfo + pointerSize
-			sfiWrapper := make([]byte, sfiWrapperSize)
-			if err = i.rm.Read(sfiWrapperPtr, sfiWrapper); err != nil {
-				return nil, fmt.Errorf("sfi wrapper read: %w", err)
-			}
-			sfiPtr = npsr.Ptr(sfiWrapper, uint(vms.SharedFunctionInfoWrapper.SharedFunctionInfo))
-		} else {
-			sfiPtr = npsr.Ptr(deoptimizationData,
-				uint(vms.DeoptimizationDataIndex.SharedFunctionInfo*pointerSize))
-		}
-		sfi, err = i.getSFI(sfiPtr)
-		if err != nil {
-			return nil, fmt.Errorf("getSFI: %w", err)
-		}
 	}
 
 	// Read the Code's deoptimization data
@@ -1378,64 +1339,48 @@ func (i *v8Instance) readCode(taggedPtr libpf.Address, cookie uint32, sfi *v8SFI
 		}
 	}
 
-	log.Debugf("Code %#x read: posSize: %v, sfiSize: %v, inlineSize: %v cookie: %x",
+	log.Debugf("Code %#x read: posSize: %v, sfiSize: %v, inlineSize: %v",
 		codeAddr, len(codePositionTable), len(inliningSFIs),
-		len(inliningPositions), cookie)
+		len(inliningPositions))
 
-	v8code := &v8Code{
+	return &v8Code{
 		codeDeltaToPosition: make(map[uint32]sourcePosition),
 		sfi:                 sfi,
 		codePositionTable:   codePositionTable,
 		inliningSFIs:        inliningSFIs,
 		inliningPositions:   inliningPositions,
-		cookie:              cookie,
-	}
-	i.addrToCode.Add(taggedPtr, v8code)
-	return v8code, nil
+		sfiPtr:              sfiPtr,
+		codeKind:            codeKind,
+	}, nil
 }
 
 // getCode reads and caches needed V8 Code object data from a Code pointer.
-func (i *v8Instance) getCode(taggedPtr libpf.Address, cookie uint32) (*v8Code, error) {
+// sfiTaggedPtr and codeKind are the SFI and CodeKind that eBPF sent with the
+// frame. They are used to detect when the Code object at taggedPtr is no
+// longer the one eBPF saw.
+func (i *v8Instance) getCode(taggedPtr, sfiTaggedPtr libpf.Address,
+	codeKind uint8,
+) (*v8Code, error) {
 	if code, ok := i.addrToCode.Get(taggedPtr); ok {
-		if code.cookie == cookie {
+		if code.sfiPtr == sfiTaggedPtr && code.codeKind == codeKind {
 			return code, nil
 		}
 		i.addrToCode.Remove(taggedPtr)
 	}
-	return i.readCode(taggedPtr, cookie, nil)
-}
-
-// getCodeFromJSFunction reads and caches needed V8 Code object data using
-// the SFI from a JSFunction pointer. Finding the Code from a JSFunction pointer
-// is complicated in Node >= v24, (search "leaptiering" in v8_tracer.ebpf.c), so
-// unlike in previous revisions of this function, we just expect it to be passed in
-// from eBPF, and don't do the work of finding it again.
-func (i *v8Instance) getCodeFromJSFunc(taggedPtr libpf.Address, cookie uint32, codeTaggedPtr libpf.Address) (*v8Code, error) {
-	if code, ok := i.addrToCode.Get(taggedPtr); ok {
-		if code.cookie == cookie {
-			return code, nil
-		}
-		i.addrToCode.Remove(taggedPtr)
-	}
-
-	vms := &i.d.vmStructs
-	jsfuncAddr := taggedPtr &^ HeapObjectTagMask
-
-	// Read needed JSFunction object data
-	jsfuncSize := max(vms.JSFunction.SharedFunctionInfo, vms.JSFunction.Code) + pointerSize
-	jsfunc := make([]byte, jsfuncSize)
-	err := i.rm.Read(jsfuncAddr, jsfunc)
-	if err != nil {
-		return nil, fmt.Errorf("jsfunc object read: %v", err)
-	}
-
-	sfi, err := i.getSFI(npsr.Ptr(jsfunc, uint(vms.JSFunction.SharedFunctionInfo)))
+	sfi, err := i.getSFI(sfiTaggedPtr)
 	if err != nil {
 		return nil, fmt.Errorf("getSFI: %w", err)
 	}
-
-	// Read the Code object
-	return i.readCode(codeTaggedPtr, cookie, sfi)
+	code, err := i.readCode(taggedPtr, sfiTaggedPtr, sfi)
+	if err != nil {
+		return nil, err
+	}
+	if code.codeKind != codeKind {
+		return nil, fmt.Errorf("code %#x kind changed from %d to %d",
+			taggedPtr, codeKind, code.codeKind)
+	}
+	i.addrToCode.Add(taggedPtr, code)
+	return code, nil
 }
 
 // decodeUVLQ reads and decodes one unsigned Variable Length Quantity
@@ -1649,7 +1594,7 @@ func (i *v8Instance) symbolizeSFI(pointer libpf.Address, delta uint64, frames *l
 	// Adjust the bytecode pointer as needed
 	//nolint:lll
 	// https://chromium.googlesource.com/v8/v8.git/+/refs/tags/9.2.230.1/src/execution/frames.cc#1793
-	bytecodeDelta := int64(delta & support.V8LineDeltaMask)
+	bytecodeDelta := int64(delta & support.V8DataDeltaMask)
 	bytecodeDelta -= int64(vms.BytecodeArray.Data) - HeapObjectTag
 	if bytecodeDelta < 0 {
 		// Should not be happening
@@ -1765,7 +1710,7 @@ func (i *v8Instance) symbolizeCode(code *v8Code, delta uint64, returnAddress boo
 ) error {
 	var err error
 	sfi := code.sfi
-	delta &= support.V8LineDeltaMask
+	delta &= support.V8DataDeltaMask
 
 	// This is a native PC delta and points to the instruction after
 	// the call function. Adjust to get the CALL instruction.
@@ -1831,31 +1776,24 @@ func (i *v8Instance) Symbolize(ef libpf.EbpfFrame, frames *libpf.Frames, _ libpf
 	defer sfCounter.DefaultToFailure()
 
 	pointerAndType := libpf.Address(ef.Variable(0))
-	deltaOrMarker := uint64(ef.Variable(1))
-	subframeType := pointerAndType & support.V8FileTypeMask
-	pointer := pointerAndType&^support.V8FileTypeMask | HeapObjectTag
+	deltaOrMarker := ef.Data()
+	subframeType := pointerAndType & support.V8FrameTypeMask
+	pointer := pointerAndType&^support.V8FrameTypeMask | HeapObjectTag
 
 	var err error
 	switch subframeType {
-	case support.V8FileTypeMarker:
+	case support.V8FrameTypeMarker:
 		// This is a stub V8 frame, with deltaOrMarker containing the marker.
 		// Convert the V8 build specific marker ID to a static ID and symbolize
 		// that if needed.
 		err = i.symbolizeMarkerFrame(deltaOrMarker, frames)
-	case support.V8FileTypeByteCode, support.V8FileTypeNativeSFI:
+	case support.V8FrameTypeByteCode, support.V8FrameTypeNativeSFI:
 		err = i.symbolizeSFI(pointer, deltaOrMarker, frames)
-	case support.V8FileTypeNativeCode, support.V8FileTypeNativeJSFunc:
+	case support.V8FrameTypeNativeCode:
 		var code *v8Code
-		codeCookie := uint32(deltaOrMarker & support.V8LineCookieMask >> support.V8LineCookieShift)
-		if subframeType == support.V8FileTypeNativeCode {
-			log.Debugf("calling getCode with pointer %#x", pointer)
-			code, err = i.getCode(pointer, codeCookie)
-		} else {
-			codePointerAndType := libpf.Address(ef.Variable(2))
-			codePointer := codePointerAndType&^support.V8FileTypeMask | HeapObjectTag
-			log.Debugf("calling getCodeFromJSFunc with pointer %#x; codePointer: %#x", pointer, codePointer)
-			code, err = i.getCodeFromJSFunc(pointer, codeCookie, codePointer)
-		}
+		codeKind := uint8(deltaOrMarker >> support.V8DataCodeKindShift & support.V8DataCodeKindMask)
+		codePointer := libpf.Address(ef.Variable(1)) | HeapObjectTag
+		code, err = i.getCode(codePointer, pointer, codeKind)
 		if err == nil {
 			err = i.symbolizeCode(code, deltaOrMarker, ef.Flags().ReturnAddress(), frames)
 		}
@@ -1918,17 +1856,17 @@ func (d *v8Data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, bias libpf.
 		Off_Code_instruction_size:    uint8(vms.Code.InstructionSize),
 		Off_Code_flags:               uint8(vms.Code.Flags),
 
-		Codekind_shift:        vms.CodeKind.FieldShift,
-		Codekind_mask:         uint8(vms.CodeKind.FieldMask),
-		Codekind_baseline:     vms.CodeKind.Baseline,
-		Codekind_interpreted:  vms.CodeKind.InterpretedFunction,
+		Codekind_shift:    vms.CodeKind.FieldShift,
+		Codekind_mask:     uint8(vms.CodeKind.FieldMask),
+		Codekind_baseline: vms.CodeKind.Baseline,
+
 		Isolate_sym:           uint64(d.isolateSym),
 		Cped_offset:           d.cpedOffset,
 		Wrapped_object_offset: d.wrappedObjectOffset,
 	}
 	if d.leaptiering {
 		data.Leaptiering = 1
-		data.Default_isolate_group = uint64(rm.Ptr(d.defaultIsolateGroupAddr + bias))
+		data.Default_isolate_group_addr = uint64(d.defaultIsolateGroupAddr + bias)
 		data.Js_dispatch_table_offset = d.jsDispatchTableOffset
 	}
 	if err := ebpf.UpdateProcData(libpf.V8, pid, unsafe.Pointer(&data)); err != nil {
@@ -1977,6 +1915,7 @@ func (d *v8Data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, bias libpf.
 		addrToSource:  addrToSource,
 		addrToType:    addrToType,
 		fileToDebugID: fileToDebugID,
+		pid:           pid,
 	}, nil
 }
 
@@ -2348,11 +2287,13 @@ func locateSnapshotArea(info *interpreter.LoaderInfo, syms relevantSymbols) util
 type relevantSymbols struct {
 	DefaultSnapshotBlob *libpf.Symbol `sym:"_ZN2v88internal8Snapshot19DefaultSnapshotBlobEv"`
 	BytecodeSizes       *libpf.Symbol `sym:"_ZN2v88internal11interpreter9Bytecodes14kBytecodeSizesE"`
-	NodeVersion         *libpf.Symbol `sym:"_ZZ21napi_get_node_versionE7version"`
-	CurrentIsolate      *libpf.Symbol `sym:"_ZN2v88internal18g_current_isolate_E"`
 
 	JSDispatchTableAddress *libpf.Symbol `sym:"_ZN2v88internal17ExternalReference25js_dispatch_table_addressEv"`
 	DefaultIsolateGroup    *libpf.Symbol `sym:"_ZN2v88internal12IsolateGroup22default_isolate_group_E"`
+
+	// parca: used for Node.js custom labels (see loadNodeClData).
+	NodeVersion    *libpf.Symbol `sym:"_ZZ21napi_get_node_versionE7version"`
+	CurrentIsolate *libpf.Symbol `sym:"_ZN2v88internal18g_current_isolate_E"`
 }
 
 // scan gets the symbols needed for Node unwinding
@@ -2391,7 +2332,7 @@ func lookupRelevantSymbols(ef *pfelf.File) (relevantSymbols, error) {
 	rv := relevantSymbols{}
 	val := reflect.ValueOf(&rv).Elem()
 	typ := val.Type()
-	anyFailed := false
+	scanSymTab := false
 	for i := 0; i < val.NumField(); i++ {
 		ftyp := typ.Field(i)
 		fval := val.Field(i)
@@ -2402,72 +2343,17 @@ func lookupRelevantSymbols(ef *pfelf.File) (relevantSymbols, error) {
 			if !errors.Is(err, libpf.ErrSymbolNotFound) {
 				log.Warnf("Couldn't get V8 symbol %s: %v", ftyp.Name, err)
 			}
-			anyFailed = true
+			if ftyp.Tag.Get("optional") != "true" {
+				scanSymTab = true
+			}
 		} else {
 			fval.Set(reflect.ValueOf(sym))
 		}
 	}
-	if anyFailed {
-		err := rv.scan(ef)
-		return rv, err
-	} else {
-		return rv, nil
+	if scanSymTab {
+		return rv, rv.scan(ef)
 	}
-}
-
-func findJsDispatchTableOffset(ef *pfelf.File, syms relevantSymbols) (uint64, error) {
-	sym := syms.JSDispatchTableAddress
-	if sym == nil {
-		return 0, errors.New("js_dispatch_table_address not found; can't analyze it to find js_dispatch_table_ offset")
-	}
-	// the most I've observed mattering is 80 bytes
-	// and that was in debug mode; allow up to 256 just to be safe.
-	sz := min(sym.Size, 256)
-	code := make([]byte, sz)
-	if _, err := ef.ReadAt(code, int64(sym.Address)); err != nil {
-		return 0, fmt.Errorf("failed to read js_dispatch_table_address code: %w", err)
-	}
-
-	return decodeJsDispatchTableOffset(ef.Machine, code, uint64(sym.Address))
-}
-
-// decodeJsDispatchTableOffset runs js_dispatch_table_address(), whose code
-// starts at addr, up to its first `ret`, and returns the offset in
-// IsolateGroup that the return value was loaded from.
-func decodeJsDispatchTableOffset(machine elf.Machine, code []byte, addr uint64) (uint64, error) {
-	var retval expression.Expression
-	switch machine {
-	case elf.EM_AARCH64:
-		it := arm.NewInterpreterWithCodeAt(code, expression.Imm(addr))
-		_, err := it.LoopWithBreak(func(i arm64asm.Inst) bool {
-			return i.Op == arm64asm.RET
-		})
-		if err != nil {
-			return 0, err
-		}
-		retval = it.Regs.Get(arm.X0)
-	case elf.EM_X86_64:
-		it := amd.NewInterpreterWithCodeAt(code, expression.Imm(addr))
-		_, err := it.LoopWithBreak(func(i x86asm.Inst) bool {
-			return i.Op == x86asm.RET
-		})
-		if err != nil {
-			return 0, err
-		}
-		retval = it.Regs.Get(amd.RAX)
-	default:
-		return 0, fmt.Errorf("unsupported arch %s", machine.String())
-	}
-	// The IsolateGroup pointer is loaded either directly from
-	// default_isolate_group_ or through its GOT entry.
-	slot := expression.NewImmediateCapture("slot")
-	offset := expression.NewImmediateCapture("offset")
-	group := expression.Mem8(slot)
-	if retval.Match(expression.Mem8(expression.Add(group, offset))) ||
-		retval.Match(expression.Mem8(expression.Add(expression.Mem8(group), offset))) {
-		return offset.CapturedValue(), nil
-	}
-	return 0, errors.New("failed to find js_dispatch_table_ field offset")
+	return rv, nil
 }
 
 // loadNodeClData loads various offsets that are needed for custom labels handling.
