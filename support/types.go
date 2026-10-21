@@ -370,8 +370,9 @@ type LuaJITProcInfo struct {
 }
 
 const (
-	Sizeof_StackDelta = 0x4
-	Sizeof_Trace      = 0x6378
+	Sizeof_StackDelta    = 0x4
+	Sizeof_TraceHeader   = 0x6378
+	Sizeof_TraceWithData = 0x6378 + 0x6000
 
 	sizeof_ApmIntProcInfo        = 0x8
 	sizeof_DotnetProcInfo        = 0x4

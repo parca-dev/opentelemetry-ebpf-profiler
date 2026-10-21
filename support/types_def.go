@@ -134,8 +134,9 @@ type NativeCustomLabelsProcInfo C.NativeCustomLabelsProcInfo
 type LuaJITProcInfo C.LuaJITProcInfo
 
 const (
-	Sizeof_StackDelta = C.sizeof_StackDelta
-	Sizeof_Trace      = C.sizeof_Trace
+	Sizeof_StackDelta    = C.sizeof_StackDelta
+	Sizeof_TraceHeader   = C.sizeof_Trace
+	Sizeof_TraceWithData = C.sizeof_Trace + C.sizeof_TraceFrameData
 
 	sizeof_ApmIntProcInfo        = C.sizeof_ApmIntProcInfo
 	sizeof_DotnetProcInfo        = C.sizeof_DotnetProcInfo

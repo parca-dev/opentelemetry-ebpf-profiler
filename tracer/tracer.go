@@ -724,7 +724,7 @@ func loadAllMaps(coll *cebpf.CollectionSpec, cfg *Config,
 	// Allow for 1s of 'burst' trace data (sizing by Trace length worst-case)
 	// TODO: Base this on present CPUs instead, as runtime.NumCPU is fixed for the lifetime
 	// of the process?
-	ringbufSize := uint64(cfg.SamplesPerSecond * runtime.NumCPU() * support.Sizeof_Trace)
+	ringbufSize := uint64(cfg.SamplesPerSecond * runtime.NumCPU() * support.Sizeof_TraceWithData)
 	adaption["trace_events"] = uint32(min(util.NextPowerOfTwo(ringbufSize), 1<<31))
 
 	// Scale cupti_events over its 1 MiB base; graph-heavy GPU workloads overflow the default and drop events. Capped at 2 GiB.
@@ -1066,18 +1066,17 @@ var (
 
 // loadBpfTrace parses a raw BPF trace into a `host.Trace` instance.
 func (t *Tracer) loadBpfTrace(raw []byte) (*libpf.EbpfTrace, error) {
-	frameListOffs := int(unsafe.Offsetof(support.Trace{}.Frame_data))
-
-	if len(raw) < frameListOffs {
-		return nil, fmt.Errorf("%d < %d: %w", len(raw), frameListOffs, errRecordTooSmall)
+	traceHeaderSize := int(support.Sizeof_TraceHeader)
+	if len(raw) < traceHeaderSize {
+		return nil, fmt.Errorf("%d < %d: %w", len(raw), traceHeaderSize, errRecordTooSmall)
 	}
 
-	ptr := traceFromRaw(raw)
+	ptr := (*support.Trace)(unsafe.Pointer(unsafe.SliceData(raw)))
 	frameDataLen := int(ptr.Frame_data_len) * 8
 
 	// NOTE: can't do exact check here: kernel adds a few padding bytes to messages.
-	if len(raw) < frameListOffs+frameDataLen {
-		return nil, fmt.Errorf("%d < %d: %w", len(raw), frameListOffs+frameDataLen,
+	if len(raw) < traceHeaderSize+frameDataLen {
+		return nil, fmt.Errorf("%d < %d: %w", len(raw), traceHeaderSize+frameDataLen,
 			errRecordUnexpectedSize)
 	}
 
@@ -1129,7 +1128,8 @@ func (t *Tracer) loadBpfTrace(raw []byte) (*libpf.EbpfTrace, error) {
 	trace.FrameData = trace.FrameDataBuf[:frameDataWords]
 	// Kernel frames are raw addresses at the front of FrameData. The process
 	// manager splits and symbolizes them so all frame processing shares one cache.
-	copy(trace.FrameData, ptr.Frame_data[:frameDataWords])
+	frameData := unsafe.Slice((*uint64)(unsafe.Pointer(unsafe.SliceData(raw[traceHeaderSize:]))), frameDataWords)
+	copy(trace.FrameData, frameData)
 
 	return trace, nil
 }
