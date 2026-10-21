@@ -176,6 +176,7 @@ type Trace struct {
 	Apm_trace_id       [16]byte
 	Custom_labels      CustomLabelsArray
 	Cpu_id             uint32
+	Context_value_end  uint16
 	Kernel_frame_end   uint16
 	Frame_data_end     uint16
 	Thread_label_end   uint16
@@ -183,7 +184,6 @@ type Trace struct {
 	Variable_data_end  uint16
 	Num_frames         uint16
 	Origin             uint16
-	Value              uint64
 	Variable_data      [25376]uint8
 }
 type UnwindInfo struct {
@@ -364,8 +364,8 @@ type LuaJITProcInfo struct {
 
 const (
 	Sizeof_StackDelta    = 0x4
-	Sizeof_TraceHeader   = 0x6698
-	Sizeof_TraceWithData = 0x6698 + 0x6320
+	Sizeof_TraceHeader   = 0x6690
+	Sizeof_TraceWithData = 0x6690 + 0x6320
 	Sizeof_GolangLabel   = 0x50
 
 	sizeof_ApmIntProcInfo        = 0xc

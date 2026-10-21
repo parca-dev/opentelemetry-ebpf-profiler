@@ -6,7 +6,7 @@
 #include "usdt_args.h"
 
 // origin_id_cuda is set during load time. It stays 0 when CUDA profiling is
-// disabled, which makes collect_trace drop these traces.
+// disabled, which makes prepare_trace drop these traces.
 BPF_RODATA_VAR(u16, origin_id_cuda, 0)
 
 // cuda_correlation reads the correlation ID from the USDT probe and records a trace.
@@ -26,7 +26,22 @@ int BPF_USDT(cuda_correlation, u32 correlation_id, s32 cbid)
   u64 ts      = bpf_ktime_get_ns();
   // Cast cbid to s32 first to get sign extension, then to u64
   u64 cuda_id = correlation_id + ((u64)cbid << 32);
-  return collect_trace(ctx, origin_id_cuda, pid, tid, 0, ts, 0, cuda_id);
+
+  PerCPURecord *record = prepare_trace(origin_id_cuda, pid, tid, 0, ts);
+  if (!record) {
+    return 0;
+  }
+  Trace *trace = &record->trace;
+  push_kernel_frames(ctx, trace);
+  // Create a CUDA kernel frame ahead of the user stack; Symbolize will later
+  // resolve the kernel name from the ID.
+  u64 *data =
+    push_frame(&record->state, trace, FRAME_MARKER_CUDA_KERNEL, FRAME_FLAG_PID_SPECIFIC, 0, 1);
+  if (!data) {
+    return 0;
+  }
+  data[0] = cuda_id;
+  return unwind_trace(ctx, record, false);
 }
 
 // Event type discriminator at offset 0 of every event submitted to cupti_events.

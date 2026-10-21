@@ -22,7 +22,7 @@ import (
 // They live here rather than in tracer because the import edge runs
 // tracer -> interpreterconfig -> gpu; gpu cannot import tracer.
 //
-// SampleType is the identifying field: it is unique across every profile type
+// SampleTypes[0].Type is the identifying field: it is unique across every profile type
 // the profiler produces, and nothing assigns to a TypeMetadata after it is
 // constructed. parca-agent keys off it rather than off pointer identity,
 // because the three types the tracer registers for itself are anonymous
@@ -30,14 +30,14 @@ import (
 // but it rewrites the profile parca-agent emits, not the metadata here.)
 var (
 	ProfileTypeCuda = &samples.TypeMetadata{
-		SampleType:   "gpu_kernel_time",
-		SampleUnit:   "nanoseconds",
+		SampleTypes:  []samples.SampleType{{Type: "gpu_kernel_time", Unit: "nanoseconds"}},
 		ReportValues: true,
+		AppendValues: samples.AppendFirstContextValue,
 	}
 	ProfileTypeGpuPC = &samples.TypeMetadata{
-		SampleType:   "gpu_pcsample",
-		SampleUnit:   "count",
+		SampleTypes:  []samples.SampleType{{Type: "gpu_pcsample", Unit: "count"}},
 		ReportValues: true,
+		AppendValues: samples.AppendFirstContextValue,
 	}
 )
 

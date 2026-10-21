@@ -974,7 +974,7 @@ func (f *gpuTraceFixer) prepTrace(trace *libpf.Trace, meta *samples.TraceEventMe
 
 	if ev.Graph != 0 {
 		// Graphs can have many kernels with same correlation ID.
-		// Copy Trace (Frames differ per kernel, Hash differs) and Meta (Value differs)
+		// Copy Trace (Frames differ per kernel, Hash differs) and Meta (ContextValues differ)
 		// since the original stays in the map for future timing events.
 		// CustomLabels are NOT copied: all events for the same correlation ID share
 		// identical cuda_device/cuda_stream/cuda_graph values.
@@ -986,7 +986,7 @@ func (f *gpuTraceFixer) prepTrace(trace *libpf.Trace, meta *samples.TraceEventMe
 		out.Meta = &metaCopy
 	}
 
-	out.Meta.Value = int64(ev.End - ev.Start)
+	out.Meta.ContextValues = []uint64{ev.End - ev.Start}
 	if out.Trace.CustomLabels == nil {
 		out.Trace.CustomLabels = make(map[libpf.String]libpf.String)
 	}
@@ -1040,6 +1040,11 @@ func InterceptTrace(trace *libpf.Trace, meta *samples.TraceEventMeta) []CudaTrac
 
 	log.Debugf("[cuda] adding trace with id %d cbid %d (0x%x) for pid %d",
 		correlationID, int(cbid), uint32(cbid), meta.PID)
+
+	// The fixer retains meta until timing arrives, but ContextValues aliases the
+	// pooled eBPF trace. CUDA traces carry no context values; prepTrace sets the
+	// kernel duration instead.
+	meta.ContextValues = nil
 
 	pid := meta.PID
 	value, ok := gpuFixers.Load(pid)
