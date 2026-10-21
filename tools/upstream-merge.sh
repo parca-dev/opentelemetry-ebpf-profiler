@@ -39,6 +39,10 @@
 #                       per-cycle name (e.g. upstream-merge-2017) when an
 #                       older upstream-merge branch is still checked out in
 #                       another worktree.
+#   --regen             Don't merge. For a hand-resolved merge in progress:
+#                       regenerate metrics/ids.go and support/types.go, rebuild
+#                       the BPF blobs, re-emit errors.h, stage all of them, and
+#                       run the smoke test. Commit afterwards yourself.
 #   -h, --help          Show this help
 #
 # Defaults: upstream/main and origin/main.
@@ -56,6 +60,8 @@ set -euo pipefail
 # analyzers flag pre-existing style issues upstream and the fork both carry.
 SMOKE_CMDS=(
     "CGO_ENABLED=1 go vet -composites=false -unreachable=false -unsafeptr=false ./..."
+    # types.go must match what upstream's generator produces from types_def.go.
+    "(cd support && ./generate.sh); rc=\$?; rm -rf support/_obj support/types_gen.go; exit \$rc"
 )
 FULL_SMOKE_CMDS=(
     "go test -run ^$ ./..."
@@ -71,6 +77,7 @@ DO_SMOKE=true
 LEAVE_CONFLICTED=false
 FORCE_FRESH=false
 BRANCH="upstream-merge"
+REGEN_ONLY=false
 
 args=()
 while [[ $# -gt 0 ]]; do
@@ -81,6 +88,7 @@ while [[ $# -gt 0 ]]; do
         --leave-conflicted) LEAVE_CONFLICTED=true; shift ;;
         --fresh)            FORCE_FRESH=true; shift ;;
         --branch)           BRANCH="$2"; shift 2 ;;
+        --regen)            REGEN_ONLY=true; shift ;;
         -h|--help)          sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *)                  args+=("$1"); shift ;;
     esac
@@ -265,13 +273,20 @@ regen_metrics() {
     ) || return 1
     (
         cd "$REPO_ROOT/support" || exit 1
+        # Use the exact cgo invocation from upstream's support/generate.sh so
+        # flags it adds (e.g. -DEBPF_TRACE_HEADER_ONLY, #1914) are picked up.
+        local godefs
+        godefs=$(grep -o 'go tool cgo -godefs.*types_def\.go' generate.sh) || {
+            echo "cannot find the cgo -godefs command in support/generate.sh" >&2
+            exit 1
+        }
         # Start fresh: emit license header, then append cgo -godefs output.
         cat > types.go <<'HEADER'
 // Copyright The OpenTelemetry Authors
 // SPDX-License-Identifier: Apache-2.0
 
 HEADER
-        go tool cgo -godefs types_def.go >> types.go || exit 1
+        eval "$godefs" >> types.go || exit 1
         # Set the correct package path (matches support/generate.sh).
         sed -i 's|^package support$|package support // import "go.opentelemetry.io/ebpf-profiler/support"|' types.go
         # Format the regenerated file (now that types.go is well-formed).
@@ -499,6 +514,34 @@ merge_from_base() {
     git reset --hard "$ORIGIN_HEAD" >/dev/null 2>&1
     return 1
 }
+
+# ── --regen: refresh generated files for a manual resolution ──────────
+
+if $REGEN_ONLY; then
+    cd "$REPO_ROOT"
+    log "Regenerating metrics/ids.go and support/types.go"
+    regen_metrics || die "regenerating metrics/types failed"
+    for f in support/ebpf/tracer.ebpf.amd64 support/ebpf/tracer.ebpf.arm64; do
+        # A conflicted blob has no usable content; any version will be rebuilt.
+        if git ls-files -u -- "$f" | grep -q .; then
+            git checkout --theirs -- "$f"
+        fi
+    done
+    log "Rebuilding BPF blobs"
+    make -C support/ebpf amd64 >/dev/null || die "BPF amd64 build failed"
+    make -C support/ebpf arm64 >/dev/null || die "BPF arm64 build failed"
+    git add support/ebpf/tracer.ebpf.amd64 support/ebpf/tracer.ebpf.arm64
+    log "Regenerating errors.h"
+    regen_errors_h || die "regenerating errors.h failed"
+    if $DO_SMOKE; then
+        log "Running smoke tests…"
+        run_smoke || die "Smoke tests failed"
+        log "Smoke tests passed"
+    fi
+    left=$(git diff --name-only --diff-filter=U)
+    [[ -z "$left" ]] || warn "Still unmerged: $(echo $left)"
+    exit 0
+fi
 
 # ── preflight ──────────────────────────────────────────────────────────
 
