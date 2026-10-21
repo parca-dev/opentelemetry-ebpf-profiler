@@ -13,7 +13,7 @@ go 1.26.0
 require (
 	github.com/aws/aws-sdk-go-v2 v1.47.1
 	github.com/aws/aws-sdk-go-v2/config v1.33.6
-	github.com/aws/aws-sdk-go-v2/service/s3 v1.113.4
+	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.0
 	github.com/aws/smithy-go v1.28.1
 	github.com/cilium/ebpf v0.22.0
 	github.com/elastic/go-freelru v0.16.0
@@ -24,7 +24,7 @@ require (
 	github.com/mdlayher/kobject v0.0.0-20200520190114-19ca17470d7d
 	github.com/minio/sha256-simd v1.0.1
 	github.com/moby/moby/api v1.56.1
-	github.com/open-telemetry/sig-profiling/profcheck v0.0.0-20260929163343-abf085ddb110
+	github.com/open-telemetry/sig-profiling/profcheck v0.0.0-20261002050819-d5b282b33a7f
 	github.com/parca-dev/oomprof v0.1.7
 	github.com/parca-dev/usdt v0.0.2
 	github.com/peterbourgon/ff/v3 v3.4.0
@@ -44,9 +44,9 @@ require (
 	go.opentelemetry.io/collector/receiver/xreceiver v0.162.0
 	go.opentelemetry.io/otel v1.46.0
 	go.opentelemetry.io/otel/metric v1.46.0
-	go.opentelemetry.io/proto/otlp v1.11.0
-	go.opentelemetry.io/proto/otlp/processcontext/v1development v0.4.0
-	go.opentelemetry.io/proto/otlp/profiles/v1development v0.4.0
+	go.opentelemetry.io/proto/otlp v1.11.1
+	go.opentelemetry.io/proto/otlp/processcontext/v1development v0.4.1
+	go.opentelemetry.io/proto/otlp/profiles/v1development v0.4.1
 	go.uber.org/zap/exp v0.3.0
 	golang.org/x/arch v0.31.0
 	golang.org/x/exp v0.0.0-20260908205506-85c1c2202aba
@@ -139,8 +139,8 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.28.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/crypto v0.55.0 // indirect
-	golang.org/x/net v0.58.0 // indirect
-	golang.org/x/text v0.41.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20260720211330-0afa2a65878a // indirect
+	golang.org/x/crypto v0.57.0 // indirect
+	golang.org/x/net v0.59.0 // indirect
+	golang.org/x/text v0.42.0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260928230214-8a89bd6388cc // indirect
 )
