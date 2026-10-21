@@ -447,9 +447,12 @@ auto_resolve() {
 # Run every command in SMOKE_CMDS.  Returns 0 only if all pass.
 run_smoke() {
     local cmd rc=0
+    local out="$GIT_DIR/upstream-merge-smoke.log"
     for cmd in "${SMOKE_CMDS[@]}"; do
         log "  smoke: $cmd"
-        if ! ( cd "$REPO_ROOT" && eval "$cmd" ); then
+        if ! ( cd "$REPO_ROOT" && eval "$cmd" ) >"$out" 2>&1; then
+            warn "  smoke failed; last lines (full log: $out):"
+            tail -n 15 "$out" | sed 's/^/      /' >&2
             rc=1
             break
         fi
