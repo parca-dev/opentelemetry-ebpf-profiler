@@ -48,7 +48,7 @@
 #define BOUNDED_LEN(len, max, mask)                                                                \
   ({                                                                                               \
     _Static_assert((mask) >= (max), "BOUNDED_LEN mask must cover max");                            \
-    unsigned _len = MIN((len), (max));                                                             \
+    unsigned _len = (unsigned)MIN((len), (max));                                                   \
     barrier_var(_len);                                                                             \
     _len &= (mask);                                                                                \
     _len;                                                                                          \
@@ -63,7 +63,7 @@ static EBPF_INLINE u64 addr_for_tls_symbol(u64 symbol, bool dtv)
     return 0;
   }
 
-  int err;
+  long err;
   u64 addr;
   if (dtv) {
     // ELF Handling For Thread-Local Storage, p.5.
@@ -72,13 +72,13 @@ static EBPF_INLINE u64 addr_for_tls_symbol(u64 symbol, bool dtv)
     u64 dtv_addr;
     if ((err = bpf_probe_read_user(&dtv_addr, sizeof(void *), (void *)(tsd_base)))) {
       increment_metric(metricID_UnwindNativeCustomLabelsErrReadData);
-      DEBUG_PRINT("Failed to read TLS DTV addr: %d", err);
+      DEBUG_PRINT("Failed to read TLS DTV addr: %ld", err);
       return 0;
     }
     // ... and at offsite 16 in the DTV, there is a pointer to the TLS block.
     if ((err = bpf_probe_read_user(&addr, sizeof(void *), (void *)(dtv_addr + 16)))) {
       increment_metric(metricID_UnwindNativeCustomLabelsErrReadData);
-      DEBUG_PRINT("Failed to read main TLS block addr: %d", err);
+      DEBUG_PRINT("Failed to read main TLS block addr: %ld", err);
       return 0;
     }
     addr += symbol;
@@ -90,7 +90,7 @@ static EBPF_INLINE u64 addr_for_tls_symbol(u64 symbol, bool dtv)
 
 static EBPF_INLINE u64 get_v8_cped_address(V8ProcInfo *proc)
 {
-  int err;
+  long err;
 
   DEBUG_PRINT("node cl: cped_offset=0x%x", proc->cped_offset);
 
@@ -102,7 +102,7 @@ static EBPF_INLINE u64 get_v8_cped_address(V8ProcInfo *proc)
 
   u64 isolate_ptr;
   if ((err = bpf_probe_read_user(&isolate_ptr, sizeof(void *), (void *)(isolate_ptr_ptr)))) {
-    DEBUG_PRINT("node cl: failed to read node custom labels current set pointer: %d", err);
+    DEBUG_PRINT("node cl: failed to read node custom labels current set pointer: %ld", err);
     return 0;
   }
 
@@ -110,7 +110,7 @@ static EBPF_INLINE u64 get_v8_cped_address(V8ProcInfo *proc)
   u64 cped_handle;
 
   if ((err = bpf_probe_read_user(&cped_handle, sizeof(void *), (void *)(cped_addr_ptr)))) {
-    DEBUG_PRINT("node cl: failed to read node custom labels current set pointer: %d", err);
+    DEBUG_PRINT("node cl: failed to read node custom labels current set pointer: %ld", err);
     return 0;
   }
 
@@ -120,12 +120,12 @@ static EBPF_INLINE u64 get_v8_cped_address(V8ProcInfo *proc)
 static EBPF_INLINE bool
 read_labelset_into_trace(PerCPURecord *record, NativeCustomLabelsSet *p_current_set)
 {
-  int err;
+  long err;
 
   NativeCustomLabelsSet current_set;
   if ((err = bpf_probe_read_user(&current_set, sizeof(current_set), p_current_set))) {
     increment_metric(metricID_UnwindNativeCustomLabelsErrReadData);
-    DEBUG_PRINT("cl: failed to read custom labels data: %d", err);
+    DEBUG_PRINT("cl: failed to read custom labels data: %ld", err);
     return false;
   }
 
@@ -134,14 +134,14 @@ read_labelset_into_trace(PerCPURecord *record, NativeCustomLabelsSet *p_current_
   unsigned ct            = 0;
   CustomLabelsArray *out = &record->trace.custom_labels;
 
-  for (int i = 0; i < MAX_CUSTOM_LABELS; i++) {
+  for (u32 i = 0; i < MAX_CUSTOM_LABELS; i++) {
     if (i >= current_set.count)
       break;
     NativeCustomLabel *lbl_ptr = current_set.storage + i;
     if ((err = bpf_probe_read_user(
            &record->nativeCustomLabel, sizeof(NativeCustomLabel), (void *)(lbl_ptr)))) {
       increment_metric(metricID_UnwindNativeCustomLabelsErrReadData);
-      DEBUG_PRINT("cl: failed to read label storage struct: %d", err);
+      DEBUG_PRINT("cl: failed to read label storage struct: %ld", err);
       return false;
     }
     NativeCustomLabel *lbl = &record->nativeCustomLabel;
@@ -151,14 +151,14 @@ read_labelset_into_trace(PerCPURecord *record, NativeCustomLabelsSet *p_current_
     unsigned klen        = BOUNDED_LEN(lbl->key.len, CUSTOM_LABEL_MAX_KEY_LEN, 0x1f);
     if ((err = bpf_probe_read_user(out_lbl->key, klen, (void *)lbl->key.buf))) {
       increment_metric(metricID_UnwindNativeCustomLabelsErrReadKey);
-      DEBUG_PRINT("cl: failed to read label key: %d", err);
+      DEBUG_PRINT("cl: failed to read label key: %ld", err);
       goto exit;
     }
     out_lbl->key[klen] = 0;
     unsigned vlen      = BOUNDED_LEN(lbl->value.len, CUSTOM_LABEL_MAX_VAL_LEN, 0x3f);
     if ((err = bpf_probe_read_user(out_lbl->val, vlen, (void *)lbl->value.buf))) {
       increment_metric(metricID_UnwindNativeCustomLabelsErrReadValue);
-      DEBUG_PRINT("cl: failed to read label value: %d", err);
+      DEBUG_PRINT("cl: failed to read label value: %ld", err);
       goto exit;
     }
     out_lbl->val[vlen] = 0;
@@ -173,7 +173,7 @@ exit:
 static EBPF_INLINE bool
 get_native_custom_labels(PerCPURecord *record, NativeCustomLabelsProcInfo *proc)
 {
-  int err;
+  long err;
   bool is_aarch64 =
 #if defined(__aarch64__)
     true
@@ -190,7 +190,7 @@ get_native_custom_labels(PerCPURecord *record, NativeCustomLabelsProcInfo *proc)
   NativeCustomLabelsSet *p_current_set;
   if ((err = bpf_probe_read_user(&p_current_set, sizeof(void *), (void *)(addr)))) {
     increment_metric(metricID_UnwindNativeCustomLabelsErrReadData);
-    DEBUG_PRINT("Failed to read custom labels current set pointer: %d", err);
+    DEBUG_PRINT("Failed to read custom labels current set pointer: %ld", err);
     return false;
   }
 
@@ -342,7 +342,7 @@ static EBPF_INLINE bool maybe_add_node_custom_labels(PerCPURecord *record)
   }
   increment_metric(metricID_UnwindNodeCustomLabelsAttempts);
 
-  int err;
+  long err;
   u64 cped_addr = get_v8_cped_address(v8_proc);
 
   if (!cped_addr) {
@@ -354,7 +354,7 @@ static EBPF_INLINE bool maybe_add_node_custom_labels(PerCPURecord *record)
   u64 cped_table_ptr = cped_addr + 0x17; // -1 to untag, then the table is at offset 0x18
   u64 cped_table_addr;
   if ((err = bpf_probe_read_user(&cped_table_addr, sizeof(void *), (void *)(cped_table_ptr)))) {
-    DEBUG_PRINT("node cl: failed to read cped table addr: %d", err);
+    DEBUG_PRINT("node cl: failed to read cped table addr: %ld", err);
     return false;
   }
 
@@ -364,14 +364,14 @@ static EBPF_INLINE bool maybe_add_node_custom_labels(PerCPURecord *record)
   u64 n_buckets_smi;
 
   if ((err = bpf_probe_read_user(&n_buckets_smi, sizeof(void *), (void *)(n_buckets_ptr)))) {
-    DEBUG_PRINT("node cl: failed to read n buckets: %d", err);
+    DEBUG_PRINT("node cl: failed to read n buckets: %ld", err);
     return false;
   }
   if (!is_smi(n_buckets_smi)) {
     DEBUG_PRINT("node cl: N buckets is not a smi: 0x%llx", n_buckets_smi);
     return false;
   }
-  s32 n_buckets = n_buckets_smi >> 32;
+  s32 n_buckets = (s32)(n_buckets_smi >> 32);
   DEBUG_PRINT("node cl: N buckets: %d", n_buckets);
 
   if (n_buckets & (n_buckets - 1)) {
@@ -390,19 +390,19 @@ static EBPF_INLINE bool maybe_add_node_custom_labels(PerCPURecord *record)
   int als_id_hash;
 
   if ((err = bpf_probe_read_user(&als_id_hash, sizeof(int), (void *)als_id_hash_ptr))) {
-    DEBUG_PRINT("node cl: failed to read hash: %d", err);
+    DEBUG_PRINT("node cl: failed to read hash: %ld", err);
     return false;
   }
 
   u64 als_handle;
   if ((err = bpf_probe_read_user(&als_handle, sizeof(void *), (void *)als_handle_ptr))) {
-    DEBUG_PRINT("node cl: failed to read als handle pointer: %d\n", err);
+    DEBUG_PRINT("node cl: failed to read als handle pointer: %ld\n", err);
     return false;
   }
 
   u64 als_identity;
   if ((err = bpf_probe_read_user(&als_identity, sizeof(void *), (void *)als_handle))) {
-    DEBUG_PRINT("node cl: failed to read als identity: %d\n", err);
+    DEBUG_PRINT("node cl: failed to read als identity: %ld\n", err);
     return false;
   }
 
@@ -410,7 +410,7 @@ static EBPF_INLINE bool maybe_add_node_custom_labels(PerCPURecord *record)
 
   int bucket = als_id_hash & (n_buckets - 1);
 
-  u64 entry_idx_ptr = first_bucket_ptr + 8 * bucket;
+  u64 entry_idx_ptr = first_bucket_ptr + 8 * (u64)bucket;
 
   int tries;
 
@@ -418,14 +418,14 @@ static EBPF_INLINE bool maybe_add_node_custom_labels(PerCPURecord *record)
   for (tries = 0; tries < MAX_V8_HM_TRIES; ++tries) {
     u64 entry_idx_smi;
     if ((err = bpf_probe_read_user(&entry_idx_smi, sizeof(void *), (void *)entry_idx_ptr))) {
-      DEBUG_PRINT("node cl: failed to read next entry index: %d\n", err);
+      DEBUG_PRINT("node cl: failed to read next entry index: %ld\n", err);
       return false;
     }
     if (!is_smi(entry_idx_smi)) {
       DEBUG_PRINT("node cl: entry index is not a smi: 0x%llx", entry_idx_smi);
       return false;
     }
-    s32 entry_idx = entry_idx_smi >> 32;
+    s32 entry_idx = (s32)(entry_idx_smi >> 32);
 
     if (entry_idx < 0) {
       DEBUG_PRINT("node cl: ALS not found in map.");
@@ -441,10 +441,10 @@ static EBPF_INLINE bool maybe_add_node_custom_labels(PerCPURecord *record)
     };
 
     struct Entry e;
-    struct Entry *entry_ptr =
-      (struct Entry *)(first_bucket_ptr + 8 * n_buckets + sizeof(struct Entry) * entry_idx);
+    struct Entry *entry_ptr = (struct Entry *)(first_bucket_ptr + 8 * (u64)n_buckets +
+                                               sizeof(struct Entry) * (u64)entry_idx);
     if ((err = bpf_probe_read_user(&e, sizeof(e), (void *)entry_ptr))) {
-      DEBUG_PRINT("node cl: failed to read entry: %d\n", err);
+      DEBUG_PRINT("node cl: failed to read entry: %ld\n", err);
       return false;
     }
 
@@ -468,7 +468,7 @@ static EBPF_INLINE bool maybe_add_node_custom_labels(PerCPURecord *record)
     u64 cl_wrap_ptr;
 
     if ((err = bpf_probe_read_user(&cl_wrap_ptr, sizeof(u64), (void *)cl_wrap_ptr_ptr))) {
-      DEBUG_PRINT("node cl: failed to find ClWrap: %d\n", err);
+      DEBUG_PRINT("node cl: failed to find ClWrap: %ld\n", err);
       return false;
     }
 
@@ -478,7 +478,7 @@ static EBPF_INLINE bool maybe_add_node_custom_labels(PerCPURecord *record)
     u64 token_ptr  = cl_ptr_ptr + 8;
     u64 token;
     if ((err = bpf_probe_read_user(&token, sizeof(u64), (void *)token_ptr))) {
-      DEBUG_PRINT("node cl: failed reading token: %d\n", err);
+      DEBUG_PRINT("node cl: failed reading token: %ld\n", err);
       return false;
     }
     if (token != 0xEC9EB507FB5D7903) {
@@ -487,7 +487,7 @@ static EBPF_INLINE bool maybe_add_node_custom_labels(PerCPURecord *record)
     }
     u64 cl_ptr;
     if ((err = bpf_probe_read_user(&cl_ptr, sizeof(u64), (void *)cl_ptr_ptr))) {
-      DEBUG_PRINT("node cl: failed reading cl ptr: %d\n", err);
+      DEBUG_PRINT("node cl: failed reading cl ptr: %ld\n", err);
       return false;
     }
 

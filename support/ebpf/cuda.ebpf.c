@@ -263,7 +263,7 @@ int BPF_USDT(
   evt->stream_id      = stream_id;
   evt->graph_id       = graph_id;
 
-  int chars = bpf_probe_read_user_str((char *)&evt->kernel_name, sizeof(evt->kernel_name), name);
+  long chars = bpf_probe_read_user_str((char *)&evt->kernel_name, sizeof(evt->kernel_name), name);
   if (chars <= 0) {
     evt->kernel_name[0] = 'e';
     evt->kernel_name[1] = 'r';
@@ -351,7 +351,7 @@ process_activity_chunk(struct pt_regs *ctx, u64 ptrs_base, u32 num_activities, u
       evt->graph_id       = rec->graph_id;
 
       const char *name = (const char *)rec->name_ptr;
-      int chars =
+      long chars =
         bpf_probe_read_user_str((char *)&evt->kernel_name, sizeof(evt->kernel_name), name);
       if (chars <= 0) {
         evt->kernel_name[0] = 'e';
@@ -719,7 +719,7 @@ int BPF_USDT(cuda_error, s32 code, u64 message_ptr, u64 component_ptr)
 SEC("usdt/cuda_probe")
 int cuda_probe(struct pt_regs *ctx)
 {
-  u64 full_cookie = bpf_get_attach_cookie(ctx);
+  u64 full_cookie = (u64)bpf_get_attach_cookie(ctx);
   u32 cookie      = (u32)(full_cookie & 0xFFFFFFFF);
 
   switch (cookie) {

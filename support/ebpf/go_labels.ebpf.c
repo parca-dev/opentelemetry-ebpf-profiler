@@ -9,7 +9,7 @@
 // go_procs stores Go runtime-specific offsets per Go process.
 struct go_procs_t {
   __uint(type, BPF_MAP_TYPE_HASH);
-  __type(key, pid_t);
+  __type(key, u32);
   __type(value, GoRuntimeOffsets);
   __uint(max_entries, 1024);
 } go_procs SEC(".maps");
@@ -34,7 +34,7 @@ get_go_custom_labels_from_slice(PerCPURecord *record, void *labels_slice_ptr)
     return false;
   }
 
-  for (u8 i = 0; i < MAX_CUSTOM_LABELS; i++) {
+  for (u64 i = 0; i < MAX_CUSTOM_LABELS; i++) {
     if (i >= labels_slice.len)
       break;
     CustomLabel *lbl = &out->labels[i];
@@ -107,8 +107,8 @@ get_go_custom_labels_from_map(PerCPURecord *record, void *labels_map_ptr_ptr)
   CustomLabelsArray *out = &record->trace.custom_labels;
   // If the map has more than 16 buckets we just don't support it, pprof maps are typically
   // small and if its a problem upgrading to Go 1.24+ is a potential solution.
-  u8 bucket_count        = 1 << log_2_bucket_count;
-  for (u8 b = 0; b < 16; b++) {
+  u64 bucket_count       = 1UL << log_2_bucket_count;
+  for (u64 b = 0; b < 16; b++) {
     if (b >= bucket_count)
       break;
     GoMapBucket *map_value = &record->goMapBucket;
@@ -117,7 +117,7 @@ get_go_custom_labels_from_map(PerCPURecord *record, void *labels_map_ptr_ptr)
       return false;
     }
 
-    for (u8 i = 0; i < GO_MAP_BUCKET_SIZE; i++) {
+    for (u64 i = 0; i < GO_MAP_BUCKET_SIZE; i++) {
       if (out->len >= MAX_CUSTOM_LABELS)
         return true;
       CustomLabel *lbl = &out->labels[out->len];
@@ -126,7 +126,7 @@ get_go_custom_labels_from_map(PerCPURecord *record, void *labels_map_ptr_ptr)
       if (tophash != 0 && kstr != NULL) {
         // Terminate the bytes we read with a NUL; see get_go_custom_labels_from_slice
         // for why this is required (the PerCPURecord is reused across traces).
-        u8 klen = MIN(map_value->keys[i].len, CUSTOM_LABEL_MAX_KEY_LEN);
+        u32 klen = (u32)MIN(map_value->keys[i].len, CUSTOM_LABEL_MAX_KEY_LEN);
         if (bpf_probe_read_user(lbl->key, klen, kstr)) {
           DEBUG_PRINT("cl: failed to read key for custom label (%lx)", (unsigned long)kstr);
           return false;
@@ -134,7 +134,7 @@ get_go_custom_labels_from_map(PerCPURecord *record, void *labels_map_ptr_ptr)
         lbl->key[klen] = 0;
 
         char *vstr = map_value->values[i].str;
-        u8 vlen    = MIN(map_value->values[i].len, CUSTOM_LABEL_MAX_VAL_LEN);
+        u32 vlen   = (u32)MIN(map_value->values[i].len, CUSTOM_LABEL_MAX_VAL_LEN);
         if (bpf_probe_read_user(lbl->val, vlen, vstr)) {
           DEBUG_PRINT("cl: failed to read value for custom label");
           return false;

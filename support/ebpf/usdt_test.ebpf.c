@@ -204,7 +204,7 @@ SEC("usdt/usdt_test_multi")
 int usdt_test_multi(struct pt_regs *ctx)
 {
   // Extract user cookie from low 32 bits (high 32 bits contain spec ID)
-  u64 full_cookie = bpf_get_attach_cookie(ctx);
+  u64 full_cookie = (u64)bpf_get_attach_cookie(ctx);
   u32 probe_id    = (u32)(full_cookie & 0xFFFFFFFF);
 
   DEBUG_PRINT("usdt_test_multi called with probe_id=%u", probe_id);

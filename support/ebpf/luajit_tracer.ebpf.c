@@ -19,7 +19,7 @@
 
 struct luajit_procs_t {
   __uint(type, BPF_MAP_TYPE_HASH);
-  __type(key, pid_t);
+  __type(key, u32);
   __type(value, LuaJITProcInfo);
   __uint(max_entries, 1024);
 } luajit_procs SEC(".maps");
@@ -254,7 +254,7 @@ static EBPF_INLINE ErrorCode lj_debug_framepc(
     *pc = NO_BCPOS;
     return ERR_OK;
   }
-  *pc = ins - startpc - 1;
+  *pc = (u32)(ins - startpc - 1);
   DEBUG_PRINT("ins, startpc good: setting *pc = %llx", (u64)*pc);
   return ERR_OK;
 }
@@ -449,7 +449,7 @@ static EBPF_INLINE ErrorCode walk_luajit_stack(
     // root of the stack, which should never happen...
     TValue *frame = (TValue *)(record->luajitUnwindState.frame);
 
-    int diff = frame - L->stack;
+    int diff = (int)(frame - L->stack);
     DEBUG_PRINT("lj: distance to bot: %d", diff);
 
     if (diff <= 2) {
@@ -699,7 +699,6 @@ static EBPF_INLINE int unwind_luajit(struct pt_regs *ctx)
   LuaJITProcInfo *info = bpf_map_lookup_elem(&luajit_procs, &pid);
   if (!info) {
     DEBUG_PRINT("lj: no LuaJIT introspection data");
-    error = ERR_LUAJIT_NO_PROC_INFO;
     increment_metric(metricID_UnwindLuaJITErrNoProcInfo);
     goto exit;
   }

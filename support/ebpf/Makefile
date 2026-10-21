@@ -70,12 +70,12 @@ FLAGS=$(TARGET_FLAGS) -g \
 	-nostdinc \
 	-ffreestanding \
 	-O2 -emit-llvm -c $< \
-	-I$(USDT_HEADERS) \
-	-I$(CUPTI_HEADERS) \
+	-isystem $(USDT_HEADERS) \
+	-isystem $(CUPTI_HEADERS) \
 	-Wall -Wextra -Werror \
 	-Wno-address-of-packed-member \
 	-Wno-unused-label \
-	-Wno-sign-compare \
+	-Wsign-compare -Wsign-conversion -Wshorten-64-to-32 \
 	-fno-stack-protector \
 	-D__SOURCE_DATE_EPOCH__=0 \
 	-std=gnu17 \
