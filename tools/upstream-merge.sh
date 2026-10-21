@@ -10,7 +10,8 @@
 # Auto-resolvable conflicts:
 #   * support/ebpf/tracer.ebpf.{amd64,arm64} — rebuilt from merged sources
 #   * support/ebpf/errors.h — regenerated from errors.json and clang-formatted
-#   * go.mod / go.sum — accept upstream, then `go mod tidy`
+#   * go.mod / go.sum (root and nested modules) — accept upstream, re-add
+#     fork-only requires/replaces, then `go mod tidy`
 #
 # Everything else is considered a "real" conflict and the script stops
 # before it, leaving you with the largest clean merge possible.
@@ -86,7 +87,12 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 GIT_DIR="$(git rev-parse --git-dir)"
 
 BPF_BLOB_RE='^support/ebpf/tracer\.ebpf\.(amd64|arm64)$'
-GOMOD_RE='^go\.(mod|sum)$'
+# Any Go module's go.mod/go.sum: the root module plus nested ones such as
+# tools/luajitoffsets. internal/tools is matched separately below (taken
+# verbatim); LICENSES/ and testdata/ hold vendored or fixture modules that are
+# never tidied, so a conflict there is a real one.
+GOMOD_RE='^(.+/)?go\.(mod|sum)$'
+GOMOD_SKIP_RE='^(internal/tools/|LICENSES/)|/testdata/'
 TOOLS_GOMOD_RE='^internal/tools/go\.(mod|sum)$'
 
 # Metrics-related files. parca-specific metrics live alongside upstream's; when
@@ -120,7 +126,7 @@ unmerged_files() {
 is_auto_resolvable_path() {
     local f="$1"
     [[ "$f" =~ $BPF_BLOB_RE \
-    || "$f" =~ $GOMOD_RE \
+    || ( "$f" =~ $GOMOD_RE && ! "$f" =~ $GOMOD_SKIP_RE ) \
     || "$f" =~ $TOOLS_GOMOD_RE \
     || "$f" =~ $METRICS_JSON_RE \
     || "$f" =~ $METRICS_GEN_RE \
@@ -280,21 +286,63 @@ regen_errors_h() {
     git add support/ebpf/errors.h || return 1
 }
 
+# Resolve a Go module's go.mod/go.sum conflict: take upstream's files, put back
+# the requires and replaces only the fork has, then `go mod tidy`.
+#
+# Taking theirs alone would drop fork-only deps (oomprof, usdt, testcontainers,
+# ...) from go.mod, and tidy would re-add them at whatever version is newest,
+# silently bumping anything the fork pinned. Shared deps keep upstream's
+# version: renovate keeps those current upstream and the fork rarely runs ahead.
+resolve_gomod() {
+    local dir="$1" modfile="$1/go.mod" ours theirs p
+    if [[ -n "$(git ls-files -u -- "$modfile")" ]]; then
+        ours=$(git show ":2:$modfile" | go mod edit -json /dev/stdin)     || return 1
+        git checkout --theirs -- "$modfile"                               || return 1
+        theirs=$(go mod edit -json "$modfile")                            || return 1
+        # Insert into the first require block rather than `go mod edit -require`,
+        # which appends to the last (indirect) block; tidy fixes `// indirect`
+        # markers and ordering but never moves a line between blocks.
+        local extra
+        extra=$(jq -rn --argjson o "$ours" --argjson t "$theirs" '
+            ($t.Require // [] | map(.Path)) as $tp
+            | $o.Require // [] | .[] | select(.Path | IN($tp[]) | not)
+            | "\t\(.Path) \(.Version)"')                              || return 1
+        if [[ -n "$extra" ]]; then
+            EXTRA="$extra" awk '!done && /^require \($/ { print; print ENVIRON["EXTRA"]; done = 1; next } { print }' \
+                "$modfile" > "$modfile.tmp" && mv "$modfile.tmp" "$modfile" || return 1
+        fi
+        while IFS= read -r p; do
+            [[ -n "$p" ]] && { go mod edit -replace="$p" "$modfile"       || return 1; }
+        done < <(jq -rn --argjson o "$ours" --argjson t "$theirs" '
+            ($t.Replace // [] | map(.Old.Path)) as $tp
+            | $o.Replace // [] | .[] | select(.Old.Path | IN($tp[]) | not)
+            | "\(.Old.Path)\(if .Old.Version then "@" + .Old.Version else "" end)=\(.New.Path)\(if .New.Version then "@" + .New.Version else "" end)"')
+    fi
+    if [[ -n "$(git ls-files -u -- "$dir/go.sum")" ]]; then
+        git checkout --theirs -- "$dir/go.sum"                            || return 1
+    fi
+    ( cd "$REPO_ROOT/$dir" && go mod tidy )                               || return 1
+    git add "$modfile" "$dir/go.sum"                                      || return 1
+}
+
 # Resolve auto-resolvable conflicts in the working tree and commit.
 # Uses explicit || return 1 so this is safe to call from condition
 # contexts (e.g. inside an `if`) where set -e is suppressed.
 auto_resolve() {
-    local has_bpf=false has_gomod=false has_tools_gomod=false has_metrics=false has_errors=false f
-    local -a conflicts
+    local has_bpf=false has_tools_gomod=false has_metrics=false has_errors=false f
+    local -a conflicts gomod_dirs=()
     mapfile -t conflicts < <(unmerged_files)
 
     for f in "${conflicts[@]}"; do
         case "$f" in
             support/ebpf/tracer.ebpf.*)                  has_bpf=true ;;
             support/ebpf/errors.h)                       has_errors=true ;;
-            go.mod|go.sum)                               has_gomod=true ;;
             internal/tools/go.mod|internal/tools/go.sum) has_tools_gomod=true ;;
         esac
+        if [[ "$f" =~ $GOMOD_RE && ! "$f" =~ $GOMOD_SKIP_RE ]]; then
+            local d; d=$(dirname "$f")
+            [[ " ${gomod_dirs[*]} " == *" $d "* ]] || gomod_dirs+=("$d")
+        fi
         if [[ "$f" =~ $METRICS_JSON_RE \
            || "$f" =~ $METRICS_GEN_RE \
            || "$f" =~ $METRICS_SWAP_RE ]]; then
@@ -302,14 +350,11 @@ auto_resolve() {
         fi
     done
 
-    # ── go.mod / go.sum ────────────────────────────────────────────────
-    if $has_gomod; then
-        log "  go.mod/go.sum → accept upstream + go mod tidy"
-        git checkout --theirs -- go.mod                              || return 1
-        git checkout --theirs -- go.sum 2>/dev/null || true
-        ( cd "$REPO_ROOT" && go mod tidy )                           || return 1
-        git add go.mod go.sum                                        || return 1
-    fi
+    # ── go.mod / go.sum (root and nested modules) ──────────────────────
+    for f in "${gomod_dirs[@]}"; do
+        log "  $f/go.mod/go.sum → accept upstream, keep fork-only requires, go mod tidy"
+        resolve_gomod "$f"                                           || return 1
+    done
 
     # ── internal/tools/go.mod / .sum ───────────────────────────────────
     # After upstream PR #1330 the tools module is a thin shell holding only
@@ -376,7 +421,7 @@ auto_resolve() {
             cat "$merge_msg"
             echo ""
             echo "Auto-resolved:"
-            if $has_gomod;       then echo "  - go.mod/go.sum: accepted upstream, ran go mod tidy"; fi
+            for f in "${gomod_dirs[@]}"; do echo "  - $f/go.mod/go.sum: accepted upstream, kept fork-only requires, ran go mod tidy"; done
             if $has_tools_gomod; then echo "  - internal/tools/go.mod/sum: accepted upstream verbatim"; fi
             if $has_metrics;     then echo "  - metrics: upstream IDs preserved, parca renumbered after, generated files regenerated"; fi
             if $has_bpf;         then echo "  - BPF blobs: rebuilt from merged C sources"; fi
