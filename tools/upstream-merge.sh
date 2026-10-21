@@ -5,7 +5,10 @@
 # Finds the merge base, identifies all upstream commits past it, and
 # merges the largest prefix that doesn't require human intervention.
 # After merging, a smoke test is run to verify the result; if it fails
-# the script binary-searches for the last commit that passes.
+# the script binary-searches for the last commit that passes. The default
+# smoke test only type-checks (go vet), which catches the common case of
+# upstream changing an API that fork-only code uses without any textual
+# conflict.
 #
 # Auto-resolvable conflicts:
 #   * support/ebpf/tracer.ebpf.{amd64,arm64} — rebuilt from merged sources
@@ -22,6 +25,8 @@
 # Options:
 #   --no-fetch          Skip 'git fetch' (useful when you already fetched)
 #   --no-smoke          Skip the post-merge smoke test
+#   --full-smoke        Also link test binaries and run `make test` (slow;
+#                       needs the Rust symblib-capi lib built)
 #   --leave-conflicted  After the clean prefix is merged, attempt the next
 #                       blocking commit and leave any unresolved conflicts
 #                       in the working tree for manual resolution. Auto-
@@ -47,7 +52,12 @@ set -euo pipefail
 # ── smoke-test commands ────────────────────────────────────────────────
 # All must pass for a merge to be accepted.  Add more entries as needed.
 
+# Type-check every package, tests included, without linking. The disabled
+# analyzers flag pre-existing style issues upstream and the fork both carry.
 SMOKE_CMDS=(
+    "CGO_ENABLED=1 go vet -composites=false -unreachable=false -unsafeptr=false ./..."
+)
+FULL_SMOKE_CMDS=(
     "go test -run ^$ ./..."
     "make test"
 )
@@ -67,6 +77,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --no-fetch)         DO_FETCH=false; shift ;;
         --no-smoke)         DO_SMOKE=false; shift ;;
+        --full-smoke)       SMOKE_CMDS+=("${FULL_SMOKE_CMDS[@]}"); shift ;;
         --leave-conflicted) LEAVE_CONFLICTED=true; shift ;;
         --fresh)            FORCE_FRESH=true; shift ;;
         --branch)           BRANCH="$2"; shift 2 ;;
