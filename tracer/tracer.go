@@ -25,6 +25,7 @@ import (
 	"github.com/cilium/ebpf/features"
 	"github.com/cilium/ebpf/link"
 	"github.com/elastic/go-perf"
+	"go.opentelemetry.io/otel/attribute"
 
 	"go.opentelemetry.io/ebpf-profiler/internal/linux"
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
@@ -1432,6 +1433,16 @@ func (t *Tracer) GetEbpfHandler() interpreter.EbpfHandler {
 // GetInterpretersForPID returns all interpreter instances for the given PID.
 func (t *Tracer) GetInterpretersForPID(pid libpf.PID) []interpreter.Instance {
 	return t.processManager.GetInterpretersForPID(pid)
+}
+
+// ProcessMetaForPID returns the metadata and process-context resource
+// attributes the tracer holds for pid, so data reported outside the trace path
+// can be attributed the same way as the process's profiles. ok is false if
+// pid is not tracked.
+func (t *Tracer) ProcessMetaForPID(pid libpf.PID) (meta process.Meta,
+	resourceAttrs attribute.Set, ok bool,
+) {
+	return t.processManager.ProcessMetaForPID(pid)
 }
 
 // ForceProcessPID forces processing of the given PID by sending it to the

@@ -901,15 +901,23 @@ func (pm *ProcessManager) CleanupPIDs() {
 	}
 }
 
-// metaForPID returns the process metadata and process-context resource
-// attributes for pid, read under one lock.
-func (pm *ProcessManager) metaForPID(pid libpf.PID) (process.Meta, attribute.Set) {
+// ProcessMetaForPID returns the process metadata and process-context resource
+// attributes for pid, read under one lock. ok is false if pid is not tracked.
+//
+// The metadata is what was captured when the process was synchronized, not
+// re-read from /proc. That matters for the environment: a process that
+// rewrites its title with setproctitle overwrites the memory backing
+// /proc/<pid>/environ, so a later read loses OTEL_SERVICE_NAME and
+// OTEL_RESOURCE_ATTRIBUTES.
+func (pm *ProcessManager) ProcessMetaForPID(pid libpf.PID) (meta process.Meta,
+	resourceAttrs attribute.Set, ok bool,
+) {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
 	if procInfo, ok := pm.pidToProcessInfo[pid]; ok {
-		return procInfo.meta, procInfo.processContext.ResourceAttrs
+		return procInfo.meta, procInfo.processContext.ResourceAttrs, true
 	}
-	return process.Meta{}, attribute.Set{}
+	return process.Meta{}, attribute.Set{}, false
 }
 
 // ThreadLabelDecoderForPID returns a decoder for pid's per-thread labels, or nil
