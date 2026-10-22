@@ -33,6 +33,22 @@ type TraceReporter interface {
 	ReportTraceEvent(trace *libpf.Trace, meta *samples.TraceEventMeta) error
 }
 
+// NvtxReporter is an optional sink for NVTX annotations (ranges, marks,
+// resource names) from the CUDA interpreter. Events are delivered raw and in
+// per-thread order; turning ranges into spans, logs or anything else is the
+// implementation's job. Reporters that don't consume NVTX simply don't
+// implement this; the caller checks for the interface and skips emission.
+type NvtxReporter interface {
+	// ReportNvtxEvent hands over a single NVTX event. Returning an error means
+	// the event could not be accepted (e.g. backpressure); it is dropped.
+	ReportNvtxEvent(ev *samples.NvtxEvent) error
+
+	// ReportNvtxResourceName hands over a resource-name announcement.
+	// Announcements are low-rate and may repeat; the consumer is expected to
+	// keep its own cache and not require dedup from the caller.
+	ReportNvtxResourceName(ev *samples.NvtxResourceNameEvent) error
+}
+
 type ExecutableMetadata struct {
 	// MappingFile is the reference to mapping file data.
 	MappingFile libpf.FrameMappingFile
