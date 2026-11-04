@@ -154,7 +154,6 @@ package nodev8 // import "go.opentelemetry.io/ebpf-profiler/interpreter/nodev8"
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -2358,22 +2357,10 @@ func lookupRelevantSymbols(ef *pfelf.File) (relevantSymbols, error) {
 
 // loadNodeClData loads various offsets that are needed for custom labels handling.
 func (d *v8Data) loadNodeClData(ef *pfelf.File, syms relevantSymbols) error {
-	sym := syms.NodeVersion
-
-	if sym == nil {
-		return errors.New("version symbol not found in Node binary")
+	major, err := nodeMajorVersion(ef, syms.NodeVersion)
+	if err != nil {
+		return err
 	}
-
-	if sym.Size < 12 {
-		return fmt.Errorf("version symbol in Node binary too small: %d", sym.Size)
-	}
-
-	versBuf := make([]byte, 12)
-	if _, err := ef.ReadAt(versBuf, int64(sym.Address)); err != nil {
-		return fmt.Errorf("failed to read Node version data: %w", err)
-	}
-
-	major := binary.LittleEndian.Uint32(versBuf[0:4])
 
 	// These offsets are computed by pointing a libclang script at a Node build directory
 	// with a valid compile_commands.json:
@@ -2393,25 +2380,9 @@ func (d *v8Data) loadNodeClData(ef *pfelf.File, syms relevantSymbols) error {
 		return fmt.Errorf("unsupported Node major version: %d", major)
 	}
 
-	var offset int64
-	var err error
-
-	if major < 26 {
-		offset, err = ef.LookupTLSSymbolOffset("_ZN2v88internal18g_current_isolate_E")
-		if err != nil {
-			return fmt.Errorf("failed to look up g_current_isolate: %w", err)
-		}
-	} else {
-		// Node started building v8 without external dynamic symbols
-		// in major version v26.
-		sym := syms.CurrentIsolate
-		if sym == nil {
-			return fmt.Errorf("couldn't find g_current_isolate (in major >= 26)")
-		}
-		offset, err = ef.AdjustTLSSymbol(sym)
-		if err != nil {
-			return fmt.Errorf("failed to adjust TLS symbol: %w", err)
-		}
+	offset, err := currentIsolateOffset(ef, syms.CurrentIsolate)
+	if err != nil {
+		return err
 	}
 	d.isolateSym = libpf.Address(offset)
 	return nil
