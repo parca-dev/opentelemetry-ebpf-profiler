@@ -107,30 +107,31 @@ func gpuPCLabels(stallName libpf.String, mnemonic string, deviceID uint32,
 }
 
 // buildGpuPCMeta constructs TraceEventMeta for a gpupc sample.
-// If a CPU trace is available, metadata is copied from it.
+// If a CPU trace is available, its metadata is inherited whole, as prepTrace
+// does for kernel timings: reporters key resources on PID/executable/container
+// and keep the latest ResourceAttrs, so a sample missing any of it would clear
+// the process's resolved resource (service.name and friends). Only the fields
+// specific to a gpupc sample are overridden. Without a CPU trace, only the PID
+// and the time of the sample are known.
 //
 // ContextValues[0] carries the raw PC sample count for this (pid, trace). The reporter
 // pairs it with the per-pid GpuConfig (via LoadGpuConfig) to set the profile
 // period to ns_per_sample, so a "count" sample_type stays mathematically
-// convertible to GPU nanoseconds via value × period.
+// convertible to GPU nanoseconds via value × period. It replaces the CPU
+// trace's ContextValues, which alias a pooled buffer and must not be retained.
 func buildGpuPCMeta(cpuTrace *SymbolizedCudaTrace, pid uint32,
 	sampleCount int64) *samples.TraceEventMeta {
-	meta := &samples.TraceEventMeta{
-		Timestamp:     libpf.UnixTime64(time.Now().UnixNano()),
-		PID:           libpf.PID(pid),
-		ProfileType:   ProfileTypeGpuPC,
-		ContextValues: []uint64{uint64(sampleCount)},
-	}
+	var meta samples.TraceEventMeta
 	if cpuTrace != nil && cpuTrace.Meta != nil {
-		meta.Timestamp = cpuTrace.Meta.Timestamp
-		meta.Comm = cpuTrace.Meta.Comm
-		meta.ExecutablePath = cpuTrace.Meta.ExecutablePath
-		meta.ContainerID = cpuTrace.Meta.ContainerID
-		meta.TID = cpuTrace.Meta.TID
-		meta.CPU = cpuTrace.Meta.CPU
-		meta.EnvVars = cpuTrace.Meta.EnvVars
+		meta = *cpuTrace.Meta
+		meta.OriginData = nil
+	} else {
+		meta.Timestamp = libpf.UnixTime64(time.Now().UnixNano())
+		meta.PID = libpf.PID(pid)
 	}
-	return meta
+	meta.ProfileType = ProfileTypeGpuPC
+	meta.ContextValues = []uint64{uint64(sampleCount)}
+	return &meta
 }
 
 // warnedUnknownSM keys cubin CRCs already reported, so a hot kernel does not
