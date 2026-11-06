@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pprofile"
 	"go.opentelemetry.io/otel/attribute"
+	oteltrace "go.opentelemetry.io/otel/trace"
 
 	"go.opentelemetry.io/ebpf-profiler/internal/log"
 
@@ -221,16 +222,24 @@ func (p *Pdata) setProfile(
 			setSampleValues(sample, traceInfo.Values, valueIndex, valueWidth)
 		}
 
-		if sampleKey.SpanID != libpf.InvalidSpanID &&
-			sampleKey.TraceID != libpf.InvalidTraceID {
+		// Prefer a complete metadata context. Otherwise parse both custom
+		// labels together so IDs from different sources cannot be mixed.
+		// The parsers return zero IDs for invalid hex, lengths or zero values.
+		traceID, spanID := sampleKey.TraceID, sampleKey.SpanID
+		if traceID == libpf.InvalidTraceID || spanID == libpf.InvalidSpanID {
+			tid, _ := oteltrace.TraceIDFromHex(traceInfo.Labels[libpf.Intern("otel.trace_id")].String())
+			sid, _ := oteltrace.SpanIDFromHex(traceInfo.Labels[libpf.Intern("otel.span_id")].String())
+			traceID, spanID = libpf.TraceID(tid), libpf.SpanID(sid)
+		}
+		if spanID != libpf.InvalidSpanID && traceID != libpf.InvalidTraceID {
 			link, ok := linkSet.AddWithCheck(linkInfo{
-				traceID: sampleKey.TraceID,
-				spanID:  sampleKey.SpanID,
+				traceID: traceID,
+				spanID:  spanID,
 			})
 			if !ok {
 				l := dic.LinkTable().AppendEmpty()
-				l.SetSpanID(pcommon.SpanID(sampleKey.SpanID))
-				l.SetTraceID(pcommon.TraceID(sampleKey.TraceID))
+				l.SetSpanID(pcommon.SpanID(spanID))
+				l.SetTraceID(pcommon.TraceID(traceID))
 			}
 			sample.SetLinkIndex(link)
 		}

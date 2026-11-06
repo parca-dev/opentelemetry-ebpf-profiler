@@ -50,16 +50,16 @@ const (
 	// pc_sample_batch program additionally tail-chains into itself (slot 1) up
 	// to BPF_PC_MAX_TAIL_CALLS times to process batches larger than one chunk
 	// while keeping each program under the 1M-insn verifier complexity cap.
-	CudaProgCorrelation     = 0
-	CudaProgKernelExec      = 1
-	CudaProgActivityBatch   = 2
-	CudaProgCubinLoaded     = 3
-	CudaProgPCSampleBatch   = 4
-	CudaProgStallReasonMap  = 5
-	CudaProgError           = 6
-	CudaProgGpuConfig       = 7
-	CudaProgNvtxEventBatch  = 8
-	CudaProgNvtxResource    = 9
+	CudaProgCorrelation    = 0
+	CudaProgKernelExec     = 1
+	CudaProgActivityBatch  = 2
+	CudaProgCubinLoaded    = 3
+	CudaProgPCSampleBatch  = 4
+	CudaProgStallReasonMap = 5
+	CudaProgError          = 6
+	CudaProgGpuConfig      = 7
+	CudaProgNvtxEventBatch = 8
+	CudaProgNvtxResource   = 9
 )
 
 const cudaProgsMap = "cuda_progs"
@@ -858,6 +858,15 @@ func emitPCSample(ev *CuptiPCSampleEvent, rep reporter.TraceReporter, cpuTrace *
 
 		trace := buildGpuPCTrace(cpuTrace, cubinMapping, kernelName, ev.Data.PCOffset)
 		trace.CustomLabels = gpuPCLabels(LookupStallReason(ev.Pid, sr.Index), mnemonic, ev.DeviceID, hasDevice)
+		if cpuTrace != nil {
+			// Retain the launching context, including otel.trace_id/otel.span_id,
+			// in this sample's own map. GPU-specific labels take precedence.
+			for k, v := range cpuTrace.Trace.CustomLabels {
+				if _, exists := trace.CustomLabels[k]; !exists {
+					trace.CustomLabels[k] = v
+				}
+			}
+		}
 
 		meta := buildGpuPCMeta(cpuTrace, ev.Pid, int64(sr.Samples))
 		if err := rep.ReportTraceEvent(trace, meta); err != nil {
