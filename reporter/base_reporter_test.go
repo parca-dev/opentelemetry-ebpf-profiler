@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/collector/pdata/pcommon"
 	"go.opentelemetry.io/collector/pdata/pprofile"
 	"go.opentelemetry.io/otel/attribute"
 	semconv "go.opentelemetry.io/otel/semconv/v1.37.0"
@@ -507,4 +508,77 @@ func TestCustomLabelsArePartOfSampleIdentity(t *testing.T) {
 		"tenant-a": 2,
 		"tenant-b": 1,
 	}, timestampsByLabel)
+}
+
+func TestCustomLabelTraceLinks(t *testing.T) {
+	const traceHex = "00112233445566778899aabbccddeeff"
+	const spanHex = "1020304050607080"
+	traceID := libpf.TraceID{0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77,
+		0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff}
+	spanID := libpf.SpanID{0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80}
+	otherTrace, otherSpan := libpf.TraceID{1}, libpf.SpanID{2}
+	for _, tc := range []struct {
+		name                  string
+		traceLabel, spanLabel string
+		metaTrace, wantTrace  libpf.TraceID
+		metaSpan, wantSpan    libpf.SpanID
+	}{
+		{name: "custom labels", traceLabel: traceHex, spanLabel: spanHex, wantTrace: traceID, wantSpan: spanID},
+		{name: "missing both"},
+		{name: "missing span", traceLabel: traceHex},
+		{name: "missing trace", spanLabel: spanHex},
+		{name: "short trace", traceLabel: traceHex[2:], spanLabel: spanHex},
+		{name: "long trace", traceLabel: traceHex + "00", spanLabel: spanHex},
+		{name: "nonhex trace", traceLabel: "g0112233445566778899aabbccddeeff", spanLabel: spanHex},
+		{name: "zero trace", traceLabel: "00000000000000000000000000000000", spanLabel: spanHex},
+		{name: "short span", traceLabel: traceHex, spanLabel: spanHex[2:]},
+		{name: "long span", traceLabel: traceHex, spanLabel: spanHex + "00"},
+		{name: "nonhex span", traceLabel: traceHex, spanLabel: "g020304050607080"},
+		{name: "zero span", traceLabel: traceHex, spanLabel: "0000000000000000"},
+		{name: "metadata", metaTrace: otherTrace, metaSpan: otherSpan, wantTrace: otherTrace, wantSpan: otherSpan},
+		{name: "metadata wins", traceLabel: traceHex, spanLabel: spanHex, metaTrace: otherTrace, metaSpan: otherSpan, wantTrace: otherTrace, wantSpan: otherSpan},
+		{name: "complete label fallback", traceLabel: traceHex, spanLabel: spanHex, metaTrace: otherTrace, wantTrace: traceID, wantSpan: spanID},
+		{name: "do not mix metadata trace with label span", spanLabel: spanHex, metaTrace: otherTrace},
+		{name: "do not mix metadata span with label trace", traceLabel: traceHex, metaSpan: otherSpan},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := createTestBaseReporter(t, nil)
+			meta := &samples.TraceEventMeta{
+				Timestamp: libpf.UnixTime64(time.Now().UnixNano()), PID: 1000, TID: 1001,
+				ProfileType: profileTypeSampling, TraceID: tc.metaTrace, SpanID: tc.metaSpan,
+			}
+			// Different custom labels create separate samples sharing one link.
+			for _, tenant := range []string{"acme", "northwind"} {
+				trace := &libpf.Trace{CustomLabels: map[libpf.String]libpf.String{
+					libpf.Intern("otel.trace_id"): libpf.Intern(tc.traceLabel),
+					libpf.Intern("otel.span_id"):  libpf.Intern(tc.spanLabel),
+					libpf.Intern("tenant"):        libpf.Intern(tenant),
+				}}
+				trace.Frames.Append(&libpf.Frame{Type: libpf.GoFrame, FunctionName: libpf.Intern("work")})
+				require.NoError(t, r.ReportTraceEvent(trace, meta))
+			}
+			tree := r.traceEvents.RLock()
+			profiles, err := r.pdata.Generate(*tree, r.name, r.version, r.collectionStartTime, time.Now())
+			r.traceEvents.RUnlock(&tree)
+			require.NoError(t, err)
+			require.Equal(t, tc.metaTrace, meta.TraceID)
+			require.Equal(t, tc.metaSpan, meta.SpanID)
+			dict := profiles.Dictionary()
+			profileSamples := profiles.ResourceProfiles().At(0).ScopeProfiles().At(0).Profiles().At(0).Samples()
+			require.Equal(t, 2, profileSamples.Len())
+			for i := range profileSamples.Len() {
+				sample := profileSamples.At(i)
+				if tc.wantTrace == (libpf.TraceID{}) {
+					require.Zero(t, sample.LinkIndex())
+					require.Equal(t, 1, dict.LinkTable().Len())
+					continue
+				}
+				require.Equal(t, 2, dict.LinkTable().Len(), "one shared link plus the reserved link")
+				require.Positive(t, sample.LinkIndex())
+				link := dict.LinkTable().At(int(sample.LinkIndex()))
+				require.Equal(t, pcommon.TraceID(tc.wantTrace), link.TraceID())
+				require.Equal(t, pcommon.SpanID(tc.wantSpan), link.SpanID())
+			}
+		})
+	}
 }
