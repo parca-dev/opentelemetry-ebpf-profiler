@@ -211,11 +211,14 @@ func (i *Interpreter) Step() (arm64asm.Inst, error) {
 				i.Regs.setArm64asm(dst, v)
 			}
 		}
-	case arm64asm.ADRP:
+	case arm64asm.ADR, arm64asm.ADRP:
 		if src, ok := inst.Args[1].(arm64asm.PCRel); ok {
 			if dst, ok := inst.Args[0].(arm64asm.Reg); ok {
-				pcPage := expression.Clear(oldPC, 12)
-				i.Regs.setArm64asm(dst, expression.Add(pcPage, expression.Imm(uint64(src))))
+				base := oldPC
+				if inst.Op == arm64asm.ADRP {
+					base = expression.Clear(base, 12)
+				}
+				i.Regs.setArm64asm(dst, expression.Add(base, expression.Imm(uint64(src))))
 			}
 		}
 	default:
