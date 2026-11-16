@@ -23,9 +23,11 @@ import (
 
 // TextSection holds a single executable .text section from a cubin ELF.
 type TextSection struct {
-	Name string
-	Addr uint64
-	Data []byte
+	Name   string
+	Addr   uint64
+	Offset uint64
+	Size   uint64
+	Data   []byte // Only populated by the legacy ParseCubinELF API.
 }
 
 // CubinInfo holds parsed cubin metadata cached for PC sample processing.
@@ -34,6 +36,7 @@ type CubinInfo struct {
 	FileID    libpf.FileID
 	SMVersion int
 	Texts     []TextSection
+	Source    *CubinFileSource // Optional, validated application-owned file.
 }
 
 var cubinCache sync.Map // map[uint64]*CubinInfo (keyed by CRC)
@@ -57,7 +60,7 @@ func LoadCubin(crc uint64) (*CubinInfo, bool) {
 // parses the GPU ELF for SM version and .text sections, caches the metadata
 // keyed by CRC, and (if a reporter is supplied) reports the cubin to the
 // ExecutableReporter so the backend can resolve source lines from the cubin's
-// DWARF info.  Repeat events for an already-cached CRC are dropped.
+// DWARF info. Repeat events for an already-cached CRC are dropped.
 func HandleCubinEvent(ev *CuptiCubinEvent, rep reporter.ExecutableReporter) {
 	if _, ok := LoadCubin(ev.CubinCRC); ok {
 		return
@@ -67,7 +70,7 @@ func HandleCubinEvent(ev *CuptiCubinEvent, rep reporter.ExecutableReporter) {
 		log.Warnf("[cuda] cubin read failed pid=%d crc=0x%x: %v", ev.Pid, ev.CubinCRC, err)
 		return
 	}
-	smVersion, texts, err := ParseCubinELF(data)
+	smVersion, texts, err := ParseCubinELFMetadata(bytes.NewReader(data))
 	if err != nil {
 		log.Warnf("[cuda] cubin parse failed pid=%d crc=0x%x: %v", ev.Pid, ev.CubinCRC, err)
 		return
@@ -75,12 +78,13 @@ func HandleCubinEvent(ev *CuptiCubinEvent, rep reporter.ExecutableReporter) {
 	// FileID is derived from the cubin CRC alone — cubins lack a build-id and
 	// the CRC is already a content hash from the producer side.
 	fileID := libpf.NewFileID(ev.CubinCRC, 0)
-	StoreCubin(&CubinInfo{
+	info := &CubinInfo{
 		CRC:       ev.CubinCRC,
 		FileID:    fileID,
 		SMVersion: smVersion,
 		Texts:     texts,
-	})
+	}
+	StoreCubin(info)
 	if rep == nil {
 		return
 	}
@@ -187,40 +191,47 @@ func smVersionFromFlags(flags uint32) int {
 // executable .text sections. Cubins are GPU ELF files — we use debug/elf
 // (not pfelf) since pfelf is host-architecture-specific.
 func ParseCubinELF(data []byte) (int, []TextSection, error) {
-	ef, err := elf.NewFile(cubinVersionReader{bytes.NewReader(data)})
+	return parseCubinELF(bytes.NewReader(data), true)
+}
+
+// ParseCubinELFMetadata reads section locations without retaining code bytes.
+// The reader is not retained. FileID must be calculated from unnormalized bytes.
+func ParseCubinELFMetadata(r io.ReaderAt) (int, []TextSection, error) {
+	return parseCubinELF(r, false)
+}
+
+func parseCubinELF(r io.ReaderAt, retainCode bool) (int, []TextSection, error) {
+	ef, err := elf.NewFile(cubinVersionReader{r})
 	if err != nil {
 		return 0, nil, fmt.Errorf("parse cubin ELF: %w", err)
 	}
 	defer ef.Close()
 
-	if len(data) >= elfVersionOff+4 {
-		if v := binary.LittleEndian.Uint32(data[elfVersionOff : elfVersionOff+4]); v != evCurrent {
-			log.Debugf("[cuda] cubin has non-standard ELF e_version %d (toolkit-specific)", v)
-		}
+	var flags [4]byte
+	if _, err := r.ReadAt(flags[:], elfFlagsOff); err != nil {
+		return 0, nil, err
 	}
-
-	// The SM version lives in e_flags. Go's debug/elf doesn't expose e_flags,
-	// so we read it directly from the raw header (offset 48 for ELF64).
-	var smVersion int
-	if len(data) >= elfFlagsOff+4 {
-		smVersion = smVersionFromFlags(binary.LittleEndian.Uint32(
-			data[elfFlagsOff : elfFlagsOff+4]))
-	}
+	smVersion := smVersionFromFlags(binary.LittleEndian.Uint32(flags[:]))
 
 	var texts []TextSection
 	for _, s := range ef.Sections {
 		if s.Type == elf.SHT_PROGBITS &&
 			s.Flags&elf.SHF_EXECINSTR != 0 &&
 			strings.HasPrefix(s.Name, ".text") {
-			sdata, err := s.Data()
-			if err != nil {
-				log.Warnf("[cuda] error reading cubin elf section data: %v", err)
-				continue
+			var data []byte
+			if retainCode {
+				data, err = s.Data()
+				if err != nil {
+					log.Warnf("[cuda] error reading cubin elf section data: %v", err)
+					continue
+				}
 			}
 			texts = append(texts, TextSection{
-				Name: s.Name,
-				Addr: s.Addr,
-				Data: sdata,
+				Name:   s.Name,
+				Addr:   s.Addr,
+				Offset: s.Offset,
+				Size:   s.Size,
+				Data:   data,
 			})
 		}
 	}
@@ -232,8 +243,9 @@ func ParseCubinELF(data []byte) (int, []TextSection, error) {
 // to the ExecutableReporter. Only OpenMappingFile is meaningful — the rest
 // are stubs since parca-agent's ReportExecutable only calls OpenMappingFile.
 type cubinProcess struct {
-	pid  uint32
-	data []byte
+	pid    uint32
+	data   []byte
+	source *CubinFileSource
 }
 
 // cubinFile hands out the cubin with e_version normalized, exactly as
@@ -243,9 +255,15 @@ type cubinProcess struct {
 // "mismatched ELF version" rejection that ParseCubinELF works around.
 type cubinFile struct {
 	*io.SectionReader
+	closer io.Closer
 }
 
-func (cubinFile) Close() error { return nil }
+func (f cubinFile) Close() error {
+	if f.closer != nil {
+		return f.closer.Close()
+	}
+	return nil
+}
 
 func (f cubinFile) Stat() (fs.FileInfo, error) { return cubinFileInfo{f}, nil }
 
@@ -267,8 +285,21 @@ func NewCubinProcess(pid uint32, data []byte) process.Process {
 }
 
 func (p *cubinProcess) OpenMappingFile(_ *process.RawMapping) (fs.File, error) {
+	if p.source != nil {
+		f, err := p.source.open()
+		if err != nil {
+			return nil, err
+		}
+		// Validate the whole image once before starting an upload. Reads also
+		// validate their blocks, so a later mutation cannot upload wrong bytes.
+		if _, err := io.Copy(io.Discard, io.NewSectionReader(f, 0, p.source.stat.Size)); err != nil {
+			f.Close()
+			return nil, err
+		}
+		return cubinFile{io.NewSectionReader(cubinVersionReader{f}, 0, p.source.stat.Size), f}, nil
+	}
 	r := cubinVersionReader{bytes.NewReader(p.data)}
-	return cubinFile{io.NewSectionReader(r, 0, int64(len(p.data)))}, nil
+	return cubinFile{SectionReader: io.NewSectionReader(r, 0, int64(len(p.data)))}, nil
 }
 
 func (p *cubinProcess) PID() libpf.PID                      { return libpf.PID(p.pid) }

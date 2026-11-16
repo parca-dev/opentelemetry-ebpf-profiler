@@ -1,0 +1,97 @@
+# GPU profiling design notes
+
+This package attaches to parcagpu's USDT probes, correlates GPU activity with
+CPU traces and builds PC-sampling profiles. The agent consumes the event stream
+and reports cubin debug files.
+
+## Cubin identity and instruction lookup
+
+PC samples need cubin metadata even when instruction bytes are unavailable.
+`CubinInfo` keeps the FileID, SM version and executable-section names, addresses,
+sizes and file offsets, keyed by CUPTI CRC. The agent computes FileID from the
+unmodified loaded image, not from the CRC or a filename.
+
+The agent uses `ParseCubinELFMetadata` to avoid retaining executable-section
+bytes. `decodeInstruction` reads 16 bytes from an optional `CubinFileSource`
+and uses the SM-specific SASS opcode table. The legacy `ParseCubinELF` API still
+populates section bytes for callers that need them.
+
+Missing instruction bytes remove only the `cuda_sass_instruction` label.
+FileID, kernel identity, PC offsets, stall reasons and counts remain available.
+Store identity metadata even without a file source, because PC samples with no
+cached cubin are dropped.
+
+## Original files and lifetime
+
+The shim supplies a canonical filename only for module resource callbacks
+inside a synchronous `cuModuleLoad` call. `MatchCubinFile` accepts the hint only
+after comparing the entire file with the loaded image. PTX is not the executed
+cubin, and a containing fatbinary or shared library is not the standalone image.
+There is no directory scanning, guessed cache filename or agent-owned disk cache.
+
+Files reopen through the target process's root via `process.Open`, which uses
+`openat2` root confinement, rejects magic links and checks for regular files.
+The source retains no descriptor or code bytes. It keeps device, inode, size,
+mtime, ctime and SHA-256 hashes of 4 KiB blocks, about 0.8% of the image plus
+metadata. FileID samples only the image's beginning and end, so it cannot prove
+an exact match. Timestamps alone cannot detect writes within one timestamp tick.
+
+Each instruction lookup reopens the file and validates its instruction blocks.
+This trades filesystem reads and hashing for lower retained heap. Deletion,
+replacement, truncation, mutation or loss of process access removes enrichment
+without dropping identified samples. An accepted file source has no retained-byte
+fallback. Uploads validate the whole image before use and validate blocks on
+subsequent reads, holding a descriptor only while open.
+
+ELF `e_version` normalization happens while reading metadata or upload data.
+It changes neither the application file nor the bytes used to compute FileID.
+Upload naming and identity stay unchanged.
+
+## Memory-only cubins
+
+Without a usable original file, the agent stores metadata without executable
+bytes. Samples keep their identity, PC offsets, stall reasons and counts but
+omit mnemonic enrichment. The shim deduplicates loads by CRC and replays
+metadata for joining consumers and roughly every 30 seconds during CUDA
+callbacks. The agent rereads replays to refresh sources and retry uploads.
+
+The legacy upload adapter can still retain the whole raw image in a queued
+reporter callback. File-backed adapters retain no image bytes, but the initial
+process-memory read still allocates the whole image transiently. Metadata
+caches remain unbounded.
+
+## Loading-path coverage
+
+- [Triton's compiler](https://github.com/triton-lang/triton/blob/main/python/triton/compiler/compiler.py)
+  writes cubins to its cache but passes bytes to
+  [`load_binary`](https://github.com/triton-lang/triton/blob/main/third_party/nvidia/backend/driver.c),
+  which calls `cuModuleLoadData`. That path supplies no filename, including when
+  used by PyTorch. Having a cache file on disk does not establish provenance.
+- [PyTorch's generated CUDA C++ loader](https://github.com/pytorch/pytorch/blob/main/torch/_inductor/codegen/cuda/device_op_overrides.py)
+  has a file-path overload calling `cuModuleLoad`. Standalone cubins can qualify
+  when the callback is synchronous and the exact file remains accessible. Its
+  embedded-data overload calls `cuModuleLoadData` and does not qualify.
+
+`cuModuleLoadDataEx`, runtime linking and deferred loads supply no filename here.
+Coverage depends on the loader used, not on the framework name.
+
+## Probe compatibility
+
+The shim keeps `cubin_loaded(crc, ptr, size)` unchanged and also fires the optional
+`cubin_loaded_file(crc, ptr, size, path)`, including during metadata replay. An
+empty path is normal for memory-only modules. The profiler attaches to the
+file-bearing probe when present and otherwise to the legacy probe, never both.
+Legacy event layouts and dispatch cookies keep their meanings. The optional
+event uses a separate discriminator and cookie.
+
+| Agent | Shim | Mnemonics | Upload source |
+| --- | --- | --- | --- |
+| Old | Old | In-memory decode | In-memory image |
+| Old | New | Unchanged legacy decode | In-memory image |
+| New | Old | Unavailable without a file | In-memory image |
+| New | New, matching original | Original-file decode | Original file |
+| New | New, no usable original | Unavailable without a file | In-memory image |
+
+All combinations preserve FileID, kernel identity, PC offsets, stalls and counts.
+New agents omit mnemonics when code is unavailable.
+Agent and shim upgrades do not require a lockstep rollout.

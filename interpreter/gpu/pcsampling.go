@@ -163,6 +163,36 @@ func decodeInstruction(info *CubinInfo, functionName string, pcOffset uint64) st
 	if info.SMVersion == 0 || len(info.Texts) == 0 {
 		return ""
 	}
+	// Metadata retains no code bytes. Missing file access removes only SASS
+	// enrichment, not identity or stall samples. Legacy parsers may supply Data.
+	decode := func(ts TextSection, off uint64) string {
+		size := ts.Size
+		if ts.Data != nil {
+			size = uint64(len(ts.Data))
+		}
+		if off > size || size-off < 16 {
+			return ""
+		}
+		if info.Source == nil && ts.Data != nil {
+			return sasstable.DecodeMnemonicFromSlice(info.SMVersion, ts.Data[off:off+16])
+		}
+		offset := ts.Offset + off
+		if offset < ts.Offset {
+			return ""
+		}
+		var instruction [16]byte
+		if info.Source != nil {
+			if offset > uint64(info.Source.stat.Size) {
+				return ""
+			}
+			if _, err := info.Source.ReadAt(instruction[:], int64(offset)); err != nil {
+				return ""
+			}
+		} else {
+			return ""
+		}
+		return sasstable.DecodeMnemonicFromSlice(info.SMVersion, instruction[:])
+	}
 	// An SM version we have no opcode table for decodes to "" for every sample
 	// in the cubin, which is otherwise indistinguishable from a cubin whose
 	// instructions simply did not decode: the stall reason label still appears
@@ -179,33 +209,25 @@ func decodeInstruction(info *CubinInfo, functionName string, pcOffset uint64) st
 			if ts.Name != want {
 				continue
 			}
-			if pcOffset+16 > uint64(len(ts.Data)) {
-				break // right section, but offset is out of range; fall back
-			}
 			// Authoritative: this is the function's section, so return whatever
 			// it decodes to rather than guessing against other sections.
-			return sasstable.DecodeMnemonicFromSlice(info.SMVersion, ts.Data[pcOffset:])
+			return decode(ts, pcOffset)
 		}
 	}
 
 	// Fallback: pcOffset as a section-absolute address.
 	for _, ts := range info.Texts {
-		if pcOffset >= ts.Addr && pcOffset < ts.Addr+uint64(len(ts.Data)) {
-			off := pcOffset - ts.Addr
-			if off+16 <= uint64(len(ts.Data)) {
-				if m := sasstable.DecodeMnemonicFromSlice(info.SMVersion, ts.Data[off:]); m != "" {
-					return m
-				}
+		if pcOffset >= ts.Addr {
+			if m := decode(ts, pcOffset-ts.Addr); m != "" {
+				return m
 			}
 		}
 	}
 
 	// Fallback: pcOffset as a function-relative offset into each section.
 	for _, ts := range info.Texts {
-		if pcOffset+16 <= uint64(len(ts.Data)) {
-			if m := sasstable.DecodeMnemonicFromSlice(info.SMVersion, ts.Data[pcOffset:]); m != "" {
-				return m
-			}
+		if m := decode(ts, pcOffset); m != "" {
+			return m
 		}
 	}
 
