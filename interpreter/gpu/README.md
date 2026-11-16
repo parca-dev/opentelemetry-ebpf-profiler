@@ -13,8 +13,8 @@ unmodified loaded image, not from the CRC or a filename.
 
 The agent uses `ParseCubinELFMetadata` to avoid retaining executable-section
 bytes. `decodeInstruction` reads 16 bytes from an optional `CubinFileSource`
-and uses the SM-specific SASS opcode table. The legacy `ParseCubinELF` API still
-populates section bytes for callers that need them.
+or the bounded memory cache and uses the SM-specific SASS opcode table. The
+legacy `ParseCubinELF` API still populates section bytes for callers that need them.
 
 Missing instruction bytes remove only the `cuda_sass_instruction` label.
 FileID, kernel identity, PC offsets, stall reasons and counts remain available.
@@ -49,16 +49,27 @@ Upload naming and identity stay unchanged.
 
 ## Memory-only cubins
 
-Without a usable original file, the agent stores metadata without executable
-bytes. Samples keep their identity, PC offsets, stall reasons and counts but
-omit mnemonic enrichment. The shim deduplicates loads by CRC and replays
-metadata for joining consumers and roughly every 30 seconds during CUDA
-callbacks. The agent rereads replays to refresh sources and retry uploads.
+Without a usable original file, `CacheCubinCode` admits the immutable raw image
+into a byte-bounded LRU, separate from identity metadata. The default budget is
+zero, so memory-only instruction lookup is off unless the agent enables it with
+`--gpu-cubin-cache-size`. File-backed instruction lookup remains enabled. The
+budget counts whole backing buffers, not just executable sections.
+Oversized images are skipped without evicting useful entries. Successful
+instruction reads refresh recency; duplicate metadata notifications do not.
+New admissions evict the least recently sampled entries until they fit. There
+is no time-based expiration without cache pressure.
 
-The legacy upload adapter can still retain the whole raw image in a queued
-reporter callback. File-backed adapters retain no image bytes, but the initial
-process-memory read still allocates the whole image transiently. Metadata
-caches remain unbounded.
+The shim deduplicates module loads by CRC using reference counts. It replays
+loaded cubins when consumers join and roughly every 30 seconds during CUDA
+callbacks. Replays can refill evicted code, but can also churn an oversubscribed
+cache. Samples still report without mnemonics between eviction and refill.
+The agent rereads replayed images to refresh sources and retry upload reporting.
+
+The legacy upload adapter can retain the same image independently of this cache
+in a queued reporter callback. Evicting code does not cancel uploads or free
+buffers still needed by them. File-backed adapters retain no image bytes, but
+the initial process-memory read still allocates the whole image transiently.
+Metadata caches remain unbounded.
 
 ## Loading-path coverage
 
@@ -88,10 +99,10 @@ event uses a separate discriminator and cookie.
 | --- | --- | --- | --- |
 | Old | Old | In-memory decode | In-memory image |
 | Old | New | Unchanged legacy decode | In-memory image |
-| New | Old | Unavailable without a file | In-memory image |
+| New | Old | Off by default; in-memory if cache enabled | In-memory image |
 | New | New, matching original | Original-file decode | Original file |
-| New | New, no usable original | Unavailable without a file | In-memory image |
+| New | New, no usable original | Off by default; in-memory if cache enabled | In-memory image |
 
 All combinations preserve FileID, kernel identity, PC offsets, stalls and counts.
-New agents omit mnemonics when code is unavailable.
+New agents omit mnemonics when code is unavailable or outside the memory budget.
 Agent and shim upgrades do not require a lockstep rollout.

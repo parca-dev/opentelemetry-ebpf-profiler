@@ -163,7 +163,7 @@ func decodeInstruction(info *CubinInfo, functionName string, pcOffset uint64) st
 	if info.SMVersion == 0 || len(info.Texts) == 0 {
 		return ""
 	}
-	// Metadata retains no code bytes. Missing file access removes only SASS
+	// Metadata never owns the bounded cache's bytes. Eviction removes SASS
 	// enrichment, not identity or stall samples. Legacy parsers may supply Data.
 	decode := func(ts TextSection, off uint64) string {
 		size := ts.Size
@@ -188,7 +188,7 @@ func decodeInstruction(info *CubinInfo, functionName string, pcOffset uint64) st
 			if _, err := info.Source.ReadAt(instruction[:], int64(offset)); err != nil {
 				return ""
 			}
-		} else {
+		} else if !readCubinInstruction(info.CRC, offset, &instruction) {
 			return ""
 		}
 		return sasstable.DecodeMnemonicFromSlice(info.SMVersion, instruction[:])

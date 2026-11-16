@@ -60,9 +60,10 @@ func LoadCubin(crc uint64) (*CubinInfo, bool) {
 // parses the GPU ELF for SM version and .text sections, caches the metadata
 // keyed by CRC, and (if a reporter is supplied) reports the cubin to the
 // ExecutableReporter so the backend can resolve source lines from the cubin's
-// DWARF info. Repeat events for an already-cached CRC are dropped.
+// DWARF info. Repeat events with resident code are dropped; an evicted image
+// can be reloaded without discarding its identity metadata.
 func HandleCubinEvent(ev *CuptiCubinEvent, rep reporter.ExecutableReporter) {
-	if _, ok := LoadCubin(ev.CubinCRC); ok {
+	if info, ok := LoadCubin(ev.CubinCRC); ok && (info.Source != nil || hasCubinCode(ev.CubinCRC)) {
 		return
 	}
 	data, err := ReadCubinFromProcess(ev.Pid, ev.CubinPtr, ev.CubinSize)
@@ -84,6 +85,7 @@ func HandleCubinEvent(ev *CuptiCubinEvent, rep reporter.ExecutableReporter) {
 		SMVersion: smVersion,
 		Texts:     texts,
 	}
+	CacheCubinCode(info, data)
 	StoreCubin(info)
 	if rep == nil {
 		return
