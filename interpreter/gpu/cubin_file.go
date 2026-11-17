@@ -11,6 +11,7 @@ import (
 	"strings"
 	"syscall"
 
+	"go.opentelemetry.io/ebpf-profiler/internal/log"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/process"
 )
@@ -104,14 +105,19 @@ func (s *CubinFileSource) open() (*checkedCubinFile, error) {
 type checkedCubinFile struct {
 	*os.File
 	source *CubinFileSource
+	// held marks a descriptor opened while the process was alive. Unlinking
+	// or renaming the path changes ctime, so only block hashes validate it.
+	held bool
 }
 
 func (f *checkedCubinFile) ReadAt(p []byte, off int64) (int, error) {
 	if off < 0 {
 		return 0, errors.New("negative cubin offset")
 	}
-	if err := f.source.check(f.File); err != nil {
-		return 0, err
+	if !f.held {
+		if err := f.source.check(f.File); err != nil {
+			return 0, err
+		}
 	}
 	var block [cubinBlockSize]byte
 	n := 0
@@ -119,6 +125,11 @@ func (f *checkedCubinFile) ReadAt(p []byte, off int64) (int, error) {
 		start := off / cubinBlockSize * cubinBlockSize
 		size := min(int64(cubinBlockSize), f.source.stat.Size-start)
 		if _, err := f.File.ReadAt(block[:size], start); err != nil {
+			// Blocks lie within the matched size, so EOF means truncation,
+			// which io.Copy would otherwise accept as a complete image.
+			if errors.Is(err, io.EOF) {
+				err = io.ErrUnexpectedEOF
+			}
 			return n, err
 		}
 		if sha256.Sum256(block[:size]) != f.source.hashes[start/cubinBlockSize] {
@@ -128,8 +139,10 @@ func (f *checkedCubinFile) ReadAt(p []byte, off int64) (int, error) {
 		n += copied
 		off += int64(copied)
 	}
-	if checkErr := f.source.check(f.File); checkErr != nil {
-		return 0, checkErr
+	if !f.held {
+		if checkErr := f.source.check(f.File); checkErr != nil {
+			return 0, checkErr
+		}
 	}
 	if n < len(p) {
 		return n, io.EOF
@@ -146,8 +159,18 @@ func (s *CubinFileSource) ReadAt(p []byte, off int64) (int, error) {
 	return f.ReadAt(p, off)
 }
 
-// Process returns an upload adapter that retains only provenance metadata.
-// There is deliberately no memory fallback after accepting an original file.
-func (s *CubinFileSource) Process() process.Process {
-	return &cubinProcess{pid: s.pid, source: s}
+// UploadProcess returns an upload adapter that holds the original file open,
+// so a queued upload still reads it after the process exits, its mount
+// namespace goes away or the file is unlinked. The descriptor closes when the
+// uploader drops the adapter and the *os.File is garbage collected; it retains
+// no code bytes. If the file cannot be opened now, the adapter falls back to
+// image, the bytes read from process memory, as legacy uploads do.
+func (s *CubinFileSource) UploadProcess(image []byte) process.Process {
+	f, err := s.open()
+	if err != nil {
+		log.Warnf("[cuda] original cubin %s of pid %d unavailable for upload, using process memory: %v",
+			s.path, s.pid, err)
+		return NewCubinProcess(s.pid, image)
+	}
+	return &cubinProcess{pid: s.pid, source: s, file: f.File}
 }

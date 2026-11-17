@@ -85,7 +85,7 @@ func HandleCubinEvent(ev *CuptiCubinEvent, rep reporter.ExecutableReporter) {
 		SMVersion: smVersion,
 		Texts:     texts,
 	}
-	CacheCubinCode(info, data)
+	CacheCubinCode(info, ev.Pid, ev.CubinPtr, data)
 	StoreCubin(info)
 	if rep == nil {
 		return
@@ -248,6 +248,7 @@ type cubinProcess struct {
 	pid    uint32
 	data   []byte
 	source *CubinFileSource
+	file   *os.File // Held open with source; never closed by OpenMappingFile.
 }
 
 // cubinFile hands out the cubin with e_version normalized, exactly as
@@ -287,18 +288,15 @@ func NewCubinProcess(pid uint32, data []byte) process.Process {
 }
 
 func (p *cubinProcess) OpenMappingFile(_ *process.RawMapping) (fs.File, error) {
-	if p.source != nil {
-		f, err := p.source.open()
-		if err != nil {
-			return nil, err
-		}
+	if p.file != nil {
+		f := &checkedCubinFile{File: p.file, source: p.source, held: true}
 		// Validate the whole image once before starting an upload. Reads also
 		// validate their blocks, so a later mutation cannot upload wrong bytes.
 		if _, err := io.Copy(io.Discard, io.NewSectionReader(f, 0, p.source.stat.Size)); err != nil {
-			f.Close()
 			return nil, err
 		}
-		return cubinFile{io.NewSectionReader(cubinVersionReader{f}, 0, p.source.stat.Size), f}, nil
+		// No closer: the uploader opens the mapping more than once.
+		return cubinFile{SectionReader: io.NewSectionReader(cubinVersionReader{f}, 0, p.source.stat.Size)}, nil
 	}
 	r := cubinVersionReader{bytes.NewReader(p.data)}
 	return cubinFile{SectionReader: io.NewSectionReader(r, 0, int64(len(p.data)))}, nil

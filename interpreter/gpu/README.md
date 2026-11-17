@@ -31,7 +31,7 @@ There is no directory scanning, guessed cache filename or agent-owned disk cache
 
 Files reopen through the target process's root via `process.Open`, which uses
 `openat2` root confinement, rejects magic links and checks for regular files.
-The source retains no descriptor or code bytes. It keeps device, inode, size,
+The source retains no code bytes. It keeps device, inode, size,
 mtime, ctime and SHA-256 hashes of 4 KiB blocks, about 0.8% of the image plus
 metadata. FileID samples only the image's beginning and end, so it cannot prove
 an exact match. Timestamps alone cannot detect writes within one timestamp tick.
@@ -39,9 +39,17 @@ an exact match. Timestamps alone cannot detect writes within one timestamp tick.
 Each instruction lookup reopens the file and validates its instruction blocks.
 This trades filesystem reads and hashing for lower retained heap. Deletion,
 replacement, truncation, mutation or loss of process access removes enrichment
-without dropping identified samples. An accepted file source has no retained-byte
-fallback. Uploads validate the whole image before use and validate blocks on
-subsequent reads, holding a descriptor only while open.
+without dropping identified samples.
+
+The upload adapter opens the file when the cubin is reported and holds that
+descriptor until the uploader drops the request and the file is garbage
+collected. A queued upload therefore still reads the original after the process
+exits, its mount namespace is torn down or the path is unlinked or replaced.
+Block hashes, not metadata, validate the held inode, so in-place writes or
+truncation still fail the upload. If the file cannot be opened at report time,
+the adapter warns and falls back to the image read from process memory, as
+legacy uploads do. Uploads validate the whole image before use and validate
+blocks on subsequent reads.
 
 ELF `e_version` normalization happens while reading metadata or upload data.
 It changes neither the application file nor the bytes used to compute FileID.
@@ -59,15 +67,24 @@ instruction reads refresh recency; duplicate metadata notifications do not.
 New admissions evict the least recently sampled entries until they fit. There
 is no time-based expiration without cache pressure.
 
+While the cache is enabled, each memory-only cubin's origin (PID, pointer, size
+and a SHA-256 of the image) is kept with its metadata. A sample that misses an
+evicted image schedules one background reread from `/proc/<pid>/mem`, at most
+once per second per cubin, and admits it only if the hash still matches, so
+memory reused by an unloaded module or a recycled PID is rejected. That sample
+reports without a mnemonic; later ones decode once it is resident. Images larger
+than the budget are not reread.
+
 The shim deduplicates module loads by CRC using reference counts. It replays
 loaded cubins when consumers join and roughly every 30 seconds during CUDA
-callbacks. Replays can refill evicted code, but can also churn an oversubscribed
-cache. Samples still report without mnemonics between eviction and refill.
+callbacks. A replay updates the origin but does not readmit an evicted image,
+so replays in load order cannot churn the cache; sampling decides what stays.
 The agent rereads replayed images to refresh sources and retry upload reporting.
 
 The legacy upload adapter can retain the same image independently of this cache
 in a queued reporter callback. Evicting code does not cancel uploads or free
-buffers still needed by them. File-backed adapters retain no image bytes, but
+buffers still needed by them. File-backed adapters retain a descriptor but no
+image bytes, unless they fell back to memory, but
 the initial process-memory read still allocates the whole image transiently.
 Metadata caches remain unbounded.
 
