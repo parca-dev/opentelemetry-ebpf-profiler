@@ -80,9 +80,10 @@ if [[ ! -f "${PARCAGPU_DIR}/libcupti.so" ]]; then
     echo "Building mock libcupti.so from ${PARCAGPU_REPO}..."
     MOCK_SRC=$(mktemp -d)
 
-    # Download mock sources from the parcagpu repo.
+    # Download mock sources from the parcagpu repo at the same tag as the
+    # library: main's mocks track newer CUPTI types than mock-cupti-headers.
     for f in test/mock_cupti.c test/mock_cuda.c; do
-        curl -sL "https://raw.githubusercontent.com/${PARCAGPU_REPO}/main/${f}" \
+        curl -fsSL "https://raw.githubusercontent.com/${PARCAGPU_REPO}/v${PARCAGPU_TAG}/${f}" \
             -o "${MOCK_SRC}/$(basename "$f")"
     done
 
