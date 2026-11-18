@@ -600,6 +600,7 @@ func (d *data) attach(ebpf interpreter.EbpfHandler, pid libpf.PID, path string,
 func (i *Instance) Detach(_ interpreter.EbpfHandler, _ libpf.PID) error {
 	gpuFixers.Delete(i.pid)
 	DeleteStallReasonMap(uint32(i.pid))
+	DeleteGpuConfigs(uint32(i.pid))
 	if le := i.d.links[i.odfi]; le != nil {
 		le.refs--
 		if le.refs <= 0 {
@@ -847,6 +848,8 @@ func emitPCSample(ev *CuptiPCSampleEvent, rep reporter.TraceReporter, cpuTrace *
 		hasDevice = value.(*gpuTraceFixer).pcSampleHasDevice
 	}
 
+	origin := &PCSampleOrigin{DeviceID: ev.DeviceID, HasDevice: hasDevice}
+
 	// One sample per stall reason: the same single CUDAPCFrame, distinguished by
 	// the "cuda_stall_reason" label and weighted by that reason's sample count.
 	count := min(ev.Data.StallReasonCount, maxStallReasons)
@@ -868,7 +871,7 @@ func emitPCSample(ev *CuptiPCSampleEvent, rep reporter.TraceReporter, cpuTrace *
 			}
 		}
 
-		meta := buildGpuPCMeta(cpuTrace, ev.Pid, int64(sr.Samples))
+		meta := buildGpuPCMeta(cpuTrace, ev.Pid, int64(sr.Samples), origin)
 		if err := rep.ReportTraceEvent(trace, meta); err != nil {
 			log.Errorf("[cuda] failed to report GPU PC sample: %v", err)
 		}

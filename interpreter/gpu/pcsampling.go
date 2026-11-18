@@ -115,22 +115,24 @@ func gpuPCLabels(stallName libpf.String, mnemonic string, deviceID uint32,
 // and the time of the sample are known.
 //
 // ContextValues[0] carries the raw PC sample count for this (pid, trace). The reporter
-// pairs it with the per-pid GpuConfig (via LoadGpuConfig) to set the profile
-// period to ns_per_sample, so a "count" sample_type stays mathematically
-// convertible to GPU nanoseconds via value × period. It replaces the CPU
-// trace's ContextValues, which alias a pooled buffer and must not be retained.
+// pairs it with the GpuConfig of the sample's pid and device (via
+// PCSampleNsPerSample) to set the profile period to ns_per_sample, so a
+// "count" sample_type stays mathematically convertible to GPU nanoseconds via
+// value × period. It replaces the CPU trace's ContextValues, which alias a
+// pooled buffer and must not be retained. OriginData is a *PCSampleOrigin
+// naming the device.
 func buildGpuPCMeta(cpuTrace *SymbolizedCudaTrace, pid uint32,
-	sampleCount int64) *samples.TraceEventMeta {
+	sampleCount int64, origin *PCSampleOrigin) *samples.TraceEventMeta {
 	var meta samples.TraceEventMeta
 	if cpuTrace != nil && cpuTrace.Meta != nil {
 		meta = *cpuTrace.Meta
-		meta.OriginData = nil
 	} else {
 		meta.Timestamp = libpf.UnixTime64(time.Now().UnixNano())
 		meta.PID = libpf.PID(pid)
 	}
 	meta.ProfileType = ProfileTypeGpuPC
 	meta.ContextValues = []uint64{uint64(sampleCount)}
+	meta.OriginData = origin
 	return &meta
 }
 

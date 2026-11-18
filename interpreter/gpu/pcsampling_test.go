@@ -46,7 +46,8 @@ func TestBuildGpuPCMetaCopiesProcessIdentity(t *testing.T) {
 		OriginData:     "cuda-only",
 	}
 
-	meta := buildGpuPCMeta(&SymbolizedCudaTrace{Meta: cpuMeta}, 42, 7)
+	origin := &PCSampleOrigin{DeviceID: 1, HasDevice: true}
+	meta := buildGpuPCMeta(&SymbolizedCudaTrace{Meta: cpuMeta}, 42, 7, origin)
 
 	assert.Equal(t, ProfileTypeGpuPC, meta.ProfileType)
 	assert.Equal(t, []uint64{7}, meta.ContextValues)
@@ -63,7 +64,7 @@ func TestBuildGpuPCMetaCopiesProcessIdentity(t *testing.T) {
 	assert.Equal(t, cpuMeta.ExtraMeta, meta.ExtraMeta)
 	assert.Equal(t, cpuMeta.SpanID, meta.SpanID)
 	assert.Equal(t, cpuMeta.TraceID, meta.TraceID)
-	assert.Nil(t, meta.OriginData)
+	assert.Same(t, origin, meta.OriginData)
 
 	// The CPU trace's meta is shared with its kernel timings; leave it alone.
 	assert.Equal(t, ProfileTypeCuda, cpuMeta.ProfileType)
@@ -72,7 +73,7 @@ func TestBuildGpuPCMetaCopiesProcessIdentity(t *testing.T) {
 }
 
 func TestBuildGpuPCMetaWithoutCPUTrace(t *testing.T) {
-	meta := buildGpuPCMeta(nil, 42, 7)
+	meta := buildGpuPCMeta(nil, 42, 7, &PCSampleOrigin{})
 	assert.Equal(t, libpf.PID(42), meta.PID)
 	assert.Equal(t, ProfileTypeGpuPC, meta.ProfileType)
 	assert.Equal(t, []uint64{7}, meta.ContextValues)
