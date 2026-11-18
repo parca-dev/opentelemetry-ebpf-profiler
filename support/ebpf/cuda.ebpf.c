@@ -47,14 +47,15 @@ int BPF_USDT(cuda_correlation, u32 correlation_id, s32 cbid)
 // Event type discriminator at offset 0 of every event submitted to cupti_events.
 // Each event type has its own struct; the Go consumer peeks the first 4 bytes
 // and dispatches accordingly.
-#define EVENT_TYPE_KERNEL           1
-#define EVENT_TYPE_CUBIN_LOADED     2
-#define EVENT_TYPE_PC_SAMPLE        3
-#define EVENT_TYPE_STALL_REASON_MAP 4
-#define EVENT_TYPE_ERROR            5
-#define EVENT_TYPE_GPU_CONFIG       6
-#define EVENT_TYPE_NVTX             7
-#define EVENT_TYPE_NVTX_NAME        8
+#define EVENT_TYPE_KERNEL            1
+#define EVENT_TYPE_CUBIN_LOADED      2
+#define EVENT_TYPE_PC_SAMPLE         3
+#define EVENT_TYPE_STALL_REASON_MAP  4
+#define EVENT_TYPE_ERROR             5
+#define EVENT_TYPE_GPU_CONFIG        6
+#define EVENT_TYPE_NVTX              7
+#define EVENT_TYPE_NVTX_NAME         8
+#define EVENT_TYPE_CUBIN_LOADED_FILE 9
 
 #define MAX_KERNEL_NAME_LEN   256
 #define MAX_FUNC_NAME_LEN     128
@@ -83,6 +84,11 @@ struct cubin_event {
   u64 cubin_crc;
   u64 cubin_ptr; // user-space address (Go reads bytes via /proc/pid/mem)
   u64 cubin_size;
+};
+
+struct cubin_file_event {
+  struct cubin_event cubin;
+  char path[4096]; // Optional absolute path in the producer's mount namespace.
 };
 
 // gpu_config_event reports the parcagpu sampling factor + GPU clock so the
@@ -507,6 +513,42 @@ int BPF_USDT(cuda_cubin_loaded, u64 cubin_crc, u64 cubin_ptr, u64 cubin_size)
   return 0;
 }
 
+// Optional replacement for the legacy probe. New consumers attach only this
+// probe when available; old consumers continue attaching cubin_loaded.
+SEC("usdt/parcagpu/cubin_loaded_file")
+int BPF_USDT(cuda_cubin_loaded_file, u64 cubin_crc, u64 cubin_ptr, u64 cubin_size, u64 path)
+{
+  u32 pid                   = bpf_get_current_pid_tgid() >> 32;
+  struct cubin_seen_key key = {.crc = cubin_crc, .pid = pid, ._pad = 0};
+  if (bpf_map_lookup_elem(&cubin_seen, &key)) {
+    return 0;
+  }
+  struct cubin_file_event *evt = bpf_ringbuf_reserve(&cupti_events, sizeof(*evt), 0);
+  if (!evt) {
+    increment_metric(metricID_CUPTIEventsRingbufFull);
+    return 0;
+  }
+  evt->cubin.event_type    = EVENT_TYPE_CUBIN_LOADED_FILE;
+  evt->cubin.pid           = pid;
+  evt->cubin.cubin_crc     = cubin_crc;
+  evt->cubin.cubin_ptr     = cubin_ptr;
+  evt->cubin.cubin_size    = cubin_size;
+  // Volatile stores prevent LLVM from lowering this to an unsupported memset.
+  volatile u64 *path_words = (volatile u64 *)evt->path;
+#pragma unroll
+  for (int i = 0; i < (int)(sizeof(evt->path) / sizeof(u64)); i++) {
+    path_words[i] = 0;
+  }
+  long n = bpf_probe_read_user_str(evt->path, sizeof(evt->path), (void *)path);
+  if (n <= 0 || n >= (long)sizeof(evt->path)) {
+    evt->path[0] = 0; // Never use a truncated or unreadable path.
+  }
+  bpf_ringbuf_submit(evt, 0);
+  u8 one = 1;
+  bpf_map_update_elem(&cubin_seen, &key, &one, BPF_ANY);
+  return 0;
+}
+
 // USDT: parcagpu/gpu_config(uint32 deviceId, uint32 samplingFactor,
 //                            uint32 clockKHz, uint32 smCount).
 // Static per-context config; deduped per (pid, dev) so the parcagpu emit-
@@ -896,16 +938,17 @@ int BPF_USDT(cuda_error, s32 code, u64 message_ptr, u64 component_ptr)
 
 // Cookie values for the cuda_probe multi-probe dispatcher.
 // Must match the cookie values set in cuda.go.
-#define CUDA_PROG_CORRELATION      0
-#define CUDA_PROG_KERNEL_EXEC      1
-#define CUDA_PROG_ACTIVITY_BATCH   2
-#define CUDA_PROG_CUBIN_LOADED     3
-#define CUDA_PROG_PC_SAMPLE_BATCH  4
-#define CUDA_PROG_STALL_REASON     5
-#define CUDA_PROG_ERROR            6
-#define CUDA_PROG_GPU_CONFIG       7
-#define CUDA_PROG_NVTX_EVENT_BATCH 8
-#define CUDA_PROG_NVTX_RESOURCE    9
+#define CUDA_PROG_CORRELATION       0
+#define CUDA_PROG_KERNEL_EXEC       1
+#define CUDA_PROG_ACTIVITY_BATCH    2
+#define CUDA_PROG_CUBIN_LOADED      3
+#define CUDA_PROG_PC_SAMPLE_BATCH   4
+#define CUDA_PROG_STALL_REASON      5
+#define CUDA_PROG_ERROR             6
+#define CUDA_PROG_GPU_CONFIG        7
+#define CUDA_PROG_NVTX_EVENT_BATCH  8
+#define CUDA_PROG_NVTX_RESOURCE     9
+#define CUDA_PROG_CUBIN_LOADED_FILE 10
 
 SEC("usdt/cuda_probe")
 int cuda_probe(struct pt_regs *ctx)
@@ -946,6 +989,8 @@ int cuda_probe(struct pt_regs *ctx)
   }
   case CUDA_PROG_CUBIN_LOADED:
     return BPF_USDT_CALL(cuda_cubin_loaded, cubin_crc, cubin_ptr, cubin_size);
+  case CUDA_PROG_CUBIN_LOADED_FILE:
+    return BPF_USDT_CALL(cuda_cubin_loaded_file, cubin_crc, cubin_ptr, cubin_size, path);
   case CUDA_PROG_PC_SAMPLE_BATCH: {
     u32 zero                     = 0;
     struct cuda_scratch *scratch = bpf_map_lookup_elem(&cuda_scratch_heap, &zero);

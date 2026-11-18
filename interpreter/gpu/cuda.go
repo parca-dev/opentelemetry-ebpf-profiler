@@ -32,6 +32,7 @@ const (
 	USDTProgCudaActivityBatch     = "cuda_activity_batch"
 	USDTProgCudaActivityBatchTail = "cuda_activity_batch_tail"
 	USDTProgCudaCubinLoaded       = "cuda_cubin_loaded"
+	USDTProgCudaCubinLoadedFile   = "cuda_cubin_loaded_file"
 	USDTProgCudaPCSampleBatch     = "cuda_pc_sample_batch"
 	USDTProgCudaPCSampleBatchTail = "cuda_pc_sample_batch_tail"
 	USDTProgCudaStallReasonMap    = "cuda_stall_reason_map"
@@ -50,16 +51,17 @@ const (
 	// pc_sample_batch program additionally tail-chains into itself (slot 1) up
 	// to BPF_PC_MAX_TAIL_CALLS times to process batches larger than one chunk
 	// while keeping each program under the 1M-insn verifier complexity cap.
-	CudaProgCorrelation    = 0
-	CudaProgKernelExec     = 1
-	CudaProgActivityBatch  = 2
-	CudaProgCubinLoaded    = 3
-	CudaProgPCSampleBatch  = 4
-	CudaProgStallReasonMap = 5
-	CudaProgError          = 6
-	CudaProgGpuConfig      = 7
-	CudaProgNvtxEventBatch = 8
-	CudaProgNvtxResource   = 9
+	CudaProgCorrelation     = 0
+	CudaProgKernelExec      = 1
+	CudaProgActivityBatch   = 2
+	CudaProgCubinLoaded     = 3
+	CudaProgPCSampleBatch   = 4
+	CudaProgStallReasonMap  = 5
+	CudaProgError           = 6
+	CudaProgGpuConfig       = 7
+	CudaProgNvtxEventBatch  = 8
+	CudaProgNvtxResource    = 9
+	CudaProgCubinLoadedFile = 10
 )
 
 const cudaProgsMap = "cuda_progs"
@@ -67,14 +69,15 @@ const cudaProgsMap = "cuda_progs"
 // Event type discriminators for the cupti_events ringbuf. Must match the
 // EVENT_TYPE_* constants in support/ebpf/cuda.ebpf.c.
 const (
-	EventTypeKernel         uint32 = 1
-	EventTypeCubinLoaded    uint32 = 2
-	EventTypePCSample       uint32 = 3
-	EventTypeStallReasonMap uint32 = 4
-	EventTypeError          uint32 = 5
-	EventTypeGpuConfig      uint32 = 6
-	EventTypeNvtx           uint32 = 7
-	EventTypeNvtxName       uint32 = 8
+	EventTypeKernel          uint32 = 1
+	EventTypeCubinLoaded     uint32 = 2
+	EventTypePCSample        uint32 = 3
+	EventTypeStallReasonMap  uint32 = 4
+	EventTypeError           uint32 = 5
+	EventTypeGpuConfig       uint32 = 6
+	EventTypeNvtx            uint32 = 7
+	EventTypeNvtxName        uint32 = 8
+	EventTypeCubinLoadedFile uint32 = 9
 )
 
 // MaxNvtxNameLen mirrors MAX_NVTX_NAME_LEN from support/ebpf/cuda.ebpf.c.
@@ -125,6 +128,13 @@ type CuptiCubinEvent struct {
 	CubinCRC  uint64
 	CubinPtr  uint64
 	CubinSize uint64
+}
+
+// CuptiCubinFileEvent is optional provenance. The legacy event and probe remain
+// unchanged. Path is a NUL-terminated absolute path in the target namespace.
+type CuptiCubinFileEvent struct {
+	CuptiCubinEvent
+	Path [4096]byte
 }
 
 // CuptiPCData mirrors struct cupti_pc_data in cupti_bpf.h (parcagpu).  It is
@@ -365,6 +375,12 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 			case "activity_batch":
 				batchProbe = &parcagpuProbes[i]
 			case "cubin_loaded":
+				if cubinProbe == nil {
+					cubinProbe = &parcagpuProbes[i]
+				}
+			case "cubin_loaded_file":
+				// Prefer the extended probe, even with an empty path. Attaching
+				// just one avoids racing legacy and file-bearing notifications.
 				cubinProbe = &parcagpuProbes[i]
 			case "pc_sample_batch":
 				pcSampleProbe = &parcagpuProbes[i]
@@ -533,6 +549,9 @@ func (d *data) attach(ebpf interpreter.EbpfHandler, pid libpf.PID, path string,
 		case "cubin_loaded":
 			cookies[i] = CudaProgCubinLoaded
 			progNames[i] = USDTProgCudaCubinLoaded
+		case "cubin_loaded_file":
+			cookies[i] = CudaProgCubinLoadedFile
+			progNames[i] = USDTProgCudaCubinLoadedFile
 		case "pc_sample_batch":
 			cookies[i] = CudaProgPCSampleBatch
 			progNames[i] = USDTProgCudaPCSampleBatch

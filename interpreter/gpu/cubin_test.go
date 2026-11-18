@@ -4,15 +4,23 @@
 package gpu // import "go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 
 import (
+	"bufio"
 	"bytes"
 	"debug/elf"
 	"encoding/binary"
+	"fmt"
 	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"syscall"
 	"testing"
 
 	sasstable "github.com/gnurizen/sass-table"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.opentelemetry.io/ebpf-profiler/libpf"
 )
 
 const (
@@ -23,6 +31,162 @@ const (
 	testSMVer   = 90
 	cudaVersion = 129 // what CUDA 12.9 writes into e_version
 )
+
+func TestOriginalCubinFileReads(t *testing.T) {
+	data := make([]byte, 8203)
+	for i := range data {
+		data[i] = byte((i*31 + i/4096) % 251)
+	}
+	path := filepath.Join(t.TempDir(), "original.cubin")
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+	source, err := MatchCubinFile(uint32(os.Getpid()), path, data)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		offset int64
+		size   int
+	}{
+		{0, 16}, {4087, 27}, {8190, 13}, {8190, 20}, {8203, 1}, {-1, 16},
+	} {
+		t.Run(fmt.Sprintf("%d/%d", tc.offset, tc.size), func(t *testing.T) {
+			got, want := make([]byte, tc.size), make([]byte, tc.size)
+			n, err := source.ReadAt(got, tc.offset)
+			if tc.offset < 0 {
+				require.Error(t, err)
+				require.Zero(t, n)
+				return
+			}
+			wn, we := bytes.NewReader(data).ReadAt(want, tc.offset)
+			require.Equal(t, we, err)
+			require.Equal(t, wn, n)
+			require.Equal(t, want, got)
+		})
+	}
+}
+
+func TestOriginalCubinFileChanges(t *testing.T) {
+	data := buildCubin(t, cudaVersion, make([]byte, 16384))
+	for _, change := range []string{"replace", "rewrite", "truncate", "delete"} {
+		t.Run(change, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "original.cubin")
+			require.NoError(t, os.WriteFile(path, data, 0o600))
+			source, err := MatchCubinFile(uint32(os.Getpid()), path, data)
+			require.NoError(t, err)
+			p := source.UploadProcess()
+			f, err := p.OpenMappingFile(nil)
+			require.NoError(t, err)
+			defer f.Close()
+			before, err := os.Stat(path)
+			require.NoError(t, err)
+			switch change {
+			case "replace":
+				require.NoError(t, os.Rename(path, path+".old"))
+				require.NoError(t, os.WriteFile(path, data, 0o600))
+			case "rewrite":
+				wrong := bytes.Clone(data)
+				wrong[8192] = 1 // Outside the FileID's header/trailer windows.
+				id1, err := libpf.FileIDFromExecutableReader(bytes.NewReader(data))
+				require.NoError(t, err)
+				id2, err := libpf.FileIDFromExecutableReader(bytes.NewReader(wrong))
+				require.NoError(t, err)
+				require.Equal(t, id1, id2, "FileID alone cannot validate an original image")
+				require.NoError(t, os.WriteFile(path, wrong, 0o600))
+				require.NoError(t, os.Chtimes(path, before.ModTime(), before.ModTime()))
+				_, err = MatchCubinFile(uint32(os.Getpid()), path, data)
+				require.Error(t, err)
+			case "truncate":
+				require.NoError(t, os.Truncate(path, 64))
+			case "delete":
+				require.NoError(t, os.Remove(path))
+			}
+			// The source holds the original inode: replacing or unlinking the
+			// path cannot change what it reads, but writing to the inode can.
+			var instruction [16]byte
+			_, readErr := source.ReadAt(instruction[:], 8192)
+			upload, err := p.OpenMappingFile(nil)
+			if change == "replace" || change == "delete" {
+				require.NoError(t, readErr)
+				require.Equal(t, data[8192:8208], instruction[:])
+				require.NoError(t, err)
+				got, err := io.ReadAll(upload.(io.Reader))
+				require.NoError(t, err)
+				want := bytes.Clone(data)
+				binary.LittleEndian.PutUint32(want[20:], 1)
+				require.Equal(t, want, got)
+			} else {
+				require.Error(t, readErr)
+				require.Error(t, err)
+			}
+			// An already-open upload must also reject in-place changes.
+			if change == "rewrite" || change == "truncate" {
+				_, err = f.(io.ReaderAt).ReadAt(instruction[:], 8192)
+				require.Error(t, err)
+			}
+		})
+	}
+}
+
+// TestOriginalCubinProcessExit checks that instruction lookups and uploads
+// keep reading the matched file after the process that loaded it exits, when
+// its /proc/<pid>/root is gone.
+func TestOriginalCubinProcessExit(t *testing.T) {
+	data := buildCubin(t, cudaVersion, make([]byte, 8192))
+	path := filepath.Join(t.TempDir(), "original.cubin")
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+	cmd := exec.Command("sleep", "60")
+	require.NoError(t, cmd.Start())
+	source, err := MatchCubinFile(uint32(cmd.Process.Pid), path, data)
+	require.NoError(t, err)
+	require.NoError(t, cmd.Process.Kill())
+	_ = cmd.Wait()
+	_, err = os.Stat(fmt.Sprintf("/proc/%d/root", cmd.Process.Pid))
+	require.Error(t, err, "process root must be gone")
+
+	var instruction [16]byte
+	_, err = source.ReadAt(instruction[:], 4096)
+	require.NoError(t, err)
+	require.Equal(t, data[4096:4112], instruction[:])
+	upload, err := source.UploadProcess().OpenMappingFile(nil)
+	require.NoError(t, err)
+	got, err := io.ReadAll(upload.(io.Reader))
+	require.NoError(t, err)
+	want := bytes.Clone(data)
+	binary.LittleEndian.PutUint32(want[20:], 1)
+	require.Equal(t, want, got)
+}
+
+func TestOriginalCubinNamespace(t *testing.T) {
+	if root := os.Getenv("CUBIN_TEST_CHROOT"); root != "" {
+		require.NoError(t, syscall.Chroot(root))
+		require.NoError(t, os.Chdir("/"))
+		fmt.Println("ready")
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		os.Exit(0)
+	}
+	if os.Geteuid() != 0 {
+		t.Skip("chroot namespace test requires root")
+	}
+	root := t.TempDir()
+	data := buildCubin(t, cudaVersion, []byte("application instruction bytes"))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "application.cubin"), data, 0o600))
+	require.NoError(t, os.Symlink("/application.cubin", filepath.Join(root, "selected.cubin")))
+	cmd := exec.Command("/proc/self/exe", "-test.run=^TestOriginalCubinNamespace$")
+	cmd.Env = append(os.Environ(), "CUBIN_TEST_CHROOT="+root)
+	in, err := cmd.StdinPipe()
+	require.NoError(t, err)
+	out, err := cmd.StdoutPipe()
+	require.NoError(t, err)
+	require.NoError(t, cmd.Start())
+	t.Cleanup(func() { in.Close(); _ = cmd.Wait() })
+	line, err := bufio.NewReader(out).ReadString('\n')
+	require.NoError(t, err)
+	require.Equal(t, "ready\n", line)
+	source, err := MatchCubinFile(uint32(cmd.Process.Pid), "/selected.cubin", data)
+	require.NoError(t, err, "absolute symlinks must resolve inside the target root")
+	got := make([]byte, len(data))
+	_, err = source.ReadAt(got, 0)
+	require.NoError(t, err)
+	require.Equal(t, data, got)
+}
 
 // buildCubin assembles a minimal ELF64 shaped like an NVIDIA cubin: e_version
 // carries eVersion, and e_flags encodes the SM version in bits [8:15].
