@@ -71,7 +71,7 @@ func TestOriginalCubinFileChanges(t *testing.T) {
 			require.NoError(t, os.WriteFile(path, data, 0o600))
 			source, err := MatchCubinFile(uint32(os.Getpid()), path, data)
 			require.NoError(t, err)
-			p := source.UploadProcess(nil)
+			p := source.UploadProcess()
 			f, err := p.OpenMappingFile(nil)
 			require.NoError(t, err)
 			defer f.Close()
@@ -98,13 +98,14 @@ func TestOriginalCubinFileChanges(t *testing.T) {
 			case "delete":
 				require.NoError(t, os.Remove(path))
 			}
-			var instruction [16]byte
-			_, err = source.ReadAt(instruction[:], 8192)
-			require.Error(t, err)
-			// The upload holds the original inode: replacing or unlinking the
+			// The source holds the original inode: replacing or unlinking the
 			// path cannot change what it reads, but writing to the inode can.
+			var instruction [16]byte
+			_, readErr := source.ReadAt(instruction[:], 8192)
 			upload, err := p.OpenMappingFile(nil)
 			if change == "replace" || change == "delete" {
+				require.NoError(t, readErr)
+				require.Equal(t, data[8192:8208], instruction[:])
 				require.NoError(t, err)
 				got, err := io.ReadAll(upload.(io.Reader))
 				require.NoError(t, err)
@@ -112,18 +113,8 @@ func TestOriginalCubinFileChanges(t *testing.T) {
 				binary.LittleEndian.PutUint32(want[20:], 1)
 				require.Equal(t, want, got)
 			} else {
+				require.Error(t, readErr)
 				require.Error(t, err)
-			}
-			// A file that cannot be opened when the upload is queued falls
-			// back to the image read from process memory, like legacy uploads.
-			if change == "delete" {
-				fallback, err := source.UploadProcess(data).OpenMappingFile(nil)
-				require.NoError(t, err)
-				got, err := io.ReadAll(fallback.(io.Reader))
-				require.NoError(t, err)
-				want := bytes.Clone(data)
-				binary.LittleEndian.PutUint32(want[20:], 1)
-				require.Equal(t, want, got)
 			}
 			// An already-open upload must also reject in-place changes.
 			if change == "rewrite" || change == "truncate" {
@@ -132,6 +123,35 @@ func TestOriginalCubinFileChanges(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestOriginalCubinProcessExit checks that instruction lookups and uploads
+// keep reading the matched file after the process that loaded it exits, when
+// its /proc/<pid>/root is gone.
+func TestOriginalCubinProcessExit(t *testing.T) {
+	data := buildCubin(t, cudaVersion, make([]byte, 8192))
+	path := filepath.Join(t.TempDir(), "original.cubin")
+	require.NoError(t, os.WriteFile(path, data, 0o600))
+	cmd := exec.Command("sleep", "60")
+	require.NoError(t, cmd.Start())
+	source, err := MatchCubinFile(uint32(cmd.Process.Pid), path, data)
+	require.NoError(t, err)
+	require.NoError(t, cmd.Process.Kill())
+	_ = cmd.Wait()
+	_, err = os.Stat(fmt.Sprintf("/proc/%d/root", cmd.Process.Pid))
+	require.Error(t, err, "process root must be gone")
+
+	var instruction [16]byte
+	_, err = source.ReadAt(instruction[:], 4096)
+	require.NoError(t, err)
+	require.Equal(t, data[4096:4112], instruction[:])
+	upload, err := source.UploadProcess().OpenMappingFile(nil)
+	require.NoError(t, err)
+	got, err := io.ReadAll(upload.(io.Reader))
+	require.NoError(t, err)
+	want := bytes.Clone(data)
+	binary.LittleEndian.PutUint32(want[20:], 1)
+	require.Equal(t, want, got)
 }
 
 func TestOriginalCubinNamespace(t *testing.T) {

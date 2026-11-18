@@ -29,27 +29,21 @@ after comparing the entire file with the loaded image. PTX is not the executed
 cubin, and a containing fatbinary or shared library is not the standalone image.
 There is no directory scanning, guessed cache filename or agent-owned disk cache.
 
-Files reopen through the target process's root via `process.Open`, which uses
-`openat2` root confinement, rejects magic links and checks for regular files.
-The source retains no code bytes. It keeps device, inode, size,
-mtime, ctime and SHA-256 hashes of 4 KiB blocks, about 0.8% of the image plus
-metadata. FileID samples only the image's beginning and end, so it cannot prove
-an exact match. Timestamps alone cannot detect writes within one timestamp tick.
-
-Each instruction lookup reopens the file and validates its instruction blocks.
-This trades filesystem reads and hashing for lower retained heap. Deletion,
-replacement, truncation, mutation or loss of process access removes enrichment
-without dropping identified samples.
-
-The upload adapter opens the file when the cubin is reported and holds that
-descriptor until the uploader drops the request and the file is garbage
-collected. A queued upload therefore still reads the original after the process
+`MatchCubinFile` opens the file once, through the target process's root via
+`process.Open`, which uses `openat2` root confinement, rejects magic links and
+checks for regular files. It must run while the process is alive. The source
+keeps that descriptor, so it holds the inode rather than the path. Instruction
+lookups and uploads both read through it, and keep working after the process
 exits, its mount namespace is torn down or the path is unlinked or replaced.
-Block hashes, not metadata, validate the held inode, so in-place writes or
-truncation still fail the upload. If the file cannot be opened at report time,
-the adapter warns and falls back to the image read from process memory, as
-legacy uploads do. Uploads validate the whole image before use and validate
-blocks on subsequent reads.
+The descriptor closes when the source is unreachable and garbage collected.
+
+The source retains no code bytes. It keeps the size and SHA-256 hashes of 4 KiB
+blocks, about 0.8% of the image. FileID samples only the image's beginning and
+end, so it cannot prove an exact match, and timestamps cannot detect writes
+within one timestamp tick, so every read validates its blocks against the
+hashes. In-place writes or truncation of the held inode remove enrichment and
+fail uploads without dropping identified samples. Uploads validate the whole
+image before use and validate blocks on subsequent reads.
 
 ELF `e_version` normalization happens while reading metadata or upload data.
 It changes neither the application file nor the bytes used to compute FileID.
@@ -83,10 +77,10 @@ The agent rereads replayed images to refresh sources and retry upload reporting.
 
 The legacy upload adapter can retain the same image independently of this cache
 in a queued reporter callback. Evicting code does not cancel uploads or free
-buffers still needed by them. File-backed adapters retain a descriptor but no
-image bytes, unless they fell back to memory, but
-the initial process-memory read still allocates the whole image transiently.
-Metadata caches remain unbounded.
+buffers still needed by them. File-backed sources retain a descriptor but no
+image bytes, but the initial process-memory read still allocates the whole image
+transiently. Metadata caches remain unbounded, and so do the descriptors held by
+file-backed sources: one per distinct file-backed cubin.
 
 ## Loading-path coverage
 

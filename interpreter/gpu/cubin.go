@@ -248,7 +248,6 @@ type cubinProcess struct {
 	pid    uint32
 	data   []byte
 	source *CubinFileSource
-	file   *os.File // Held open with source; never closed by OpenMappingFile.
 }
 
 // cubinFile hands out the cubin with e_version normalized, exactly as
@@ -258,15 +257,9 @@ type cubinProcess struct {
 // "mismatched ELF version" rejection that ParseCubinELF works around.
 type cubinFile struct {
 	*io.SectionReader
-	closer io.Closer
 }
 
-func (f cubinFile) Close() error {
-	if f.closer != nil {
-		return f.closer.Close()
-	}
-	return nil
-}
+func (cubinFile) Close() error { return nil }
 
 func (f cubinFile) Stat() (fs.FileInfo, error) { return cubinFileInfo{f}, nil }
 
@@ -288,15 +281,15 @@ func NewCubinProcess(pid uint32, data []byte) process.Process {
 }
 
 func (p *cubinProcess) OpenMappingFile(_ *process.RawMapping) (fs.File, error) {
-	if p.file != nil {
-		f := &checkedCubinFile{File: p.file, source: p.source, held: true}
+	if s := p.source; s != nil {
 		// Validate the whole image once before starting an upload. Reads also
 		// validate their blocks, so a later mutation cannot upload wrong bytes.
-		if _, err := io.Copy(io.Discard, io.NewSectionReader(f, 0, p.source.stat.Size)); err != nil {
+		if _, err := io.Copy(io.Discard, io.NewSectionReader(s, 0, s.size)); err != nil {
 			return nil, err
 		}
-		// No closer: the uploader opens the mapping more than once.
-		return cubinFile{SectionReader: io.NewSectionReader(cubinVersionReader{f}, 0, p.source.stat.Size)}, nil
+		// No closer: the source owns the descriptor and the uploader opens
+		// the mapping more than once.
+		return cubinFile{SectionReader: io.NewSectionReader(cubinVersionReader{s}, 0, s.size)}, nil
 	}
 	r := cubinVersionReader{bytes.NewReader(p.data)}
 	return cubinFile{SectionReader: io.NewSectionReader(r, 0, int64(len(p.data)))}, nil

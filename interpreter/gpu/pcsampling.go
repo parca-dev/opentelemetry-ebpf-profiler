@@ -182,7 +182,7 @@ func decodeInstruction(info *CubinInfo, functionName string, pcOffset uint64) st
 		}
 		var instruction [16]byte
 		if info.Source != nil {
-			if offset > uint64(info.Source.stat.Size) {
+			if offset > uint64(info.Source.size) {
 				return ""
 			}
 			if _, err := info.Source.ReadAt(instruction[:], int64(offset)); err != nil {
