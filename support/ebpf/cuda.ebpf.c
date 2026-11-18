@@ -896,16 +896,16 @@ int BPF_USDT(cuda_error, s32 code, u64 message_ptr, u64 component_ptr)
 
 // Cookie values for the cuda_probe multi-probe dispatcher.
 // Must match the cookie values set in cuda.go.
-#define CUDA_PROG_CORRELATION       0
-#define CUDA_PROG_KERNEL_EXEC       1
-#define CUDA_PROG_ACTIVITY_BATCH    2
-#define CUDA_PROG_CUBIN_LOADED      3
-#define CUDA_PROG_PC_SAMPLE_BATCH   4
-#define CUDA_PROG_STALL_REASON      5
-#define CUDA_PROG_ERROR             6
-#define CUDA_PROG_GPU_CONFIG        7
-#define CUDA_PROG_NVTX_EVENT_BATCH  8
-#define CUDA_PROG_NVTX_RESOURCE     9
+#define CUDA_PROG_CORRELATION      0
+#define CUDA_PROG_KERNEL_EXEC      1
+#define CUDA_PROG_ACTIVITY_BATCH   2
+#define CUDA_PROG_CUBIN_LOADED     3
+#define CUDA_PROG_PC_SAMPLE_BATCH  4
+#define CUDA_PROG_STALL_REASON     5
+#define CUDA_PROG_ERROR            6
+#define CUDA_PROG_GPU_CONFIG       7
+#define CUDA_PROG_NVTX_EVENT_BATCH 8
+#define CUDA_PROG_NVTX_RESOURCE    9
 
 SEC("usdt/cuda_probe")
 int cuda_probe(struct pt_regs *ctx)
@@ -983,8 +983,7 @@ int cuda_probe(struct pt_regs *ctx)
     bpf_tail_call(ctx, &cuda_progs, 2);
     break;
   }
-  case CUDA_PROG_NVTX_RESOURCE:
-    return BPF_USDT_CALL(cuda_nvtx_resource_name, kind, id, name_ptr);
+  case CUDA_PROG_NVTX_RESOURCE: return BPF_USDT_CALL(cuda_nvtx_resource_name, kind, id, name_ptr);
   default: DEBUG_PRINT("cuda_probe: unknown cookie %u", cookie); break;
   }
   return 0;
