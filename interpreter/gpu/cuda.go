@@ -41,6 +41,8 @@ const (
 	USDTProgCudaNvtxEventBatch    = "cuda_nvtx_event_batch"
 	USDTProgCudaNvtxBatchTail     = "cuda_nvtx_batch_tail"
 	USDTProgCudaNvtxResourceName  = "cuda_nvtx_resource_name"
+	USDTProgCudaKernelStats       = "cuda_kernel_stats"
+	USDTProgCudaKernelStatsTail   = "cuda_kernel_stats_tail"
 	USDTProgCudaProbe             = "cuda_probe"
 
 	// BPF attach cookie values - must match CUDA_PROG_* in cuda.ebpf.c.
@@ -62,6 +64,7 @@ const (
 	CudaProgNvtxEventBatch  = 8
 	CudaProgNvtxResource    = 9
 	CudaProgCubinLoadedFile = 10
+	CudaProgKernelStats     = 11
 )
 
 const cudaProgsMap = "cuda_progs"
@@ -78,7 +81,26 @@ const (
 	EventTypeNvtx            uint32 = 7
 	EventTypeNvtxName        uint32 = 8
 	EventTypeCubinLoadedFile uint32 = 9
+	EventTypeKernelStats     uint32 = 10
 )
+
+// CuptiKernelStatsEvent matches the fixed part of struct kernel_stats_event
+// in cuda.ebpf.c: one (device, stream, kernel) delta from a parcagpu
+// kernel_stats firing, counted before parcagpu's launch rate limiter.
+// Records are variable-length: the NUL-terminated kernel name (at most
+// MAX_KERNEL_NAME_LEN bytes) follows and the record ends with it.
+type CuptiKernelStatsEvent struct {
+	EventType  uint32
+	Pid        uint32
+	StartNs    uint64 // earliest kernel start in the firing's interval (CUPTI clock)
+	EndNs      uint64 // latest kernel end in the firing's interval (CUPTI clock)
+	Seq        uint32 // per-process firing counter; a gap means a lost firing
+	DeviceID   uint32 // CUDA ordinal
+	StreamID   uint32
+	_pad       uint32
+	Executions uint64 // kernel executions, graph kernel nodes included
+	TotalNs    uint64 // summed kernel duration
+}
 
 // MaxNvtxNameLen mirrors MAX_NVTX_NAME_LEN from support/ebpf/cuda.ebpf.c.
 const MaxNvtxNameLen = 128
@@ -366,6 +388,7 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		var gpuConfigProbe *pfelf.USDTProbe
 		var nvtxEventBatchProbe *pfelf.USDTProbe
 		var nvtxResourceNameProbe *pfelf.USDTProbe
+		var kernelStatsProbe *pfelf.USDTProbe
 		for i := range parcagpuProbes {
 			switch parcagpuProbes[i].Name {
 			case "cuda_correlation":
@@ -394,6 +417,8 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 				nvtxEventBatchProbe = &parcagpuProbes[i]
 			case "nvtx_resource_name":
 				nvtxResourceNameProbe = &parcagpuProbes[i]
+			case "kernel_stats":
+				kernelStatsProbe = &parcagpuProbes[i]
 			}
 		}
 		if correlationProbe == nil {
@@ -433,6 +458,9 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 		}
 		if nvtxResourceNameProbe != nil {
 			requiredProbes = append(requiredProbes, *nvtxResourceNameProbe)
+		}
+		if kernelStatsProbe != nil {
+			requiredProbes = append(requiredProbes, *kernelStatsProbe)
 		}
 		parcagpuProbes = requiredProbes
 
@@ -518,6 +546,19 @@ func (d *data) attach(ebpf interpreter.EbpfHandler, pid libpf.PID, path string,
 		break
 	}
 	for i := 0; i < len(d.probes); {
+		if d.probes[i].Name != "kernel_stats" {
+			i++
+			continue
+		}
+		if err := ebpf.UpdateProgArray(cudaProgsMap, 3,
+			USDTProgCudaKernelStatsTail); err != nil {
+			log.Errorf("[cuda] kernel_stats tail call failed: %v — dropping kernel_stats", err)
+			d.probes = append(d.probes[:i], d.probes[i+1:]...)
+			continue
+		}
+		i++
+	}
+	for i := 0; i < len(d.probes); {
 		if d.probes[i].Name != "nvtx_event_batch" {
 			i++
 			continue
@@ -570,6 +611,9 @@ func (d *data) attach(ebpf interpreter.EbpfHandler, pid libpf.PID, path string,
 		case "nvtx_resource_name":
 			cookies[i] = CudaProgNvtxResource
 			progNames[i] = USDTProgCudaNvtxResourceName
+		case "kernel_stats":
+			cookies[i] = CudaProgKernelStats
+			progNames[i] = USDTProgCudaKernelStats
 		default:
 			log.Debugf("unknown parcagpu USDT probe name: %s", probe.Name)
 		}
