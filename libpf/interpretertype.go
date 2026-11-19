@@ -86,15 +86,19 @@ var interpreterTypeToString = map[InterpreterType]string{
 	LuaJIT:        "luajit",
 	Go:            "go",
 	CUDA:          "cuda",
-	CUDAPC:        "cuda-pc",
-	CustomLabels:  "custom-labels",
+	// OTel SemConv has a single "cuda" frame type. PC-sample frames are told
+	// apart from kernel frames by their cubin mapping, not by frame type.
+	CUDAPC:       "cuda",
+	CustomLabels: "custom-labels",
 }
 
 var stringToInterpreterType = make(map[string]InterpreterType, len(interpreterTypeToString))
 
 func init() {
 	for k, v := range interpreterTypeToString {
-		if k == PHPJIT {
+		// Several types share a SemConv string; parse it back to the
+		// primary one.
+		if k == PHPJIT || k == CUDAPC {
 			continue
 		}
 		stringToInterpreterType[v] = k
