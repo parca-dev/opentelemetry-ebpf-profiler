@@ -1,9 +1,9 @@
 // mock_cupti.c — Self-contained mock CUPTI for end-to-end USDT probe testing.
 //
-// Provides minimal CUPTI type definitions (no CUDA SDK headers needed) and mock
-// API functions that libparcagpucupti.so resolves via dlopen.  Helper functions
-// (init_parcagpu, simulate_kernel_launch, simulate_buffer_completion,
-// cleanup_parcagpu) are called from Go via CGo to drive the probes.
+// Provides mock CUPTI API functions that libparcagpucupti.so resolves via
+// dlopen. Helper functions (init_parcagpu, simulate_kernel_launch,
+// simulate_buffer_completion, cleanup_parcagpu) are called from Go via CGo to
+// drive the probes.
 
 #include <dlfcn.h>
 #include <stdint.h>
@@ -11,84 +11,13 @@
 #include <stdlib.h>
 #include <string.h>
 
-// ============================================================================
-// Minimal CUPTI type definitions — ABI-compatible with real CUPTI headers.
-// ============================================================================
+// CUPTI types come from the mock headers that test/distro-qemu uses to build
+// parcagpu's mock libraries. libparcagpucupti.so is built against the real
+// CUPTI headers, so those mirror the real values and layouts.
+#include "cupti.h"
 
-typedef int CUptiResult;
-#define CUPTI_SUCCESS                  0
-#define CUPTI_ERROR_MAX_LIMIT_REACHED  21
-
-typedef void *CUpti_SubscriberHandle;
-typedef void *CUcontext;
-
-typedef enum {
-  CUPTI_CB_DOMAIN_RUNTIME_API = 2,
-  CUPTI_CB_DOMAIN_DRIVER_API  = 3,
-} CUpti_CallbackDomain;
-
-typedef uint32_t CUpti_CallbackId;
-
-#define CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernel_v7000 164
-#define CUPTI_ACTIVITY_KIND_KERNEL            3
-#define CUPTI_ACTIVITY_KIND_CONCURRENT_KERNEL 10
-#define CUPTI_ACTIVITY_FLAG_FLUSH_FORCED      1
-
-typedef enum {
-  CUPTI_API_ENTER = 0,
-  CUPTI_API_EXIT  = 1,
-} CUpti_ApiCallbackSite;
-
-typedef struct {
-  uint32_t correlationId;
-  CUpti_ApiCallbackSite callbackSite;
-  const char *symbolName;
-  const char *functionName;
-} CUpti_CallbackData;
-
-typedef void (*CUpti_CallbackFunc)(void *userdata,
-                                   CUpti_CallbackDomain domain,
-                                   CUpti_CallbackId cbid,
-                                   const CUpti_CallbackData *cbdata);
-
-typedef struct {
-  uint32_t kind;
-} CUpti_Activity;
-
-typedef uint32_t CUpti_ActivityKind;
-
-// CUpti_ActivityKernel5 — must be 160 bytes, matching cupti_activity_bpf.h.
-// Only fields needed by the test and by cupti-prof.c are named.
-typedef struct {
-  uint32_t kind;            // offset 0
-  uint8_t  _pad1[12];       // offset 4
-  uint64_t start;           // offset 16
-  uint64_t end;             // offset 24
-  uint64_t completed;       // offset 32
-  uint32_t deviceId;        // offset 40
-  uint32_t contextId;       // offset 44
-  uint32_t streamId;        // offset 48
-  uint8_t  _pad2[40];       // offset 52
-  uint32_t correlationId;   // offset 92
-  int64_t  gridId;          // offset 96
-  const char *name;         // offset 104 (user-space pointer)
-  uint64_t _reserved0;      // offset 112
-  uint64_t queued;          // offset 120
-  uint64_t submitted;       // offset 128
-  uint8_t  _pad3[8];        // offset 136
-  uint64_t graphNodeId;     // offset 144
-  uint32_t shmemLimitCfg;   // offset 152
-  uint32_t graphId;         // offset 156
-} __attribute__((aligned(8))) CUpti_ActivityKernel5;
-
-_Static_assert(sizeof(CUpti_ActivityKernel5) == 160,
-               "CUpti_ActivityKernel5 size must be 160 bytes");
-
-typedef void (*CUpti_BufferRequestFunc)(uint8_t **buffer, size_t *size,
-                                        size_t *maxNumRecords);
-typedef void (*CUpti_BufferCompletedFunc)(CUcontext ctx, uint32_t streamId,
-                                          uint8_t *buffer, size_t size,
-                                          size_t validSize);
+#define CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernel_v7000 211
+#define CUPTI_ACTIVITY_FLAG_FLUSH_FORCED                1
 
 // ============================================================================
 // Global storage for registered callbacks (exported so dlopen'd .so resolves
