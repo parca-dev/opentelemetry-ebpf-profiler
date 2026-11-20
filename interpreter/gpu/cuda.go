@@ -47,12 +47,11 @@ const (
 
 	// BPF attach cookie values - must match CUDA_PROG_* in cuda.ebpf.c.
 	// Used in the low 32 bits of the BPF attach cookie so cuda_probe can
-	// distinguish probes.  The cuda_progs prog array uses keys 0
-	// (activity_batch) and 1 (pc_sample_batch) for tail-call dispatch of heavy
-	// loops; everything else is inlined directly in cuda_probe.  The
-	// pc_sample_batch program additionally tail-chains into itself (slot 1) up
-	// to BPF_PC_MAX_TAIL_CALLS times to process batches larger than one chunk
-	// while keeping each program under the 1M-insn verifier complexity cap.
+	// distinguish probes.  Batch probes tail-call through the cuda_progs prog
+	// array (slots in probeTable); everything else is inlined directly in
+	// cuda_probe.  A batch program may tail-chain into its own slot to process
+	// batches larger than one chunk while keeping each program under the
+	// 1M-insn verifier complexity cap.
 	CudaProgCorrelation     = 0
 	CudaProgKernelExec      = 1
 	CudaProgActivityBatch   = 2
@@ -312,6 +311,9 @@ type data struct {
 	// only the Attach fallback uses it (see AttachMapping).
 	path   string
 	probes []pfelf.USDTProbe
+	// pcSampleHasDevice: pc_sample_batch passes the CUDA device (parcagpu
+	// from before it didn't).
+	pcSampleHasDevice bool
 
 	links map[util.OnDiskFileIdentifier]*linkEntry // uprobe attachments keyed by inode
 }
@@ -363,115 +365,20 @@ func Loader(ebpf interpreter.EbpfHandler, info *interpreter.LoaderInfo) (interpr
 	if err != nil {
 		return nil, err
 	}
-	if len(probes) > 0 {
-		var parcagpuProbes []pfelf.USDTProbe
-		for _, probe := range probes {
-			if probe.Provider == "parcagpu" {
-				parcagpuProbes = append(parcagpuProbes, probe)
-			}
-		}
-		if len(parcagpuProbes) == 0 {
-			return nil, nil
-		}
-
-		// Filter to the probes we know how to handle.
-		// Always require cuda_correlation. Prefer activity_batch over kernel_executed.
-		// cubin_loaded, pc_sample_batch, stall_reason_map and error are optional —
-		// attached opportunistically when present.
-		var correlationProbe *pfelf.USDTProbe
-		var kernelProbe *pfelf.USDTProbe
-		var batchProbe *pfelf.USDTProbe
-		var cubinProbe *pfelf.USDTProbe
-		var pcSampleProbe *pfelf.USDTProbe
-		var stallMapProbe *pfelf.USDTProbe
-		var errorProbe *pfelf.USDTProbe
-		var gpuConfigProbe *pfelf.USDTProbe
-		var nvtxEventBatchProbe *pfelf.USDTProbe
-		var nvtxResourceNameProbe *pfelf.USDTProbe
-		var kernelStatsProbe *pfelf.USDTProbe
-		for i := range parcagpuProbes {
-			switch parcagpuProbes[i].Name {
-			case "cuda_correlation":
-				correlationProbe = &parcagpuProbes[i]
-			case "kernel_executed":
-				kernelProbe = &parcagpuProbes[i]
-			case "activity_batch":
-				batchProbe = &parcagpuProbes[i]
-			case "cubin_loaded":
-				if cubinProbe == nil {
-					cubinProbe = &parcagpuProbes[i]
-				}
-			case "cubin_loaded_file":
-				// Prefer the extended probe, even with an empty path. Attaching
-				// just one avoids racing legacy and file-bearing notifications.
-				cubinProbe = &parcagpuProbes[i]
-			case "pc_sample_batch":
-				pcSampleProbe = &parcagpuProbes[i]
-			case "stall_reason_map":
-				stallMapProbe = &parcagpuProbes[i]
-			case "error":
-				errorProbe = &parcagpuProbes[i]
-			case "gpu_config":
-				gpuConfigProbe = &parcagpuProbes[i]
-			case "nvtx_event_batch":
-				nvtxEventBatchProbe = &parcagpuProbes[i]
-			case "nvtx_resource_name":
-				nvtxResourceNameProbe = &parcagpuProbes[i]
-			case "kernel_stats":
-				kernelStatsProbe = &parcagpuProbes[i]
-			}
-		}
-		if correlationProbe == nil {
-			log.Warnf("parcagpu USDT probes in %s missing cuda_correlation: %v", info.FileName(), parcagpuProbes)
-			return nil, nil
-		}
-
-		var requiredProbes []pfelf.USDTProbe
-		requiredProbes = append(requiredProbes, *correlationProbe)
-		if batchProbe != nil {
-			requiredProbes = append(requiredProbes, *batchProbe)
-			log.Debugf("parcagpu: using activity_batch mode for %s", info.FileName())
-		} else if kernelProbe != nil {
-			requiredProbes = append(requiredProbes, *kernelProbe)
-			log.Debugf("parcagpu: using kernel_executed mode for %s", info.FileName())
-		} else {
-			log.Warnf("parcagpu USDT probes in %s missing kernel probe (need activity_batch or kernel_executed): %v", info.FileName(), parcagpuProbes)
-			return nil, nil
-		}
-		if cubinProbe != nil {
-			requiredProbes = append(requiredProbes, *cubinProbe)
-		}
-		if pcSampleProbe != nil {
-			requiredProbes = append(requiredProbes, *pcSampleProbe)
-		}
-		if stallMapProbe != nil {
-			requiredProbes = append(requiredProbes, *stallMapProbe)
-		}
-		if errorProbe != nil {
-			requiredProbes = append(requiredProbes, *errorProbe)
-		}
-		if gpuConfigProbe != nil {
-			requiredProbes = append(requiredProbes, *gpuConfigProbe)
-		}
-		if nvtxEventBatchProbe != nil {
-			requiredProbes = append(requiredProbes, *nvtxEventBatchProbe)
-		}
-		if nvtxResourceNameProbe != nil {
-			requiredProbes = append(requiredProbes, *nvtxResourceNameProbe)
-		}
-		if kernelStatsProbe != nil {
-			requiredProbes = append(requiredProbes, *kernelStatsProbe)
-		}
-		parcagpuProbes = requiredProbes
-
-		log.Debugf("Found parcagpu USDT probes in %s: %v", info.FileName(), parcagpuProbes)
-
-		return &data{
-			path:   info.FileName(),
-			probes: parcagpuProbes,
-		}, nil
+	selected := selectProbes(info.FileName(), probes)
+	if selected == nil {
+		return nil, nil
 	}
-	return nil, nil
+	selected, err = setupTailCalls(ebpf, selected)
+	if err != nil {
+		return nil, err
+	}
+	log.Debugf("Found parcagpu USDT probes in %s: %v", info.FileName(), selected)
+	return &data{
+		path:              info.FileName(),
+		probes:            selected,
+		pcSampleHasDevice: pcSampleHasDevice(info.FileName(), selected),
+	}, nil
 }
 
 // AttachMapping implements interpreter.MappingAttacher. Data is shared by
@@ -522,101 +429,11 @@ func (d *data) Attach(ebpf interpreter.EbpfHandler, pid libpf.PID, _ libpf.Addre
 // file (otherwise /proc/<pid>/root/<path>); key is the file's inode.
 func (d *data) attach(ebpf interpreter.EbpfHandler, pid libpf.PID, path string,
 	key util.OnDiskFileIdentifier, openPath string) (interpreter.Instance, error) {
-	// Populate the cuda_progs tail-call array. UpdateProgArray is idempotent
-	// (programs are cached, map updates are atomic), so it is safe to call on
-	// every Attach.
-	for _, probe := range d.probes {
-		if probe.Name != "activity_batch" {
-			continue
-		}
-		if err := ebpf.UpdateProgArray(cudaProgsMap, 0,
-			USDTProgCudaActivityBatchTail); err != nil {
-			return nil, fmt.Errorf("[cuda] activity_batch tail call setup failed: %w", err)
-		}
-		break
-	}
-	for _, probe := range d.probes {
-		if probe.Name != "pc_sample_batch" {
-			continue
-		}
-		if err := ebpf.UpdateProgArray(cudaProgsMap, 1,
-			USDTProgCudaPCSampleBatchTail); err != nil {
-			return nil, fmt.Errorf("[cuda] pc_sample_batch tail call setup failed: %w", err)
-		}
-		break
-	}
-	for i := 0; i < len(d.probes); {
-		if d.probes[i].Name != "kernel_stats" {
-			i++
-			continue
-		}
-		if err := ebpf.UpdateProgArray(cudaProgsMap, 3,
-			USDTProgCudaKernelStatsTail); err != nil {
-			log.Errorf("[cuda] kernel_stats tail call failed: %v — dropping kernel_stats", err)
-			d.probes = append(d.probes[:i], d.probes[i+1:]...)
-			continue
-		}
-		i++
-	}
-	for i := 0; i < len(d.probes); {
-		if d.probes[i].Name != "nvtx_event_batch" {
-			i++
-			continue
-		}
-		if err := ebpf.UpdateProgArray(cudaProgsMap, 2,
-			USDTProgCudaNvtxBatchTail); err != nil {
-			log.Errorf("[cuda] nvtx_event_batch tail call failed: %v — dropping nvtx_event_batch", err)
-			d.probes = append(d.probes[:i], d.probes[i+1:]...)
-			continue
-		}
-		i++
-	}
-
-	// Map USDT probe names to eBPF program names and cookies.
-	// The cookie tells cuda_probe which inlined branch (or tail call) to take.
 	cookies := make([]uint64, len(d.probes))
 	progNames := make([]string, len(d.probes))
 	for i, probe := range d.probes {
-		switch probe.Name {
-		case "cuda_correlation":
-			cookies[i] = CudaProgCorrelation
-			progNames[i] = USDTProgCudaCorrelation
-		case "kernel_executed":
-			cookies[i] = CudaProgKernelExec
-			progNames[i] = USDTProgCudaKernel
-		case "activity_batch":
-			cookies[i] = CudaProgActivityBatch
-			progNames[i] = USDTProgCudaActivityBatch
-		case "cubin_loaded":
-			cookies[i] = CudaProgCubinLoaded
-			progNames[i] = USDTProgCudaCubinLoaded
-		case "cubin_loaded_file":
-			cookies[i] = CudaProgCubinLoadedFile
-			progNames[i] = USDTProgCudaCubinLoadedFile
-		case "pc_sample_batch":
-			cookies[i] = CudaProgPCSampleBatch
-			progNames[i] = USDTProgCudaPCSampleBatch
-		case "stall_reason_map":
-			cookies[i] = CudaProgStallReasonMap
-			progNames[i] = USDTProgCudaStallReasonMap
-		case "error":
-			cookies[i] = CudaProgError
-			progNames[i] = USDTProgCudaError
-		case "gpu_config":
-			cookies[i] = CudaProgGpuConfig
-			progNames[i] = USDTProgCudaGpuConfig
-		case "nvtx_event_batch":
-			cookies[i] = CudaProgNvtxEventBatch
-			progNames[i] = USDTProgCudaNvtxEventBatch
-		case "nvtx_resource_name":
-			cookies[i] = CudaProgNvtxResource
-			progNames[i] = USDTProgCudaNvtxResourceName
-		case "kernel_stats":
-			cookies[i] = CudaProgKernelStats
-			progNames[i] = USDTProgCudaKernelStats
-		default:
-			log.Debugf("unknown parcagpu USDT probe name: %s", probe.Name)
-		}
+		p := probeTable[probe.Name]
+		cookies[i], progNames[i] = p.cookie, p.prog
 	}
 
 	if d.links == nil {
@@ -636,22 +453,7 @@ func (d *data) attach(ebpf interpreter.EbpfHandler, pid libpf.PID, path string,
 	}
 	le.refs++
 
-	var pcSampleHasDevice bool
-	for _, probe := range d.probes {
-		if probe.Name != "pc_sample_batch" {
-			continue
-		}
-		spec, err := pfelf.ParseUSDTArguments(probe.Arguments)
-		pcSampleHasDevice = err == nil && spec.Arg_cnt >= 3
-		if err == nil && !pcSampleHasDevice {
-			log.Warnf("[cuda] pid=%d: pc_sample_batch has %d args (need 3 for cuda_device) — "+
-				"built from an older parcagpu; PC samples won't carry a cuda_device label",
-				pid, spec.Arg_cnt)
-		}
-		break
-	}
-
-	gpuFixers.Store(pid, newGpuTraceFixer(pcSampleHasDevice))
+	gpuFixers.Store(pid, newGpuTraceFixer(d.pcSampleHasDevice))
 	return &Instance{
 		d:    d,
 		path: path,
