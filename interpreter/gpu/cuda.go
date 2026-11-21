@@ -45,6 +45,7 @@ const (
 	USDTProgCudaKernelStatsTail   = "cuda_kernel_stats_tail"
 	USDTProgCudaDeviceInfo        = "cuda_device_info"
 	USDTProgCudaCubinUnloaded     = "cuda_cubin_unloaded"
+	USDTProgCudaBlockingCall      = "cuda_blocking_call"
 	USDTProgCudaProbe             = "cuda_probe"
 
 	// BPF attach cookie values - must match CUDA_PROG_* in cuda.ebpf.c.
@@ -68,6 +69,7 @@ const (
 	CudaProgKernelStats     = 11
 	CudaProgDeviceInfo      = 12
 	CudaProgCubinUnloaded   = 13
+	CudaProgBlockingCall    = 14
 )
 
 const cudaProgsMap = "cuda_progs"

@@ -44,6 +44,53 @@ int BPF_USDT(cuda_correlation, u32 correlation_id, s32 cbid)
   return unwind_trace(ctx, record, false);
 }
 
+// origin_id_cuda_blocking is set during load time, like origin_id_cuda.
+BPF_RODATA_VAR(u16, origin_id_cuda_blocking, 0)
+
+// Context values of a cuda_blocking_call trace, in this order. Userspace reads
+// them by index (interpreter/gpu/blocking.go).
+#define CUDA_BLOCKING_CTX_WEIGHT   0 // blocked time this sample stands for, ns
+#define CUDA_BLOCKING_CTX_DURATION 1 // this call's duration, ns
+#define CUDA_BLOCKING_CTX_CALL     2 // (u32)signed cbid | (u64)device_id << 32
+#define CUDA_BLOCKING_CTX_COUNT    3
+
+// USDT: parcagpu/cuda_blocking_call(uint64 startNs, uint64 endNs,
+//                                   int32 signedCbid, uint32 deviceId,
+//                                   uint64 weightNs).
+// A CUDA API call that blocked the calling thread. The probe fires inside the
+// call, so the stack unwound here is the caller's. The trace carries the
+// weight as its profile value; the cbid and device ride along so userspace can
+// name the call.
+SEC("usdt/parcagpu/cuda_blocking_call")
+int BPF_USDT(cuda_blocking_call, u64 start_ns, u64 end_ns, s32 cbid, u32 device_id, u64 weight_ns)
+{
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid      = pid_tgid >> 32;
+  u32 tid      = pid_tgid & 0xFFFFFFFF;
+
+  if (pid == 0 || tid == 0) {
+    return 0;
+  }
+
+  DEBUG_PRINT("cuda_blocking_call: cbid=%d weight_ns=%lu", cbid, weight_ns);
+
+  PerCPURecord *record = prepare_trace(origin_id_cuda_blocking, pid, tid, 0, bpf_ktime_get_ns());
+  if (!record) {
+    return 0;
+  }
+  // Context values lead variable_data, ahead of the frames unwinding appends.
+  u64 *values = push_context_values(&record->trace, CUDA_BLOCKING_CTX_COUNT);
+  if (!values) {
+    return 0;
+  }
+  values[CUDA_BLOCKING_CTX_WEIGHT]   = weight_ns;
+  values[CUDA_BLOCKING_CTX_DURATION] = end_ns > start_ns ? end_ns - start_ns : 0;
+  values[CUDA_BLOCKING_CTX_CALL]     = (u64)(u32)cbid | ((u64)device_id << 32);
+  // No kernel frames: this is a uprobe, so the kernel stack would only be the
+  // trap handling (see heap_usdt.ebpf.c).
+  return unwind_trace(ctx, record, false);
+}
+
 // Event type discriminator at offset 0 of every event submitted to cupti_events.
 // Each event type has its own struct; the Go consumer peeks the first 4 bytes
 // and dispatches accordingly.
@@ -1191,6 +1238,7 @@ int BPF_USDT(cuda_error, s32 code, u64 message_ptr, u64 component_ptr)
 #define CUDA_PROG_KERNEL_STATS      11
 #define CUDA_PROG_DEVICE_INFO       12
 #define CUDA_PROG_CUBIN_UNLOADED    13
+#define CUDA_PROG_BLOCKING_CALL     14
 
 SEC("usdt/cuda_probe")
 int cuda_probe(struct pt_regs *ctx)
@@ -1273,6 +1321,8 @@ int cuda_probe(struct pt_regs *ctx)
     break;
   }
   case CUDA_PROG_NVTX_RESOURCE: return BPF_USDT_CALL(cuda_nvtx_resource_name, kind, id, name_ptr);
+  case CUDA_PROG_BLOCKING_CALL:
+    return BPF_USDT_CALL(cuda_blocking_call, start_ns, end_ns, cbid, device_id, weight_ns);
   case CUDA_PROG_KERNEL_STATS:
     if (stash_kernel_stats_args(
           (u64)bpf_usdt_arg0(ctx), (u64)bpf_usdt_arg1(ctx), (u32)bpf_usdt_arg2(ctx))) {

@@ -45,8 +45,9 @@ var probeTable = map[string]probeSpec{
 	"nvtx_resource_name": {cookie: CudaProgNvtxResource, prog: USDTProgCudaNvtxResourceName},
 	"kernel_stats": {cookie: CudaProgKernelStats, prog: USDTProgCudaKernelStats,
 		tail: USDTProgCudaKernelStatsTail, tailSlot: 3, optionalTail: true},
-	"device_info":    {cookie: CudaProgDeviceInfo, prog: USDTProgCudaDeviceInfo},
-	"cubin_unloaded": {cookie: CudaProgCubinUnloaded, prog: USDTProgCudaCubinUnloaded},
+	"device_info":        {cookie: CudaProgDeviceInfo, prog: USDTProgCudaDeviceInfo},
+	"cubin_unloaded":     {cookie: CudaProgCubinUnloaded, prog: USDTProgCudaCubinUnloaded},
+	"cuda_blocking_call": {cookie: CudaProgBlockingCall, prog: USDTProgCudaBlockingCall},
 }
 
 // probeChoices is which probes are attached, in order: from each entry, the
@@ -68,6 +69,7 @@ var probeChoices = [][]string{
 	{"kernel_stats"},
 	{"device_info"},
 	{"cubin_unloaded"},
+	{"cuda_blocking_call"},
 }
 
 const requiredChoices = 2
