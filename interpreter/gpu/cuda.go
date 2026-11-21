@@ -43,6 +43,8 @@ const (
 	USDTProgCudaNvtxResourceName  = "cuda_nvtx_resource_name"
 	USDTProgCudaKernelStats       = "cuda_kernel_stats"
 	USDTProgCudaKernelStatsTail   = "cuda_kernel_stats_tail"
+	USDTProgCudaDeviceInfo        = "cuda_device_info"
+	USDTProgCudaCubinUnloaded     = "cuda_cubin_unloaded"
 	USDTProgCudaProbe             = "cuda_probe"
 
 	// BPF attach cookie values - must match CUDA_PROG_* in cuda.ebpf.c.
@@ -64,6 +66,8 @@ const (
 	CudaProgNvtxResource    = 9
 	CudaProgCubinLoadedFile = 10
 	CudaProgKernelStats     = 11
+	CudaProgDeviceInfo      = 12
+	CudaProgCubinUnloaded   = 13
 )
 
 const cudaProgsMap = "cuda_progs"
@@ -81,6 +85,8 @@ const (
 	EventTypeNvtxName        uint32 = 8
 	EventTypeCubinLoadedFile uint32 = 9
 	EventTypeKernelStats     uint32 = 10
+	EventTypeDeviceInfo      uint32 = 11
+	EventTypeCubinUnloaded   uint32 = 12
 )
 
 // CuptiKernelStatsEvent matches the fixed part of struct kernel_stats_event
@@ -156,6 +162,14 @@ type CuptiCubinEvent struct {
 type CuptiCubinFileEvent struct {
 	CuptiCubinEvent
 	Path [4096]byte
+}
+
+// CuptiCubinUnloadedEvent matches struct cubin_unloaded_event in cuda.ebpf.c:
+// the process unloaded its last module with this CRC.
+type CuptiCubinUnloadedEvent struct {
+	EventType uint32
+	Pid       uint32
+	CubinCRC  uint64
 }
 
 // CuptiPCData mirrors struct cupti_pc_data in cupti_bpf.h (parcagpu).  It is
@@ -466,6 +480,8 @@ func (i *Instance) Detach(_ interpreter.EbpfHandler, _ libpf.PID) error {
 	gpuFixers.Delete(i.pid)
 	DeleteStallReasonMap(uint32(i.pid))
 	DeleteGpuConfigs(uint32(i.pid))
+	DeleteDeviceInfos(uint32(i.pid))
+	releaseProcessCubins(uint32(i.pid), time.Now())
 	if le := i.d.links[i.odfi]; le != nil {
 		le.refs--
 		if le.refs <= 0 {
@@ -1087,8 +1103,11 @@ func AddTimes(events []CuptiKernelEvent) []CudaTraceOutput {
 	return outputs
 }
 
-// MaybeClearAll periodically clears all fixers and returns metrics for the caller to report.
+// MaybeClearAll periodically clears all fixers, drops cubins unloaded long
+// enough ago, and returns metrics for the caller to report.
 func MaybeClearAll() []metrics.Metric {
+	sweepUnloadedCubins(time.Now())
+
 	var totalTimes, totalTraces, totalTimesCleared, totalTracesCleared int
 	var totalPendingEvicted int
 

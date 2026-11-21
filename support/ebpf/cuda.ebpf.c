@@ -57,6 +57,8 @@ int BPF_USDT(cuda_correlation, u32 correlation_id, s32 cbid)
 #define EVENT_TYPE_NVTX_NAME         8
 #define EVENT_TYPE_CUBIN_LOADED_FILE 9
 #define EVENT_TYPE_KERNEL_STATS      10
+#define EVENT_TYPE_DEVICE_INFO       11
+#define EVENT_TYPE_CUBIN_UNLOADED    12
 
 #define MAX_KERNEL_NAME_LEN   256
 #define MAX_FUNC_NAME_LEN     128
@@ -90,6 +92,26 @@ struct cubin_event {
 struct cubin_file_event {
   struct cubin_event cubin;
   char path[4096]; // Optional absolute path in the producer's mount namespace.
+};
+
+// cubin_unloaded_event reports that a process unloaded the last module with
+// this CRC (parcagpu refcounts loads per process).
+struct cubin_unloaded_event {
+  u32 event_type; // = EVENT_TYPE_CUBIN_UNLOADED
+  u32 pid;
+  u64 cubin_crc;
+};
+
+// device_info_event maps a process's CUDA ordinal to the device's UUID and
+// PCI bus ID. Fired once per device on context creation and replayed like
+// gpu_config.
+struct device_info_event {
+  u32 event_type; // = EVENT_TYPE_DEVICE_INFO
+  u32 pid;
+  u32 device_id; // CUDA ordinal in this process
+  u32 _pad;
+  u8 uuid[16];         // CUuuid bytes, as NVML reports them
+  char pci_bus_id[32]; // e.g. "0000:01:00.0"; empty if unavailable
 };
 
 // gpu_config_event reports the parcagpu sampling factor + GPU clock so the
@@ -578,6 +600,67 @@ int BPF_USDT(cuda_cubin_loaded_file, u64 cubin_crc, u64 cubin_ptr, u64 cubin_siz
   bpf_ringbuf_submit(evt, 0);
   u8 one = 1;
   bpf_map_update_elem(&cubin_seen, &key, &one, BPF_ANY);
+  return 0;
+}
+
+// USDT: parcagpu/cubin_unloaded(uint64 crc).
+// Forgets the (pid, crc) dedup entry first, so that loading the module again
+// in this process reports it again, then tells user space, which drops the
+// cubin once no process holds it and samples in flight have drained.
+SEC("usdt/parcagpu/cubin_unloaded")
+int BPF_USDT(cuda_cubin_unloaded, u64 cubin_crc)
+{
+  u32 pid                   = bpf_get_current_pid_tgid() >> 32;
+  struct cubin_seen_key key = {.crc = cubin_crc, .pid = pid, ._pad = 0};
+  bpf_map_delete_elem(&cubin_seen, &key);
+
+  struct cubin_unloaded_event *evt = bpf_ringbuf_reserve(&cupti_events, sizeof(*evt), 0);
+  if (!evt) {
+    increment_metric(metricID_CUPTIEventsRingbufFull);
+    return 0;
+  }
+  evt->event_type = EVENT_TYPE_CUBIN_UNLOADED;
+  evt->pid        = pid;
+  evt->cubin_crc  = cubin_crc;
+  bpf_ringbuf_submit(evt, 0);
+
+  DEBUG_PRINT("cuda_cubin_unloaded: pid=%u crc=0x%lx", pid, cubin_crc);
+  return 0;
+}
+
+// USDT: parcagpu/device_info(uint32 deviceId, const uint8 *uuid,
+//                             const char *pciBusId).
+// Not deduped: parcagpu fires it once per device and replays it at most every
+// 30 s per device, and an unconditional replay lets user space recover a
+// mapping it dropped (a recycled pid, or an event lost to a full ringbuf).
+SEC("usdt/parcagpu/device_info")
+int BPF_USDT(cuda_device_info, u32 device_id, u64 uuid_ptr, u64 pci_ptr)
+{
+  u32 pid = bpf_get_current_pid_tgid() >> 32;
+
+  struct device_info_event *evt = bpf_ringbuf_reserve(&cupti_events, sizeof(*evt), 0);
+  if (!evt) {
+    increment_metric(metricID_CUPTIEventsRingbufFull);
+    return 0;
+  }
+  if (bpf_probe_read_user(evt->uuid, sizeof(evt->uuid), (void *)uuid_ptr)) {
+    // A mapping without its UUID is useless; the next replay retries.
+    bpf_ringbuf_discard(evt, 0);
+    return 0;
+  }
+  evt->event_type    = EVENT_TYPE_DEVICE_INFO;
+  evt->pid           = pid;
+  evt->device_id     = device_id;
+  evt->_pad          = 0;
+  evt->pci_bus_id[0] = 0;
+  if (
+    pci_ptr &&
+    bpf_probe_read_user_str(evt->pci_bus_id, sizeof(evt->pci_bus_id), (void *)pci_ptr) <= 0) {
+    evt->pci_bus_id[0] = 0;
+  }
+  bpf_ringbuf_submit(evt, 0);
+
+  DEBUG_PRINT("cuda_device_info: pid=%u dev=%u", pid, device_id);
   return 0;
 }
 
@@ -1106,6 +1189,8 @@ int BPF_USDT(cuda_error, s32 code, u64 message_ptr, u64 component_ptr)
 #define CUDA_PROG_NVTX_RESOURCE     9
 #define CUDA_PROG_CUBIN_LOADED_FILE 10
 #define CUDA_PROG_KERNEL_STATS      11
+#define CUDA_PROG_DEVICE_INFO       12
+#define CUDA_PROG_CUBIN_UNLOADED    13
 
 SEC("usdt/cuda_probe")
 int cuda_probe(struct pt_regs *ctx)
@@ -1148,6 +1233,8 @@ int cuda_probe(struct pt_regs *ctx)
     return BPF_USDT_CALL(cuda_cubin_loaded, cubin_crc, cubin_ptr, cubin_size);
   case CUDA_PROG_CUBIN_LOADED_FILE:
     return BPF_USDT_CALL(cuda_cubin_loaded_file, cubin_crc, cubin_ptr, cubin_size, path);
+  case CUDA_PROG_CUBIN_UNLOADED: return BPF_USDT_CALL(cuda_cubin_unloaded, cubin_crc);
+  case CUDA_PROG_DEVICE_INFO: return BPF_USDT_CALL(cuda_device_info, device_id, uuid_ptr, pci_ptr);
   case CUDA_PROG_PC_SAMPLE_BATCH: {
     u32 zero                     = 0;
     struct cuda_scratch *scratch = bpf_map_lookup_elem(&cuda_scratch_heap, &zero);
