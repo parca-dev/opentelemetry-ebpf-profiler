@@ -867,6 +867,14 @@ func setOriginIDs(coll *cebpf.CollectionSpec, cfg *Config, origins *originRegist
 		if err := coll.Variables["origin_id_cuda"].Set(cuda); err != nil {
 			return fmt.Errorf("failed to set origin_id_cuda: %v", err)
 		}
+		// cuda_blocking_call traces: host time blocked in CUDA API calls.
+		blocking, err := origins.Register(gpu.ProfileTypeCudaBlocking)
+		if err != nil {
+			return err
+		}
+		if err := coll.Variables["origin_id_cuda_blocking"].Set(blocking); err != nil {
+			return fmt.Errorf("failed to set origin_id_cuda_blocking: %v", err)
+		}
 	}
 
 	return nil

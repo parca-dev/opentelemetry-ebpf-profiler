@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 // CUPTI types come from the mock headers that test/distro-qemu uses to build
 // parcagpu's mock libraries. libparcagpucupti.so is built against the real
@@ -17,6 +18,7 @@
 #include "cupti.h"
 
 #define CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernel_v7000 211
+#define CUPTI_RUNTIME_TRACE_CBID_cudaStreamSynchronize_v3020 131
 #define CUPTI_ACTIVITY_FLAG_FLUSH_FORCED                1
 
 // ============================================================================
@@ -214,6 +216,29 @@ void simulate_kernel_launch(uint32_t correlation_id) {
   cbdata.callbackSite = CUPTI_API_EXIT;
   parcagpuCallback(NULL, CUPTI_CB_DOMAIN_RUNTIME_API,
                    CUPTI_RUNTIME_TRACE_CBID_cudaLaunchKernel_v7000, &cbdata);
+}
+
+// simulate_stream_sync calls the parcagpuCuptiCallback with a runtime API
+// ENTER, blocks block_us, then EXIT for cudaStreamSynchronize_v3020. With
+// PARCAGPU_BLOCKING_CALLS set, EXIT fires the cuda_blocking_call USDT probe.
+void simulate_stream_sync(uint32_t correlation_id, uint32_t block_us) {
+  if (!parcagpuCallback) return;
+
+  CUpti_CallbackData cbdata;
+  memset(&cbdata, 0, sizeof(cbdata));
+  cbdata.correlationId = correlation_id;
+  cbdata.functionName  = "cudaStreamSynchronize";
+
+  cbdata.callbackSite = CUPTI_API_ENTER;
+  parcagpuCallback(NULL, CUPTI_CB_DOMAIN_RUNTIME_API,
+                   CUPTI_RUNTIME_TRACE_CBID_cudaStreamSynchronize_v3020, &cbdata);
+
+  struct timespec ts = {block_us / 1000000, (long)(block_us % 1000000) * 1000};
+  nanosleep(&ts, NULL);
+
+  cbdata.callbackSite = CUPTI_API_EXIT;
+  parcagpuCallback(NULL, CUPTI_CB_DOMAIN_RUNTIME_API,
+                   CUPTI_RUNTIME_TRACE_CBID_cudaStreamSynchronize_v3020, &cbdata);
 }
 
 // simulate_buffer_completion requests a buffer, fills it with one

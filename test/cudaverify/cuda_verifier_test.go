@@ -22,6 +22,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
 	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
+	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/testutils"
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
@@ -100,7 +101,8 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 	// which gives the wait below a signal that does not depend on the GPU library.
 	interpreters.Go.Disabled = false
 
-	_, trc := testutils.StartTracer(ctx, t, interpreters, false)
+	blocking := &blockingReporter{}
+	trc := testutils.StartTracerWithReporter(ctx, t, interpreters, false, blocking)
 	defer trc.Close()
 
 	// Only the first test to run loads the library after the initial sync; later
@@ -131,6 +133,10 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 	// that it cannot be what discovers the library loaded below.
 	time.Sleep(time.Second)
 
+	// cuda_blocking_call is opt-in; report every call, not a sample of the
+	// short ones. Read once, when the library initializes.
+	t.Setenv("PARCAGPU_BLOCKING_CALLS", "1")
+	t.Setenv("PARCAGPU_BLOCKING_THRESHOLD_US", "0")
 	loadOnce.Do(func() { loadRC = cInitParcaGPU(*soPath) })
 	require.Zero(t, loadRC, "loading %s failed", *soPath)
 
@@ -170,7 +176,11 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 	var statsNames []string
 	var rec ringbuf.Record
 	wantStats := hasProbe(t, *soPath, "kernel_stats")
-	done := func() bool { return len(events) > 0 && (!wantStats || len(stats) > 0) }
+	wantBlocking := hasProbe(t, *soPath, "cuda_blocking_call")
+	done := func() bool {
+		return len(events) > 0 && (!wantStats || len(stats) > 0) &&
+			(!wantBlocking || len(blocking.get()) > 0)
+	}
 
 	const (
 		maxAttempts  = 10
@@ -187,6 +197,12 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 		// Simulate buffer completion (fires kernel_executed + activity_batch USDTs).
 		cSimulateBufferCompletion(42, 0, 7, "testKernel")
 
+		// Simulate a 2 ms cudaStreamSynchronize (fires cuda_blocking_call,
+		// whose trace reaches the reporter rather than cupti_events).
+		if wantBlocking {
+			cSimulateStreamSync(43, 2000)
+		}
+
 		// Poll ringbuf reader for events. Filter to EVENT_TYPE_KERNEL — the
 		// same ringbuf carries cubin/pc_sample/error events too in production,
 		// but those don't fire in this simulation.
@@ -202,6 +218,9 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 				case <-deadline:
 					goto nextAttempt
 				default:
+					if done() {
+						goto nextAttempt
+					}
 					continue
 				}
 			}
@@ -225,7 +244,8 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 				continue
 			}
 			ev := (*gpu.CuptiKernelEvent)(unsafe.Pointer(&rec.RawSample[0]))
-			if ev.EventType != gpu.EventTypeKernel {
+			// Other CUDA processes on the machine are traced too.
+			if ev.EventType != gpu.EventTypeKernel || ev.Pid != uint32(pid) {
 				continue
 			}
 			events = append(events, *ev)
@@ -261,6 +281,8 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 	require.True(t, found,
 		"expected timing event with correlation_id=42, device_id=0, stream_id=7, kernel_name=testKernel; got %+v", events)
 
+	checkBlockingCalls(t, wantBlocking, blocking.get())
+
 	if !wantStats {
 		t.Logf("%s has no kernel_stats probe; skipping kernel_stats checks", *soPath)
 		return
@@ -277,6 +299,71 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 	require.True(t, found,
 		"expected kernel_stats event with device_id=0, stream_id=7, executions>=1, kernel_name=testKernel; got %+v %v",
 		stats, statsNames)
+}
+
+// blockingTrace is what the test keeps of a cuda_blocking_call trace.
+type blockingTrace struct {
+	call   gpu.BlockingCall
+	labels map[string]string
+	frames int
+}
+
+// blockingReporter keeps the CUDA blocking-call traces the tracer reports
+// and drops the rest without blocking it. It reads each trace while its
+// ContextValues are valid, in ReportTraceEvent.
+type blockingReporter struct {
+	mu     sync.Mutex
+	traces []blockingTrace
+}
+
+func (r *blockingReporter) ReportTraceEvent(trace *libpf.Trace,
+	meta *samples.TraceEventMeta) error {
+	if meta.ProfileType != gpu.ProfileTypeCudaBlocking {
+		return nil
+	}
+	call, ok := gpu.ParseBlockingCall(meta)
+	if !ok {
+		return nil
+	}
+	gpu.DecorateBlockingTrace(trace, meta)
+	labels := make(map[string]string, len(trace.CustomLabels))
+	for k, v := range trace.CustomLabels {
+		labels[k.String()] = v.String()
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.traces = append(r.traces, blockingTrace{call: call, labels: labels,
+		frames: len(trace.Frames)})
+	return nil
+}
+
+func (r *blockingReporter) get() []blockingTrace {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]blockingTrace(nil), r.traces...)
+}
+
+// checkBlockingCalls verifies the 2 ms cudaStreamSynchronize came back as a
+// blocking-call trace with the caller's stack, weighted by its duration.
+func checkBlockingCalls(t *testing.T, want bool, traces []blockingTrace) {
+	t.Helper()
+	if !want {
+		t.Logf("%s has no cuda_blocking_call probe; skipping blocking-call checks", *soPath)
+		return
+	}
+	require.NotEmpty(t, traces, "no cuda_blocking_call traces received")
+	for _, bt := range traces {
+		t.Logf("Received cuda_blocking_call trace: %+v labels=%v frames=%d",
+			bt.call, bt.labels, bt.frames)
+		// cudaStreamSynchronize_v3020; with a 0 threshold every call is
+		// reported at its own duration.
+		if bt.call.CBID == 131 && bt.call.WeightNs >= 2_000_000 &&
+			bt.call.WeightNs == bt.call.DurationNs && bt.frames > 0 &&
+			bt.labels["cuda_api"] == "cudaStreamSynchronize" {
+			return
+		}
+	}
+	t.Fatalf("no cuda_blocking_call trace for a >=2ms cudaStreamSynchronize with a stack")
 }
 
 // TestCUDAEndToEndSingleShot verifies that CUDA USDT probes fire correctly

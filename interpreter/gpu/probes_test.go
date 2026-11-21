@@ -38,6 +38,15 @@ func TestSelectProbes(t *testing.T) {
 		want []string
 	}{
 		{"current library",
+			[]string{"cuda_blocking_call", "kernel_stats", "nvtx_resource_name",
+				"nvtx_event_batch", "gpu_config", "error", "stall_reason_map",
+				"pc_sample_batch", "cubin_loaded", "cubin_loaded_file", "activity_batch",
+				"kernel_executed", "cuda_correlation", "device_info", "cubin_unloaded"},
+			[]string{"cuda_correlation", "activity_batch", "cubin_loaded_file",
+				"pc_sample_batch", "stall_reason_map", "error", "gpu_config",
+				"nvtx_event_batch", "nvtx_resource_name", "kernel_stats", "device_info",
+				"cubin_unloaded", "cuda_blocking_call"}},
+		{"library from before cuda_blocking_call",
 			[]string{"kernel_stats", "nvtx_resource_name", "nvtx_event_batch", "gpu_config",
 				"error", "stall_reason_map", "pc_sample_batch", "cubin_loaded",
 				"cubin_loaded_file", "activity_batch", "kernel_executed", "cuda_correlation",

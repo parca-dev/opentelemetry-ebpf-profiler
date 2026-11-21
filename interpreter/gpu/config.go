@@ -39,6 +39,16 @@ var (
 		ReportValues: true,
 		AppendValues: samples.AppendFirstContextValue,
 	}
+	// ProfileTypeCudaBlocking is host time blocked in CUDA API calls, from
+	// the cuda_blocking_call probe. Registered like ProfileTypeCuda; the
+	// value is the first context value, the call's weight in nanoseconds.
+	// It is CPU time on the caller's stack, not GPU time, hence "cuda_" and
+	// not "gpu_".
+	ProfileTypeCudaBlocking = &samples.TypeMetadata{
+		SampleTypes:  []samples.SampleType{{Type: "cuda_blocking_time", Unit: "nanoseconds"}},
+		ReportValues: true,
+		AppendValues: samples.AppendFirstContextValue,
+	}
 )
 
 // Config is the enable/disable knob wired into interpreterconfig.Config.
