@@ -5,6 +5,7 @@ package cudaverify
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"flag"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/libpf/pfelf"
 	"go.opentelemetry.io/ebpf-profiler/testutils"
 	"go.opentelemetry.io/ebpf-profiler/util"
 )
@@ -51,6 +53,23 @@ func isMapped(t *testing.T, path string) bool {
 	maps, err := os.ReadFile("/proc/self/maps")
 	require.NoError(t, err)
 	return bytes.Contains(maps, []byte("/"+filepath.Base(path)+"\n"))
+}
+
+// hasProbe reports whether the parcagpu library at path defines the named USDT
+// probe, so tests of newer probes still pass against older libraries.
+func hasProbe(t *testing.T, path, name string) bool {
+	t.Helper()
+	ef, err := pfelf.Open(path)
+	require.NoError(t, err)
+	defer ef.Close()
+	probes, err := ef.ParseUSDTProbes()
+	require.NoError(t, err)
+	for _, p := range probes {
+		if p.Provider == "parcagpu" && p.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // runEndToEnd exercises the full process-manager driven GPU probe attachment flow:
@@ -147,7 +166,11 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 	// simulation several times — on slow CI the uprobes may not be fully
 	// active in the kernel immediately after the interpreter is detected.
 	var events []gpu.CuptiKernelEvent
+	var stats []gpu.CuptiKernelStatsEvent
+	var statsNames []string
 	var rec ringbuf.Record
+	wantStats := hasProbe(t, *soPath, "kernel_stats")
+	done := func() bool { return len(events) > 0 && (!wantStats || len(stats) > 0) }
 
 	const (
 		maxAttempts  = 10
@@ -182,6 +205,22 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 					continue
 				}
 			}
+			if len(rec.RawSample) >= int(unsafe.Sizeof(gpu.CuptiKernelStatsEvent{})) &&
+				binary.NativeEndian.Uint32(rec.RawSample[:4]) == gpu.EventTypeKernelStats {
+				ev := (*gpu.CuptiKernelStatsEvent)(unsafe.Pointer(&rec.RawSample[0]))
+				name := rec.RawSample[unsafe.Sizeof(gpu.CuptiKernelStatsEvent{}):]
+				if idx := bytes.IndexByte(name, 0); idx >= 0 {
+					name = name[:idx]
+				}
+				stats = append(stats, *ev)
+				statsNames = append(statsNames, string(name))
+				t.Logf("Received kernel_stats event: pid=%d seq=%d dev=%d stream=%d execs=%d total_ns=%d kernel=%s",
+					ev.Pid, ev.Seq, ev.DeviceID, ev.StreamID, ev.Executions, ev.TotalNs, name)
+				if done() {
+					goto nextAttempt
+				}
+				continue
+			}
 			if len(rec.RawSample) < int(unsafe.Sizeof(gpu.CuptiKernelEvent{})) {
 				continue
 			}
@@ -193,9 +232,12 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 			t.Logf("Received kernel event: pid=%d id=%d dev=%d stream=%d kernel=%s",
 				ev.Pid, ev.Id, ev.Dev, ev.Stream,
 				string(ev.KernelName[:bytes.IndexByte(ev.KernelName[:], 0)]))
+			if done() {
+				goto nextAttempt
+			}
 		}
 	nextAttempt:
-		if len(events) > 0 {
+		if done() {
 			break
 		}
 		t.Logf("no events after attempt %d, retrying...", attempt)
@@ -218,6 +260,23 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 	}
 	require.True(t, found,
 		"expected timing event with correlation_id=42, device_id=0, stream_id=7, kernel_name=testKernel; got %+v", events)
+
+	if !wantStats {
+		t.Logf("%s has no kernel_stats probe; skipping kernel_stats checks", *soPath)
+		return
+	}
+	require.NotEmpty(t, stats, "no kernel_stats events received")
+	found = false
+	for i, ev := range stats {
+		if ev.Pid == uint32(pid) && ev.DeviceID == 0 && ev.StreamID == 7 &&
+			ev.Executions >= 1 && statsNames[i] == "testKernel" {
+			found = true
+			break
+		}
+	}
+	require.True(t, found,
+		"expected kernel_stats event with device_id=0, stream_id=7, executions>=1, kernel_name=testKernel; got %+v %v",
+		stats, statsNames)
 }
 
 // TestCUDAEndToEndSingleShot verifies that CUDA USDT probes fire correctly

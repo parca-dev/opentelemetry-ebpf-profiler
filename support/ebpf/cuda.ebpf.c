@@ -56,6 +56,7 @@ int BPF_USDT(cuda_correlation, u32 correlation_id, s32 cbid)
 #define EVENT_TYPE_NVTX              7
 #define EVENT_TYPE_NVTX_NAME         8
 #define EVENT_TYPE_CUBIN_LOADED_FILE 9
+#define EVENT_TYPE_KERNEL_STATS      10
 
 #define MAX_KERNEL_NAME_LEN   256
 #define MAX_FUNC_NAME_LEN     128
@@ -161,6 +162,23 @@ struct nvtx_event {
 // nvtx_name_event reports a one-off resource naming call (nvtxNameOsThreadA,
 // nvtxNameCudaStreamA, ...). Fired immediately by the parcagpu collector with
 // no batching; the Go side caches name lookups for use enriching other events.
+// kernel_stats_event carries one (device, stream, kernel) delta from a
+// parcagpu kernel_stats firing, with that firing's header copied in so each
+// ringbuf record stands alone. Submitted truncated after the name's NUL.
+struct kernel_stats_event {
+  u32 event_type; // = EVENT_TYPE_KERNEL_STATS
+  u32 pid;
+  u64 start_ns; // header: earliest kernel start (CUPTI timestamp)
+  u64 end_ns;   // header: latest kernel end (CUPTI timestamp)
+  u32 seq;      // header: per-process firing counter
+  u32 device_id;
+  u32 stream_id;
+  u32 _pad;
+  u64 executions;
+  u64 total_ns;
+  char kernel_name[MAX_KERNEL_NAME_LEN];
+};
+
 struct nvtx_name_event {
   u32 event_type; // = EVENT_TYPE_NVTX_NAME
   u32 pid;
@@ -190,6 +208,12 @@ struct cuda_scratch {
   u32 nvtx_count;
   u32 nvtx_next_offset;       // start of the next nvtx chunk to process; 0 on entry
   struct nvtx_event nvtx_evt; // built here, then copied to cupti_events
+  u64 ks_header_ptr;
+  u64 ks_ptrs_base;
+  u32 ks_count;
+  u32 ks_next_offset;               // start of the next entry chunk; 0 on entry
+  struct kernel_stats_event ks_evt; // built here, then copied to cupti_events
+  struct cupti_kernel_stats_entry ks_entry;
 };
 
 struct cuda_scratch_heap_t {
@@ -236,6 +260,13 @@ struct cuda_scratch_heap_t {
 #define BPF_NVTX_MAX_TAIL_CALLS 4
 #define BPF_NVTX_TOTAL_LIMIT    (BPF_NVTX_BATCH_LIMIT * BPF_NVTX_MAX_TAIL_CALLS)
 
+// Per-chunk limit for kernel_stats.  Each iter reads an entry pointer, the
+// 32-byte entry and its kernel name, then copies the used part to the
+// ringbuf.  64-per-chunk x 4 chunks = 256 max (KERNEL_STATS_MAX_ENTRIES).
+#define BPF_KS_BATCH_LIMIT    64
+#define BPF_KS_MAX_TAIL_CALLS 4
+#define BPF_KS_TOTAL_LIMIT    (BPF_KS_BATCH_LIMIT * BPF_KS_MAX_TAIL_CALLS)
+
 // Tail-call prog array for cuda_probe and the pc_sample_batch chunk chain.
 // Heavy loop bodies (activity_batch, pc_sample_batch, nvtx_event_batch) push
 // the inlined dispatcher past BPF_COMPLEXITY_LIMIT_JMP_SEQ (8192), so they
@@ -247,11 +278,12 @@ struct cuda_scratch_heap_t {
 // Key 0: cuda_activity_batch_tail
 // Key 1: cuda_pc_sample_batch_tail
 // Key 2: cuda_nvtx_batch_tail
+// Key 3: cuda_kernel_stats_tail
 struct cuda_progs_t {
   __uint(type, BPF_MAP_TYPE_PROG_ARRAY);
   __type(key, u32);
   __type(value, u32);
-  __uint(max_entries, 3);
+  __uint(max_entries, 4);
 } cuda_progs SEC(".maps");
 
 // Unified ringbuf for all CUPTI events sent to user-space. Every event begins
@@ -877,6 +909,130 @@ int cuda_nvtx_batch_tail(struct pt_regs *ctx)
     ctx, scratch->nvtx_ptrs_base, scratch->nvtx_count, scratch->nvtx_next_offset);
 }
 
+static EBPF_INLINE int process_kernel_stats_chunk(struct pt_regs *ctx)
+{
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid      = pid_tgid >> 32;
+
+  u32 zero                     = 0;
+  struct cuda_scratch *scratch = bpf_map_lookup_elem(&cuda_scratch_heap, &zero);
+  if (!scratch) {
+    return 0;
+  }
+  struct kernel_stats_event *evt       = &scratch->ks_evt;
+  struct cupti_kernel_stats_entry *ent = &scratch->ks_entry;
+  u64 ptrs_base                        = scratch->ks_ptrs_base;
+  u32 count                            = scratch->ks_count;
+  u32 start_offset                     = scratch->ks_next_offset;
+
+  struct cupti_kernel_stats_header hdr;
+  if (bpf_probe_read_user(&hdr, sizeof(hdr), (void *)scratch->ks_header_ptr) != 0) {
+    return 0;
+  }
+  evt->event_type = EVENT_TYPE_KERNEL_STATS;
+  evt->pid        = pid;
+  evt->start_ns   = hdr.start_ns;
+  evt->end_ns     = hdr.end_ns;
+  evt->seq        = hdr.seq;
+  evt->_pad       = 0;
+
+  u32 end = count;
+  if (end > start_offset + BPF_KS_BATCH_LIMIT) {
+    end = start_offset + BPF_KS_BATCH_LIMIT;
+  }
+
+  u64 ptrs[PTR_BATCH] = {};
+
+  for (u32 batch = 0; batch < BPF_KS_BATCH_LIMIT / PTR_BATCH; batch++) {
+    u32 base = start_offset + batch * PTR_BATCH;
+    if (base >= end) {
+      break;
+    }
+
+    if (bpf_probe_read_user(ptrs, sizeof(ptrs), (void *)(ptrs_base + base * sizeof(u64))) != 0) {
+      break;
+    }
+
+    for (u32 j = 0; j < PTR_BATCH; j++) {
+      if (base + j >= end) {
+        break;
+      }
+
+      if (bpf_probe_read_user(ent, sizeof(*ent), (void *)ptrs[j]) != 0) {
+        continue;
+      }
+      evt->device_id  = ent->device_id;
+      evt->stream_id  = ent->stream_id;
+      evt->executions = ent->executions;
+      evt->total_ns   = ent->total_ns;
+      long read       = 0;
+      if (ent->name_ptr) {
+        read = bpf_probe_read_user_str(
+          evt->kernel_name, sizeof(evt->kernel_name), (void *)ent->name_ptr);
+      }
+      u64 len = 1;
+      if (read > 0) {
+        len = (u64)read;
+      } else {
+        evt->kernel_name[0] = '\0';
+      }
+      if (len > MAX_KERNEL_NAME_LEN) {
+        len = MAX_KERNEL_NAME_LEN;
+      }
+      bpf_ringbuf_output(
+        &cupti_events, evt, __builtin_offsetof(struct kernel_stats_event, kernel_name) + len, 0);
+    }
+  }
+
+  if (end < count) {
+    scratch->ks_next_offset = end;
+    bpf_tail_call(ctx, &cuda_progs, 3);
+    DEBUG_PRINT("cuda_kernel_stats: tail_call failed at offset=%u", end);
+  }
+  return 0;
+}
+
+// Stashes kernel_stats args in scratch for process_kernel_stats_chunk.
+// bpf_get_attach_cookie does not survive bpf_tail_call, so the args must be
+// parsed before the first chunk.
+static EBPF_INLINE struct cuda_scratch *
+stash_kernel_stats_args(u64 header_ptr, u64 ptrs_base, u32 count)
+{
+  u32 zero                     = 0;
+  struct cuda_scratch *scratch = bpf_map_lookup_elem(&cuda_scratch_heap, &zero);
+  if (!scratch) {
+    return NULL;
+  }
+  if (count > BPF_KS_TOTAL_LIMIT) {
+    count = BPF_KS_TOTAL_LIMIT;
+  }
+  scratch->ks_header_ptr  = header_ptr;
+  scratch->ks_ptrs_base   = ptrs_base;
+  scratch->ks_count       = count;
+  scratch->ks_next_offset = 0;
+  return scratch;
+}
+
+// USDT: parcagpu/kernel_stats(const void *header, const void **entries, uint32 count).
+// Entry for single-shot attachment; cuda_probe handles the multi-probe case.
+SEC("usdt/parcagpu/kernel_stats")
+int BPF_USDT(cuda_kernel_stats, u64 header_ptr, u64 ptrs_base, u32 count)
+{
+  DEBUG_PRINT("cuda_kernel_stats: count=%u", count);
+  if (!stash_kernel_stats_args(header_ptr, ptrs_base, count)) {
+    return 0;
+  }
+  return process_kernel_stats_chunk(ctx);
+}
+
+// Tail-call entry for kernel_stats chunks after the first one (and the first
+// one when entered from cuda_probe), up to BPF_KS_MAX_TAIL_CALLS times.
+SEC("usdt/cuda_kernel_stats_tail")
+int cuda_kernel_stats_tail(struct pt_regs *ctx)
+{
+  return process_kernel_stats_chunk(ctx);
+}
+
 // USDT: parcagpu/nvtx_resource_name(uint32 kind, uint64 id, const char *name).
 // One-off (no batching); the parcagpu collector fires this immediately on each
 // nvtxNameOsThread/NameCudaStream/etc. call. Cheap enough to ringbuf-submit
@@ -949,6 +1105,7 @@ int BPF_USDT(cuda_error, s32 code, u64 message_ptr, u64 component_ptr)
 #define CUDA_PROG_NVTX_EVENT_BATCH  8
 #define CUDA_PROG_NVTX_RESOURCE     9
 #define CUDA_PROG_CUBIN_LOADED_FILE 10
+#define CUDA_PROG_KERNEL_STATS      11
 
 SEC("usdt/cuda_probe")
 int cuda_probe(struct pt_regs *ctx)
@@ -1029,6 +1186,12 @@ int cuda_probe(struct pt_regs *ctx)
     break;
   }
   case CUDA_PROG_NVTX_RESOURCE: return BPF_USDT_CALL(cuda_nvtx_resource_name, kind, id, name_ptr);
+  case CUDA_PROG_KERNEL_STATS:
+    if (stash_kernel_stats_args(
+          (u64)bpf_usdt_arg0(ctx), (u64)bpf_usdt_arg1(ctx), (u32)bpf_usdt_arg2(ctx))) {
+      bpf_tail_call(ctx, &cuda_progs, 3);
+    }
+    break;
   default: DEBUG_PRINT("cuda_probe: unknown cookie %u", cookie); break;
   }
   return 0;

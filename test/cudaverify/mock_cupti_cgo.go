@@ -3,6 +3,7 @@
 package cudaverify // import "go.opentelemetry.io/ebpf-profiler/test/cudaverify"
 
 /*
+#cgo CFLAGS: -I${SRCDIR}/../distro-qemu/mock-cupti-headers
 #cgo LDFLAGS: -Wl,--export-dynamic -ldl
 
 #include <stdlib.h>

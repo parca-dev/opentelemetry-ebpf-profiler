@@ -327,8 +327,9 @@ jobs:
         with:
           path: test/distro-qemu/parcagpu-lib
           # The cache key is invalidated whenever download-parcagpu.sh changes
-          # (e.g. when the pinned PARCAGPU_TAG is bumped).
-          key: parcagpu-${{ matrix.target_arch }}-${{ hashFiles('test/distro-qemu/download-parcagpu.sh') }}
+          # (e.g. when the pinned PARCAGPU_TAG is bumped) or the headers the
+          # mock libraries are built with change.
+          key: parcagpu-${{ matrix.target_arch }}-${{ hashFiles('test/distro-qemu/download-parcagpu.sh', 'test/distro-qemu/mock-cupti-headers/*') }}
       - name: Build initramfs
         run: |
           cd test/distro-qemu
