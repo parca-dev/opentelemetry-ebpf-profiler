@@ -79,8 +79,56 @@ The legacy upload adapter can retain the same image independently of this cache
 in a queued reporter callback. Evicting code does not cancel uploads or free
 buffers still needed by them. File-backed sources retain a descriptor but no
 image bytes, but the initial process-memory read still allocates the whole image
-transiently. Metadata caches remain unbounded, and so do the descriptors held by
-file-backed sources: one per distinct file-backed cubin.
+transiently. Metadata and the descriptors held by file-backed sources are not
+size-bounded: they last as long as some process holds the cubin, as below.
+
+## Unloads and process exit
+
+`CubinInfo`, the cached image and its origin are keyed by CRC and shared by every
+process that loads the same cubin. The consumer calls `TrackCubinLoad` for each
+load event and `HandleCubinUnloadedEvent` for each `cubin_unloaded` event, both
+synchronously in ringbuf order. Loads are handled asynchronously, but the
+ringbuf already orders one process's load before its unload. The shim reference
+counts modules per process, so `cubin_unloaded` means the process unloaded its
+last module with that CRC. Process exit, through `Detach`, releases everything
+the process held, because most processes exit without unloading anything.
+
+The last release does not drop the cubin. Samples taken before it can still be
+in flight. A PC sample waits up to `maxEntryAge` for its correlation trace, the
+shim can drain CUPTI's buffer after the unload probe fires, and samples are
+handled on their own goroutines. Each of these looks up the cubin by CRC when it
+reports. `MaybeClearAll` drops the metadata, the cached image and the origin once
+no process has held the CRC for `cubinUnloadGrace` (twice `maxEntryAge`). A load
+by any process during that time cancels the drop, and a later release starts a
+new grace period. A sample that arrives after the drop is dropped with the usual
+"not in cache" debug message. Queued uploads keep what they hold.
+
+When the process whose memory the origin points to releases the cubin, rereads
+move to another holder's copy. If no holder remains, rereads stop. The cached
+image stays until the drop.
+
+The eBPF side deletes the `(pid, crc)` entry from `cubin_seen` on unload, so a
+reload in the same process is reported again. Exited processes still leave
+their entries until LRU eviction. If a recycled PID loads the same CRC before
+then, the load is deduplicated away, and after a drop that process's samples
+lack the cubin. The shim fires `cubin_unloaded` before it removes the cubin from
+its replay list. A replay racing an unload can therefore re-register the cubin
+for that process until the process exits.
+
+Cubins never passed to `TrackCubinLoad` are kept for the agent's lifetime, so
+consumers that predate it behave as before.
+
+## Device identity
+
+Kernel timings, PC samples and NVTX events carry the CUDA ordinal, which
+depends on the process's `CUDA_VISIBLE_DEVICES` and `CUDA_DEVICE_ORDER`. The
+`device_info(ordinal, uuid, pciBusId)` probe fires on the first context on each
+device and replays like `gpu_config`. It is not deduplicated in eBPF, so a replay
+restores a mapping lost to a full ringbuf or a recycled PID.
+`HandleDeviceInfoEvent` caches it per PID and ordinal, alongside `GpuConfig`.
+`LoadDeviceInfo` and `PCSampleDeviceInfo` return it. `DeviceInfo.UUIDString`
+formats the UUID the way nvidia-smi does (`GPU-…`), which matches the `hw.id`
+of NVML metrics. `Detach` drops the PID's mappings.
 
 ## Loading-path coverage
 
@@ -117,3 +165,10 @@ event uses a separate discriminator and cookie.
 All combinations preserve FileID, kernel identity, PC offsets, stalls and counts.
 New agents omit mnemonics when code is unavailable or outside the memory budget.
 Agent and shim upgrades do not require a lockstep rollout.
+
+`device_info` and `cubin_unloaded` are optional, like every probe after the
+kernel-timing one. A shim without `device_info` attaches as before, and
+`LoadDeviceInfo` reports nothing, so consumers keep labeling by ordinal. A shim
+without `cubin_unloaded` releases cubins only when their processes exit.
+Each probe has its own event type, 11 and 12, and its own
+`cuda_probe` cookie. Neither needs a tail call.

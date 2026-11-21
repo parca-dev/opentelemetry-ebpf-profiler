@@ -61,8 +61,10 @@ func LoadCubin(crc uint64) (*CubinInfo, bool) {
 // keyed by CRC, and (if a reporter is supplied) reports the cubin to the
 // ExecutableReporter so the backend can resolve source lines from the cubin's
 // DWARF info. Repeat events with resident code are dropped; an evicted image
-// can be reloaded without discarding its identity metadata.
+// can be reloaded without discarding its identity metadata. It tracks the load
+// for HandleCubinUnloadedEvent, so call it in ringbuf order.
 func HandleCubinEvent(ev *CuptiCubinEvent, rep reporter.ExecutableReporter) {
+	TrackCubinLoad(ev)
 	if info, ok := LoadCubin(ev.CubinCRC); ok && (info.Source != nil || hasCubinCode(ev.CubinCRC)) {
 		return
 	}
