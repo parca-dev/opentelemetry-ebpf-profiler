@@ -18,6 +18,7 @@ import (
 
 	"go.opentelemetry.io/ebpf-profiler/interpreter/interpreterconfig"
 	"go.opentelemetry.io/ebpf-profiler/libpf"
+	"go.opentelemetry.io/ebpf-profiler/reporter"
 	"go.opentelemetry.io/ebpf-profiler/reporter/samples"
 	"go.opentelemetry.io/ebpf-profiler/tracer"
 )
@@ -66,7 +67,16 @@ func StartTracer(ctx context.Context, t *testing.T, interpreters interpreterconf
 	tr := &traceReporter{
 		traceEventChan: traceCh,
 	}
+	return traceCh, StartTracerWithReporter(ctx, t, interpreters, printBpfLogs, tr)
+}
 
+// StartTracerWithReporter is StartTracer with the caller's TraceReporter, for
+// tests that must read a trace event while it is valid (ContextValues alias
+// a pooled trace) or must not block the tracer.
+func StartTracerWithReporter(ctx context.Context, t *testing.T,
+	interpreters interpreterconfig.Config, printBpfLogs bool,
+	tr reporter.TraceReporter) *tracer.Tracer {
+	t.Helper()
 	InitializeMetrics()
 
 	trc, err := tracer.NewTracer(ctx, &tracer.Config{
@@ -117,7 +127,7 @@ func StartTracer(ctx context.Context, t *testing.T, interpreters interpreterconf
 		}
 	}()
 
-	return traceCh, trc
+	return trc
 }
 
 func getTracePipe() (*os.File, error) {

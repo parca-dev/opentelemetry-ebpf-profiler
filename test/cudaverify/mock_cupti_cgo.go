@@ -11,6 +11,7 @@ package cudaverify // import "go.opentelemetry.io/ebpf-profiler/test/cudaverify"
 
 int  init_parcagpu(const char *so_path);
 void simulate_kernel_launch(uint32_t correlation_id);
+void simulate_stream_sync(uint32_t correlation_id, uint32_t block_us);
 void simulate_buffer_completion(uint32_t correlation_id, uint32_t device_id,
                                 uint32_t stream_id, const char *kernel_name);
 void cleanup_parcagpu(void);
@@ -27,6 +28,10 @@ func cInitParcaGPU(soPath string) int {
 
 func cSimulateKernelLaunch(correlationID uint32) {
 	C.simulate_kernel_launch(C.uint32_t(correlationID))
+}
+
+func cSimulateStreamSync(correlationID, blockUs uint32) {
+	C.simulate_stream_sync(C.uint32_t(correlationID), C.uint32_t(blockUs))
 }
 
 func cSimulateBufferCompletion(correlationID, deviceID, streamID uint32, kernelName string) {
