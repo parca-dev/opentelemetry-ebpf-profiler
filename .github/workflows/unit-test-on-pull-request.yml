@@ -244,7 +244,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Configure apt
-        uses: ./.github/workflows/apt
+        uses: $/.github/workflows/apt
       - name: Install dependencies
         run: |
           sudo apt-get update -y
@@ -286,7 +286,7 @@ jobs:
       - name: Clone code
         uses: actions/checkout@v4
       - name: Set up environment
-        uses: ./.github/workflows/env
+        uses: $/.github/workflows/env
       - name: Test interpreter integration (stable tests)
         if: matrix.test_type == 'stable'
         run: |
@@ -317,7 +317,7 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
       - name: Set up environment
-        uses: ./.github/workflows/env
+        uses: $/.github/workflows/env
       - name: Install dependencies
         run: |
           sudo apt-get update -y
@@ -370,7 +370,7 @@ jobs:
       - name: Clone code
         uses: actions/checkout@v4
       - name: Configure apt
-        uses: ./.github/workflows/apt
+        uses: $/.github/workflows/apt
       - name: Install dependencies
         run: |
           sudo apt-get update -y
