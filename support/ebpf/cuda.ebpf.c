@@ -106,11 +106,14 @@ int BPF_USDT(cuda_blocking_call, u64 start_ns, u64 end_ns, s32 cbid, u32 device_
 #define EVENT_TYPE_KERNEL_STATS      10
 #define EVENT_TYPE_DEVICE_INFO       11
 #define EVENT_TYPE_CUBIN_UNLOADED    12
+#define EVENT_TYPE_LOG               13
 
 #define MAX_KERNEL_NAME_LEN   256
 #define MAX_FUNC_NAME_LEN     128
 #define MAX_ERROR_MSG_LEN     256
 #define MAX_ERROR_COMP_LEN    64
+#define MAX_LOG_MSG_LEN       256
+#define MAX_LOG_COMP_LEN      32
 #define STALL_REASON_NAME_LEN 64
 // NVTX_MAX_MSG_LEN comes from cupti_bpf.h; resource names use a smaller cap.
 #define MAX_NVTX_NAME_LEN     128
@@ -214,6 +217,19 @@ struct error_event {
   u32 _pad;
   char message[MAX_ERROR_MSG_LEN];
   char component[MAX_ERROR_COMP_LEN];
+};
+
+// One record from parcagpu's log channel. Records logged before the consumer
+// attached are replayed with their original time_ns, so userspace can drop a
+// record it has seen by (pid, time_ns).
+struct log_event {
+  u32 event_type; // = EVENT_TYPE_LOG
+  u32 level;      // 1 debug, 2 info, 3 warn, 4 error
+  s32 code;       // CUptiResult, CUresult or errno of the failed call, else 0
+  u32 pid;
+  u64 time_ns; // CLOCK_REALTIME when parcagpu logged the record
+  char component[MAX_LOG_COMP_LEN];
+  char message[MAX_LOG_MSG_LEN];
 };
 
 // nvtx_event embeds the producer's cupti_nvtx_event record (read directly from
@@ -1222,6 +1238,40 @@ int BPF_USDT(cuda_error, s32 code, u64 message_ptr, u64 component_ptr)
   return 0;
 }
 
+// USDT: parcagpu/log(uint32 level, int32 code, uint64 timeNs,
+//                    const char *component, const char *message).
+// Supersedes parcagpu/error: a library with both fires warnings and errors on
+// each, and the profiler attaches only this one.
+SEC("usdt/parcagpu/log")
+int BPF_USDT(cuda_log, u32 level, s32 code, u64 time_ns, u64 component_ptr, u64 message_ptr)
+{
+  u64 pid_tgid = bpf_get_current_pid_tgid();
+  u32 pid      = pid_tgid >> 32;
+
+  struct log_event *evt = bpf_ringbuf_reserve(&cupti_events, sizeof(*evt), 0);
+  if (!evt) {
+    increment_metric(metricID_CUPTIEventsRingbufFull);
+    return 0;
+  }
+  evt->event_type   = EVENT_TYPE_LOG;
+  evt->level        = level;
+  evt->code         = code;
+  evt->pid          = pid;
+  evt->time_ns      = time_ns;
+  evt->component[0] = '\0';
+  evt->message[0]   = '\0';
+  if (component_ptr) {
+    bpf_probe_read_user_str(evt->component, sizeof(evt->component), (void *)component_ptr);
+  }
+  if (message_ptr) {
+    bpf_probe_read_user_str(evt->message, sizeof(evt->message), (void *)message_ptr);
+  }
+  bpf_ringbuf_submit(evt, 0);
+
+  DEBUG_PRINT("cuda_log: pid=%u level=%u code=%d", pid, level, code);
+  return 0;
+}
+
 // Cookie values for the cuda_probe multi-probe dispatcher.
 // Must match the cookie values set in cuda.go.
 #define CUDA_PROG_CORRELATION       0
@@ -1239,6 +1289,7 @@ int BPF_USDT(cuda_error, s32 code, u64 message_ptr, u64 component_ptr)
 #define CUDA_PROG_DEVICE_INFO       12
 #define CUDA_PROG_CUBIN_UNLOADED    13
 #define CUDA_PROG_BLOCKING_CALL     14
+#define CUDA_PROG_LOG               15
 
 SEC("usdt/cuda_probe")
 int cuda_probe(struct pt_regs *ctx)
@@ -1323,6 +1374,8 @@ int cuda_probe(struct pt_regs *ctx)
   case CUDA_PROG_NVTX_RESOURCE: return BPF_USDT_CALL(cuda_nvtx_resource_name, kind, id, name_ptr);
   case CUDA_PROG_BLOCKING_CALL:
     return BPF_USDT_CALL(cuda_blocking_call, start_ns, end_ns, cbid, device_id, weight_ns);
+  case CUDA_PROG_LOG:
+    return BPF_USDT_CALL(cuda_log, level, code, time_ns, component_ptr, message_ptr);
   case CUDA_PROG_KERNEL_STATS:
     if (stash_kernel_stats_args(
           (u64)bpf_usdt_arg0(ctx), (u64)bpf_usdt_arg1(ctx), (u32)bpf_usdt_arg2(ctx))) {

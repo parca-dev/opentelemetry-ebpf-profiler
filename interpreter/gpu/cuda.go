@@ -46,6 +46,7 @@ const (
 	USDTProgCudaDeviceInfo        = "cuda_device_info"
 	USDTProgCudaCubinUnloaded     = "cuda_cubin_unloaded"
 	USDTProgCudaBlockingCall      = "cuda_blocking_call"
+	USDTProgCudaLog               = "cuda_log"
 	USDTProgCudaProbe             = "cuda_probe"
 
 	// BPF attach cookie values - must match CUDA_PROG_* in cuda.ebpf.c.
@@ -70,6 +71,7 @@ const (
 	CudaProgDeviceInfo      = 12
 	CudaProgCubinUnloaded   = 13
 	CudaProgBlockingCall    = 14
+	CudaProgLog             = 15
 )
 
 const cudaProgsMap = "cuda_progs"
@@ -89,6 +91,7 @@ const (
 	EventTypeKernelStats     uint32 = 10
 	EventTypeDeviceInfo      uint32 = 11
 	EventTypeCubinUnloaded   uint32 = 12
+	EventTypeLog             uint32 = 13
 )
 
 // CuptiKernelStatsEvent matches the fixed part of struct kernel_stats_event
@@ -228,6 +231,28 @@ type CuptiErrorEvent struct {
 	_pad      uint32
 	Message   [256]byte
 	Component [64]byte
+}
+
+// parcagpu log levels: the level field of CuptiLogEvent.
+const (
+	LogLevelDebug uint32 = 1
+	LogLevelInfo  uint32 = 2
+	LogLevelWarn  uint32 = 3
+	LogLevelError uint32 = 4
+)
+
+// CuptiLogEvent matches struct log_event in cuda.ebpf.c: one record from
+// parcagpu's log channel. parcagpu replays the records it logged before a
+// consumer attached, keeping their TimeNs, so a record can arrive twice (an
+// agent restart, or a second consumer attaching); (Pid, TimeNs) identifies it.
+type CuptiLogEvent struct {
+	EventType uint32
+	Level     uint32
+	Code      int32
+	Pid       uint32
+	TimeNs    uint64 // CLOCK_REALTIME when parcagpu logged the record
+	Component [32]byte
+	Message   [256]byte
 }
 
 // CuptiGpuConfigEvent matches struct gpu_config_event in cuda.ebpf.c.

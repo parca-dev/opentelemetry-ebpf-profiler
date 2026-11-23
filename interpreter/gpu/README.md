@@ -207,3 +207,24 @@ Each probe has its own event type, 11 and 12, and its own
 `cuda_blocking_call` is optional. A library without it attaches as before,
 and an agent without it ignores it. With both, the probe fires only when the
 process or agent turns it on.
+
+## Shim log
+
+parcagpu's `log(level, code, timeNs, component, message)` probe carries its
+log channel: debug, info, warn and error records (levels 1 to 4), at or above
+the process's `PARCAGPU_LOG_LEVEL` (info by default). `cuda_log` copies each
+into a `log_event` (event type 13, cookie 15), and `HandleLogEvent` logs it at
+its level as `[parcagpu] pid=N component: message`.
+
+Most of what goes wrong in the shim happens while the CUDA driver loads it,
+before the profiler has attached to a new process. parcagpu keeps its last 64
+info-and-above records and fires them again half a second after a consumer
+attaches to the probe, with their original `timeNs`. A record can therefore
+arrive more than once, after a profiler restart or a second consumer such as
+bpftrace attaching. `HandleLogEvent` drops a record whose (pid, `timeNs`) it
+has already seen.
+
+`log` supersedes the older `error(code, message, component)` probe. A shim with
+`log` fires its warnings and errors on both, so the profiler attaches `log`
+when the library has it and falls back to `error` only when it doesn't. An
+older agent keeps receiving warnings and errors through `error`.
