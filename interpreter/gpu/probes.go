@@ -39,6 +39,7 @@ var probeTable = map[string]probeSpec{
 		tail: USDTProgCudaPCSampleBatchTail, tailSlot: 1},
 	"stall_reason_map": {cookie: CudaProgStallReasonMap, prog: USDTProgCudaStallReasonMap},
 	"error":            {cookie: CudaProgError, prog: USDTProgCudaError},
+	"log":              {cookie: CudaProgLog, prog: USDTProgCudaLog},
 	"gpu_config":       {cookie: CudaProgGpuConfig, prog: USDTProgCudaGpuConfig},
 	"nvtx_event_batch": {cookie: CudaProgNvtxEventBatch, prog: USDTProgCudaNvtxEventBatch,
 		tail: USDTProgCudaNvtxBatchTail, tailSlot: 2, optionalTail: true},
@@ -62,7 +63,9 @@ var probeChoices = [][]string{
 	{"cubin_loaded_file", "cubin_loaded"},
 	{"pc_sample_batch"},
 	{"stall_reason_map"},
-	{"error"},
+	// A library with the log probe fires its warnings and errors on error
+	// too: attaching both would report them twice.
+	{"log", "error"},
 	{"gpu_config"},
 	{"nvtx_event_batch"},
 	{"nvtx_resource_name"},

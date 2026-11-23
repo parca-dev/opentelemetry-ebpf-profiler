@@ -11,7 +11,7 @@ PARCAGPU_DIR="${PARCAGPU_DIR:-parcagpu-lib}"
 # Pin to a specific parcagpu release rather than tracking :latest so this
 # test isn't broken by upstream changes outside our control. Bump when the
 # test is updated to track a newer libparcagpucupti.so behaviour.
-PARCAGPU_TAG="${PARCAGPU_TAG:-0.4.0}"
+PARCAGPU_TAG="${PARCAGPU_TAG:-0.4.1}"
 
 # Map QEMU arch to Docker platform
 case "$QEMU_ARCH" in

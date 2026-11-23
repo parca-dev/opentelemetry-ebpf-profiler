@@ -76,6 +76,7 @@ typedef struct {
 typedef enum {
   CUPTI_PC_SAMPLING_CONFIGURATION_ATTR_TYPE_INVALID         = 0,
   CUPTI_PC_SAMPLING_CONFIGURATION_ATTR_TYPE_SAMPLING_PERIOD = 1,
+  CUPTI_PC_SAMPLING_CONFIGURATION_ATTR_TYPE_HARDWARE_BUFFER_SIZE = 4,
 } CUpti_PCSamplingConfigurationAttributeType;
 
 typedef struct {
@@ -88,6 +89,9 @@ typedef struct {
     struct {
       uint32_t samplingPeriod;
     } samplingPeriodData;
+    struct {
+      size_t hardwareBufferSize;
+    } hardwareBufferSizeData;
   } attributeData;
 } CUpti_PCSamplingConfigurationInfo;
 

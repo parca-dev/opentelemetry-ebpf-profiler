@@ -10,6 +10,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -177,9 +178,13 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 	var rec ringbuf.Record
 	wantStats := hasProbe(t, *soPath, "kernel_stats")
 	wantBlocking := hasProbe(t, *soPath, "cuda_blocking_call")
+	// parcagpu logs its startup record while loading, before the probes are
+	// attached, and replays it to the log probe once they are.
+	var logs []string
+	wantLog := hasProbe(t, *soPath, "log")
 	done := func() bool {
 		return len(events) > 0 && (!wantStats || len(stats) > 0) &&
-			(!wantBlocking || len(blocking.get()) > 0)
+			(!wantBlocking || len(blocking.get()) > 0) && (!wantLog || len(logs) > 0)
 	}
 
 	const (
@@ -240,6 +245,21 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 				}
 				continue
 			}
+			if len(rec.RawSample) >= int(unsafe.Sizeof(gpu.CuptiLogEvent{})) &&
+				binary.NativeEndian.Uint32(rec.RawSample[:4]) == gpu.EventTypeLog {
+				ev := (*gpu.CuptiLogEvent)(unsafe.Pointer(&rec.RawSample[0]))
+				if ev.Pid == uint32(pid) {
+					line := gpu.FormatLogEvent(ev)
+					t.Logf("Received log event: level=%d %s", ev.Level, line)
+					if ev.Level == gpu.LogLevelInfo && strings.Contains(line, " active: ") {
+						logs = append(logs, line)
+					}
+				}
+				if done() {
+					goto nextAttempt
+				}
+				continue
+			}
 			if len(rec.RawSample) < int(unsafe.Sizeof(gpu.CuptiKernelEvent{})) {
 				continue
 			}
@@ -282,6 +302,12 @@ func runEndToEnd(t *testing.T, multiProbe bool) {
 		"expected timing event with correlation_id=42, device_id=0, stream_id=7, kernel_name=testKernel; got %+v", events)
 
 	checkBlockingCalls(t, wantBlocking, blocking.get())
+
+	if wantLog {
+		require.NotEmpty(t, logs, "parcagpu's startup record never reached the log probe")
+	} else {
+		t.Logf("%s has no log probe; skipping log checks", *soPath)
+	}
 
 	if !wantStats {
 		t.Logf("%s has no kernel_stats probe; skipping kernel_stats checks", *soPath)
