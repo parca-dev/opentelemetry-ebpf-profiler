@@ -301,6 +301,8 @@ jobs:
 
   build-distro-qemu-initramfs:
     name: Build distro QEMU initramfs (${{ matrix.target_arch }})
+    # Disabled while we check whether these jobs are why the fork's CI stopped running.
+    if: false
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 10
     strategy:
@@ -342,6 +344,8 @@ jobs:
 
   distro-qemu-tests:
     name: Distro QEMU tests (${{ matrix.kernel }} ${{ matrix.target_arch }})
+    # Disabled while we check whether these jobs are why the fork's CI stopped running.
+    if: false
     runs-on: ${{ matrix.target_arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     needs: build-distro-qemu-initramfs
     timeout-minutes: 10
