@@ -1,4 +1,4 @@
-.PHONY: all all-common clean ebpf generate generate-collector test test-deps \
+.PHONY: all all-common clean ebpf generate cbid-names generate-collector test test-deps \
 	test-junit test-luajit-offsets protobuf docker-image agent license-check license-save \
 	integration-test-binaries \
 	codespell lint format format-ebpf format-go pprof-execs \
@@ -64,6 +64,12 @@ clean:
 generate:
 	GOARCH=$(NATIVE_ARCH) go generate ./...
 	(cd support && ./generate.sh)
+
+# cbid_names.go is checked in. Regenerating it needs CUPTI's headers, which
+# CI does not have, so it is not part of `generate`.
+CUDA_INCLUDE ?= /usr/local/cuda/include
+cbid-names:
+	cd interpreter/gpu && go run ./gencbids $(CUDA_INCLUDE) cbid_names.go
 
 ebpf: generate
 	$(MAKE) $(EBPF_FLAGS) -C support/ebpf

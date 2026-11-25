@@ -4,7 +4,7 @@
 // gencbids generates cbid_names.go, the CUDA API function names for CUPTI
 // callback IDs, from CUPTI's cupti_runtime_cbid.h and cupti_driver_cbid.h.
 //
-//	go run ./gencbids /usr/local/cuda/include cbid_names.go
+//	make cbid-names CUDA_INCLUDE=/usr/local/cuda/include
 //
 // CUPTI only appends to these enums, so the newest headers cover every
 // earlier CUDA release.
