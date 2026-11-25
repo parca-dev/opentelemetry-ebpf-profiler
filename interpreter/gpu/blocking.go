@@ -3,8 +3,6 @@
 
 package gpu // import "go.opentelemetry.io/ebpf-profiler/interpreter/gpu"
 
-//go:generate go run ./gencbids /usr/local/cuda/include cbid_names.go
-
 import (
 	"maps"
 	"strconv"
