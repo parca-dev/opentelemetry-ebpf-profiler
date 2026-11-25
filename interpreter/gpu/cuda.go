@@ -936,7 +936,6 @@ var (
 	cudaDevice          libpf.String
 	cudaStream          libpf.String
 	cudaGraph           libpf.String
-	cudaId              libpf.String
 	cudaStallReason     libpf.String
 	cudaSassInstruction libpf.String
 )
@@ -945,7 +944,6 @@ func init() {
 	cudaDevice = libpf.Intern("cuda_device")
 	cudaStream = libpf.Intern("cuda_stream")
 	cudaGraph = libpf.Intern("cuda_graph")
-	cudaId = libpf.Intern("cuda_id")
 	cudaStallReason = libpf.Intern("cuda_stall_reason")
 	cudaSassInstruction = libpf.Intern("cuda_sass_instruction")
 }
@@ -961,7 +959,7 @@ func nullTerm(b []byte) []byte {
 	return b
 }
 
-// prepTrace attaches timing information and the demangled kernel name to a symbolized
+// prepTrace attaches timing information and the (mangled) kernel name to a symbolized
 // CUDA trace, producing a CudaTraceOutput ready for reporting.
 func (f *gpuTraceFixer) prepTrace(trace *libpf.Trace, meta *samples.TraceEventMeta,
 	cudaFrameIdx int, ev *CuptiKernelEvent) CudaTraceOutput {
@@ -995,7 +993,6 @@ func (f *gpuTraceFixer) prepTrace(trace *libpf.Trace, meta *samples.TraceEventMe
 	}
 	if ev.Graph != 0 {
 		out.Trace.CustomLabels[cudaGraph] = libpf.Intern(strconv.FormatUint(uint64(ev.Graph), 10))
-		out.Trace.CustomLabels[cudaId] = libpf.Intern(strconv.FormatUint(uint64(ev.Id), 10))
 	}
 
 	// Extract kernel name from timing event and update the CUDA frame.
